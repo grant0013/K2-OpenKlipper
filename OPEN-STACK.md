@@ -16,17 +16,17 @@ Both have direct printer-control paths; `Monitor` respawns `master-server`.
 Passive Creality audio, Wi-Fi, app, upgrade, and web services remain enabled.
 The stock touchscreen control plane is not available without `master-server`.
 
-## v62 PRTouch contact hysteresis
+## v62 PRTouch architecture
 
-- Amplitude-mode contact must still cross the conservative configured entry
-  threshold before qualification begins.
-- Once contact begins, a lower release threshold (75% by default) preserves
-  the sustained-contact counter while the clean nozzle/bed load signal rings.
-- Three-window persistence remains in place for Z homing, so isolated
-  print-motion spikes cannot qualify as contact.
-- The captured failed contact `710, 574, 771` now qualifies at
-  entry/release thresholds `600/450`; the earlier vibration sequence
-  `597, 721` still cannot qualify.
+- The active v62 Z-home and mesh path uses the pressure MCU's PA15 output,
+  received by the main MCU on PC7, as a native Klipper endstop through trsync.
+- Pressure and step captures are started for diagnostics, but the hardware PC7
+  edge is what stops motion in the validated path.
+- The host amplitude/hysteresis classifier remains in-tree as experimental
+  fallback and diagnostic work. Its 75% release threshold and three-window
+  persistence do not set the active v62 trip force.
+- Active and fallback configuration settings still need to be separated so
+  users cannot mistake an inactive host threshold for the hardware stop.
 
 ## v61 CFS steady-feed fix
 
@@ -150,7 +150,7 @@ Validated on the K2 without remote motion commands:
 - The adaptive mesh completed before the toolhead moved to the purge bucket at
   X115/Y291.5/Z5.
 - The sliced opening contains no legacy `X0 Y140` or `G1 Z0` scrape move.
-- The monitored Benchy passed 10% with stable heaters, no pause, no MCU timing
+- The monitored Benchy passed 32% with stable heaters, no pause, no MCU timing
   shutdown, and zero reported toolhead stalls.
 
 This is a partial print validation. A completed long print is still required

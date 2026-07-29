@@ -1,0 +1,60 @@
+name: Hardware validation
+description: Share a supervised K2, PRTouch, motor-bus, or CFS test result
+title: "[Validation] "
+labels: ["hardware-validation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Both successful and failed tests are useful. Do not perform unattended motion, heater, cutter, or CFS tests. Remove all private data from logs.
+  - type: input
+    id: hardware
+    attributes:
+      label: Printer and hardware
+      placeholder: Model, board revision, CFS revision
+    validations:
+      required: true
+  - type: input
+    id: firmware
+    attributes:
+      label: Firmware versions
+      placeholder: Creality version, CFS version, repository commit
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Test area
+      options:
+        - PRTouch
+        - CFS
+        - Motor bus
+        - Print start
+        - Print completion
+        - Cancel or recovery
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: procedure
+    attributes:
+      label: Exact procedure
+      description: Include config changes, commands, material, temperatures, and supervision.
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: Result and evidence
+      description: Include sanitised logs, measurements, and timestamps.
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety confirmation
+      options:
+        - label: The test was supervised and I had an immediate power cutoff available.
+          required: true
+        - label: I removed credentials and private identifiers from submitted data.
+          required: true

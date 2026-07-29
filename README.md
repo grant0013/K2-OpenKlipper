@@ -1,11 +1,12 @@
-# Creality K2 open Klipper stack
+# K2 OpenKlipper
 
-This repository snapshot runs upstream Klipper on the Creality K2 while
-preserving the machine-specific MCU protocols needed for PRTouch, Z alignment,
-motor RS485 control, fan feedback, and CFS operation.
+An experimental, community-oriented upstream Klipper stack for the Creality K2
+Plus. It preserves the K2-specific MCU protocols needed for PRTouch, Z
+alignment, motor RS485 control, fan feedback, and CFS operation.
 
-Version v62 is the first snapshot validated through a real OrcaSlicer upload
-and first-layer print using a dedicated open control plane:
+The first public snapshot, `v0.1.0-alpha.1`, is based on the live-tested v62
+build. It is for developers and experienced K2 owners who can recover their
+printer if testing fails. It uses this dedicated open control plane:
 
 - Klipper API socket: `/tmp/klippy_uds`
 - Moonraker: port 7126
@@ -17,7 +18,7 @@ printer-control commands. The stock touchscreen control plane is consequently
 unavailable. Passive Creality Wi-Fi, camera, audio, app, web, and upgrade
 services are left intact.
 
-## Current validation
+## Project status
 
 The live K2 has completed:
 
@@ -27,8 +28,17 @@ The live K2 has completed:
 - post-mesh movement to the purge bucket
 - CFS print-start purge
 - transition into the sliced first layer
-- more than 10% of the current Benchy without MCU timing errors or toolhead
+- 32% of the current Benchy without MCU timing errors or toolhead
   stalls at the saved validation point
+
+This is an alpha release, not production firmware. A full long-duration print
+has not yet completed on v62. CFS works on the development K2, but its
+electrical interface and portability to other printers are not yet validated.
+PRTouch currently stops Z through the K2 hardware PA15-to-PC7 signal and native
+Klipper trsync; the in-tree host classifier is experimental fallback work.
+
+See [PROJECT-STATUS.md](docs/PROJECT-STATUS.md) for the validation matrix and
+release gates.
 
 This remains experimental printer firmware. Supervise initial prints, keep the
 stock rollback path available, and do not switch Klipper builds while a job is
@@ -60,6 +70,23 @@ The full explanation is in `config/ORCA-K2-PROFILE.cfg`.
 - `tools/` - release deployment helper
 - `OPEN-STACK.md` - architecture, fixes, backups, rollback, and live evidence
 - `K2-BUILD-MANIFEST` - exact upstream and integration commit provenance
+- `docs/PROJECT-STATUS.md` - readiness and validation matrix
+- `docs/CFS-PROTOCOL.md` - current CFS wire and state-machine findings
+- `docs/PRTOUCH.md` - current PRTouch architecture and open questions
+- `CONTRIBUTING.md` - safe ways to test and contribute
+
+## Help wanted
+
+- validation on other K2 Plus firmware and hardware revisions
+- CFS electrical, addressing, and cold-boot findings
+- separation of the generic CFS protocol from K2 motion and sensors
+- non-blocking serial transport for CFS polling
+- PRTouch repeatability data across clean and contaminated nozzles
+- completed long-print and recovery testing
+
+Use the issue templates and include exact versions, logs, and the phase being
+tested. Do not publish credentials, serial numbers, Wi-Fi details, or other
+private data.
 
 ## Important limitation
 
@@ -71,6 +98,6 @@ The Mainsail web client can still update independently.
 ## License
 
 The Klipper-derived code is distributed under GNU GPLv3; see `COPYING`.
-Bundled third-party components retain their own upstream copyrights and
-licenses. Exact pinned versions are recorded in `K2-BUILD-MANIFEST` and
+Bundled third-party components retain their upstream copyrights and licenses.
+See `THIRD_PARTY.md`, `K2-BUILD-MANIFEST`, and
 `system/mainsail/release_info.json`.

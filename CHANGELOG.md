@@ -4,8 +4,10 @@
 
 ### Printer control
 
-- Added PRTouch contact hysteresis while retaining conservative entry
-  detection and three-window persistence.
+- Improved the experimental host PRTouch fallback classifier with contact
+  hysteresis while retaining conservative entry detection and three-window
+  persistence. The validated v62 motion stop remains the PA15-to-PC7 hardware
+  edge through native Klipper trsync.
 - Kept Creality's rough-home, thermal-settle, nozzle-clean, precision-Z-home
   sequencing before adaptive bed meshing.
 - Moved to the purge bucket immediately after adaptive mesh so nozzle ooze
@@ -35,7 +37,7 @@
 - Verified real Orca upload and print start.
 - Verified homing, nozzle cleaning, second PRTouch home, adaptive mesh,
   purge-bucket parking, CFS purge, and first-layer printing.
-- Benchy passed 10% with no pause, MCU timing error, or reported toolhead
+- Benchy passed 32% with no pause, MCU timing error, or reported toolhead
   stall at the saved validation point.
 
 ### Known items

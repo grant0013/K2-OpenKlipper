@@ -1,0 +1,49 @@
+name: Bug report
+description: Report a reproducible software or configuration problem
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This is experimental printer software. Remove credentials, serial numbers, Wi-Fi details, and private network data before attaching logs.
+  - type: input
+    id: commit
+    attributes:
+      label: Repository commit or release
+      placeholder: v0.1.0-alpha.1 or commit SHA
+    validations:
+      required: true
+  - type: input
+    id: hardware
+    attributes:
+      label: Printer and hardware revision
+      placeholder: Creality K2 Plus, revision if known
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      placeholder: Include the exact command or print phase.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitised logs
+      description: Include timestamps around the failure.
+    validations:
+      required: true
+  - type: textarea
+    id: recovery
+    attributes:
+      label: Recovery
+      description: Explain how the printer was made safe and recovered.
