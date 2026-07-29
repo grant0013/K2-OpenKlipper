@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+*$py.class
+_test_.log
+*.tar.gz
+*.sha256
+.DS_Store
+Thumbs.db

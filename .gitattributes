@@ -1,0 +1,20 @@
+* text=auto
+
+*.cfg text eol=lf
+*.conf text eol=lf
+*.init text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.py text eol=lf
+*.sh text eol=lf
+K2-BUILD-MANIFEST text eol=lf
+COPYING text eol=lf
+
+# Mainsail is a pinned upstream web release. Preserve its generated files
+# byte-for-byte instead of normalizing minified assets.
+system/mainsail/** -text
+
+*.png binary
+*.so binary
+*.woff binary
+*.woff2 binary

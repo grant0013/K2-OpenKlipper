@@ -1,0 +1,24 @@
+#!/bin/sh /etc/rc.common
+
+START=57
+STOP=10
+USE_PROCD=1
+DEPEND=fstab,mcu_update
+
+PROG=/usr/share/moonraker-env/bin/python
+APP=/usr/share/moonraker/moonraker.py
+DATA=/mnt/UDISK/printer_data_mainline
+CONF=$DATA/config/moonraker.conf
+LOG=$DATA/logs/moonraker.log
+
+start_service() {
+    mkdir -p "$DATA/config" "$DATA/logs"
+    procd_open_instance
+    procd_set_param command /usr/bin/taskset 0x1 "$PROG" "$APP" -d "$DATA" -c "$CONF" -l "$LOG"
+    procd_set_param respawn 3600 5 5
+    procd_close_instance
+}
+
+stop_service() {
+    rm -f /tmp/moonraker-mainline.sock
+}
