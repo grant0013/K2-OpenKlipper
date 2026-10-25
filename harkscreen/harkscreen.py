@@ -830,6 +830,12 @@ class Screen:
                 ("Load slot %s?\nHeats to %d°" % (slot, temp))
             actions.append(("Load & purge", ("confirm", q,
                             "CFS_LOAD_SLOT SLOT=%s" % slot), "accent"))
+            # A new reel in any slot: load it, then calibrate it
+            actions.append(("Calibrate PA", ("confirm",
+                            "Load slot %s, then calibrate PA?\n"
+                            "About 7 min, heats to %d°" % (slot, temp),
+                            "CFS_LOAD_SLOT SLOT=%s\nPA_CAL_RUN SLOT=%s AUTO=1"
+                            % (slot, slot)), "accent"))
         actions.append(("Set filament", ("slot_set",), "accent"))
         actions.append(("Close", ("slot_close",), "muted"))
         bw = (box[2] - box[0] - 3 * 16) // 2
@@ -1656,6 +1662,8 @@ class Screen:
                 else:
                     if script in label:
                         self.running = (label[script], time.time())
+                    elif "PA_CAL_RUN" in script:
+                        self.running = ("Calibrating PA", time.time())
                     elif script.startswith("CFS_LOAD_SLOT"):
                         self.running = ("Loading slot " + script[-1],
                                         time.time())
