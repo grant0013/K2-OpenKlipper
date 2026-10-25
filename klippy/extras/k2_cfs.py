@@ -35,6 +35,9 @@
 #   CFS_PRINT_START SLOT=D CONFIRM=1 - select/load/purge initial print slot
 #   T0/T1/T2/T3           - arm only the already-selected A/B/C/D slot
 
+import logging
+
+
 class K2CFS:
     # name -> (payload bytes, decoder method name)
     # Payload EXCLUDES addr/len/crc (k2_motor_bus builds the frame).
@@ -95,6 +98,28 @@ class K2CFS:
         self.purge_speed = config.getfloat(
             'purge_speed', 100., above=0.)
         self.purge_min_z = config.getfloat('purge_min_z', 5.)
+        # Height added above the print before a mid-print tool change moves
+        self.toolchange_lift = config.getfloat(
+            'toolchange_lift', 2., minval=0.)
+        # Pull back right after the flush so the melt chamber is not left
+        # pressurised (Bambu and stock both retract after flushing). A tool
+        # change pushes it back in over the print before resuming.
+        self.purge_retract_length = config.getfloat(
+            'purge_retract_length', 1.5, minval=0., maxval=5.)
+        self.purge_retract_speed = config.getfloat(
+            'purge_retract_speed', 30., above=0., maxval=60.)
+        # Stock blasts the part fan before the post-purge wipe: the strand
+        # sets and snaps off at the nozzle instead of stretching into a
+        # string. 0 disables.
+        self.purge_cool_time = config.getfloat(
+            'purge_cool_time', 2., minval=0., maxval=10.)
+        self.purge_cool_fan = config.getfloat(
+            'purge_cool_fan', 1., minval=0., maxval=1.)
+        # Fans stopped for a mid-print change, like stock BOX_SAVE_FAN: with
+        # the part and side fans blowing the purge sets into a long string
+        # instead of dropping into the bucket.
+        self.purge_fans = config.getlist(
+            'purge_fans', ('fan', 'fan_generic auxiliary_fan'))
         self.purge_extrude_length = config.getfloat(
             'purge_extrude_length', 140., above=0., maxval=240.)
         self.purge_extrude_speed = config.getfloat(
@@ -173,6 +198,8 @@ class K2CFS:
             'load_bus_timeout', 15., above=0., maxval=30.)
         self.load_timeout = config.getfloat(
             'load_timeout', 90., above=0., maxval=150.)
+        self.load_sensor_grace = config.getfloat(
+            'load_sensor_grace', 3., minval=0.)
         self.load_poll_interval = config.getfloat(
             'load_poll_interval', 1., minval=0.1, maxval=5.)
         self.load_engage_length = config.getfloat(
@@ -190,6 +217,13 @@ class K2CFS:
         self.manage_runout_sensor = config.getboolean(
             'manage_runout_sensor', True)
         self.print_start_transaction = False
+        # Background environment poll (temperature/humidity + selected slot).
+        # Stock master-server polls the same query every ~4 s; we poll less
+        # often and stay quiet while an actuation sequence is in progress.
+        self.env_poll_interval = config.getfloat(
+            'env_poll_interval', 10., minval=0.)
+        self.last_actuation_time = 0.
+        self.env_poll_failures = 0
         self.cutter_switch_state = None
         self.bus = None
         self.status = {'online': None, 'feed_enabled': None}
@@ -198,6 +232,8 @@ class K2CFS:
             [self.cutter_switch_pin], self._handle_cutter_switch)
         self.printer.register_event_handler("klippy:connect",
                                             self._handle_connect)
+        self.printer.register_event_handler("klippy:ready",
+                                            self._handle_ready)
         self.gcode = self.printer.lookup_object('gcode')
         self.gcode.register_command(
             'CFS_STATUS', self.cmd_CFS_STATUS,
@@ -244,6 +280,15 @@ class K2CFS:
         self.gcode.register_command(
             'CFS_PRINT_START', self.cmd_CFS_PRINT_START,
             desc="Select, load, and purge the initial CFS print slot")
+        self.gcode.register_command(
+            'CFS_CHANGE_SLOT', self.cmd_CFS_CHANGE_SLOT,
+            desc="While idle: cut/rewind the loaded slot, load SLOT, purge")
+        self.gcode.register_command(
+            'CFS_TOOLCHANGE', self.cmd_CFS_TOOLCHANGE,
+            desc="Change to another CFS slot during a print")
+        self.gcode.register_command(
+            'CFS_PRELOAD', self.cmd_CFS_PRELOAD,
+            desc="Turn CFS pre-loading and buffer tension on (idle) or off")
         for tool, slot in enumerate(('A', 'B', 'C', 'D')):
             def select_tool(gcmd, selected_slot=slot):
                 self._select_tool(gcmd, selected_slot)
@@ -253,6 +298,48 @@ class K2CFS:
 
     def _handle_connect(self):
         self.bus = self.printer.lookup_object('k2_motor_bus')
+
+    def _handle_ready(self):
+        reactor = self.printer.get_reactor()
+        if self.env_poll_interval > 0.:
+            reactor.register_timer(self._env_poll, reactor.monotonic() + 5.)
+        # Stock idles with pre-loading on, so a spool pushed into a slot is
+        # drawn in. Give k2_motor_bus time to address the CFS first.
+        reactor.register_timer(self._idle_preload, reactor.monotonic() + 8.)
+
+    def _idle_preload(self, eventtime):
+        try:
+            self._restore_idle_preload()
+        except Exception:
+            logging.exception("k2_cfs: pre-loading on at ready failed")
+        return self.printer.get_reactor().NEVER
+
+    def _restore_idle_preload(self):
+        self._set_preloading(True)
+        self._run_actuation('TIGHTEN_UP ENABLE',
+                            [0xff, 0x0f, self.TENSION_ENABLE])
+
+    def _env_poll(self, eventtime):
+        if (self.print_start_transaction
+                or eventtime - self.last_actuation_time < 5.):
+            return eventtime + self.env_poll_interval
+        try:
+            m = self._run_query('MEASURING')
+        except Exception:
+            logging.exception("k2_cfs: environment poll failed")
+            m = {'error': 'exception'}
+        if 'temperature' in m:
+            self.env_poll_failures = 0
+            self.status['online'] = True
+            for key in ('temperature', 'humidity', 'active_mask',
+                        'active_slots', 'active_slot', 'selection_setting'):
+                if key in m:
+                    self.status[key] = m[key]
+        else:
+            self.env_poll_failures += 1
+            if self.env_poll_failures >= 3:
+                self.status['online'] = False
+        return eventtime + self.env_poll_interval
 
     def get_status(self, eventtime):
         out = dict(self.status)
@@ -279,14 +366,17 @@ class K2CFS:
                 'uniid': p[4:16].hex(' ')}
 
     def _dec_measuring(self, p):
-        # observed: 00 0a <c1> <c2> 00 00 00 00 ; c1~0x1d-0x21 c2~0x24-0x2b
-        # two counters (buffer feed / measuring wheel encoder). Bytes 6/7
+        # observed: 00 0a <temp> <humidity> 00 00 <mask> <setting>. Bytes 2/3
+        # are the CFS AHT10 reading: degrees C and relative humidity %
+        # (matched against stock master-server's boxTemp/dry_and_humidity
+        # over a day of stock logs, 2026-10-24). Bytes 6/7
         # retain the selected-slot mask and selection setting.  They do not
         # change when stock's global IDLE command (ff 04 00 01) succeeds, so
         # they must not be used as the live CFS mode.  GET_BOX_MODE (ff 0c)
         # is authoritative for that.
         if len(p) >= 4:
-            out = {'c1': p[2], 'c2': p[3], 'raw': p.hex(' ')}
+            out = {'temperature': p[2], 'humidity': p[3],
+                   'raw': p.hex(' ')}
             if len(p) >= 8:
                 mask, selection_setting = p[6], p[7]
                 slots = [name for name, bit in self.SLOT_MASKS.items()
@@ -388,8 +478,8 @@ class K2CFS:
         if 'buffer_state' in b:
             st['buffer_state'], st['buffer'] = b['buffer_state'], b['buffer']
         m = results.get('MEASURING', {})
-        for key in ('active_mask', 'active_slots', 'active_slot',
-                    'selection_setting'):
+        for key in ('temperature', 'humidity', 'active_mask', 'active_slots',
+                    'active_slot', 'selection_setting'):
             if key in m:
                 st[key] = m[key]
         bm = results.get('BOX_MODE', {})
@@ -416,8 +506,14 @@ class K2CFS:
                 "CFS actuation is disabled; set allow_actuation: true")
 
     def _run_actuation(self, name, payload, timeout=0.2):
+        start = self.last_actuation_time = \
+            self.printer.get_reactor().monotonic()
         frame, resp = self.bus.xfer(
             self.addr, payload, timeout=timeout)
+        logging.info("k2_cfs: %s took %.2fs resp %s", name,
+                     self.printer.get_reactor().monotonic() - start,
+                     resp.hex(' ') if resp else '(none)')
+        self.last_resp = resp
         p = self._payload(resp)
         opcode = payload[1]
         if p is None or len(p) < 2 or p[0] != 0 or p[1] != opcode:
@@ -629,10 +725,17 @@ class K2CFS:
             raise gcmd.error("%s requires CONFIRM=1" % command)
         toolhead = self.printer.lookup_object('toolhead')
         homed = toolhead.get_status(0.).get('homed_axes', '')
+        position = toolhead.get_position()
+        if gcmd.get_int('UNHOMED_Z', 0, minval=0, maxval=1):
+            # Nozzle cleaning before Z is known (G28, NOZZLE_DEEP_CLEAN),
+            # like stock's BOX_NOZZLE_CLEAN. The caller has dropped the bed
+            # 5 mm, so only X and Y must be homed.
+            if not all(axis in homed for axis in 'xy'):
+                raise gcmd.error("%s requires X and Y homed" % command)
+            return position
         if not all(axis in homed for axis in 'xyz'):
             raise gcmd.error(
                 "CFS move requires X, Y, and Z homed")
-        position = toolhead.get_position()
         if position[2] < self.purge_min_z:
             raise gcmd.error(
                 "CFS move requires Z >= %.3f (current %.3f)"
@@ -786,6 +889,54 @@ class K2CFS:
         gcmd.respond_info(
             "CFS cutter sensor %s logical=%s"
             % (self.cutter_switch_pin, state))
+
+    def _set_preloading(self, enable):
+        # Stock keeps pre-loading on between prints (ff 0d 0f 01) and turns
+        # it off before the first load of a print (ff 0d 0f 00).
+        self._run_actuation(
+            'SET_PRE_LOADING %s' % ('ON' if enable else 'OFF'),
+            [0xff, 0x0d, 0x0f, 0x01 if enable else 0x00])
+
+    def _hub_mask(self):
+        # Slot whose filament is in the shared connections (hub). Stock reads
+        # this (ff 08 01) before every load and expects it empty.
+        frame, resp = self._run_actuation(
+            'GET_CONNECTIONS_SENSOR', [0xff, 0x08, 0x01])
+        p = self._payload(resp)
+        return p[2] if len(p) > 2 else 0
+
+    def _clear_hub(self, gcmd):
+        # An aborted load leaves filament in the hub, and the next load of
+        # any slot then fails (EXTRUDE_ERR8). The retrude finish stage alone
+        # rewinds it out of the hub (verified live 10-25).
+        present = self._hub_mask()
+        if not present:
+            return
+        gcmd.respond_info(
+            "CFS hub holds filament (mask 0x%02x); rewinding it" % present)
+        self._run_actuation(
+            'SET_BOX_MODE IDLE', [0xff, 0x04, 0x00, self.MODE_IDLE])
+        self._finish_unload(present)
+        still = self._hub_mask()
+        if still:
+            raise gcmd.error(
+                "CFS hub still holds filament after rewinding (mask 0x%02x)"
+                % still)
+
+    def cmd_CFS_PRELOAD(self, gcmd):
+        # Mode change only, no motion: END_PRINT calls it while the print
+        # state is still printing.
+        self._require_actuation(gcmd)
+        enable = gcmd.get_int('ENABLE', 1, minval=0, maxval=1)
+        try:
+            self._set_preloading(enable)
+            self._run_actuation(
+                'TIGHTEN_UP %s' % ('ENABLE' if enable else 'DISABLE'),
+                [0xff, 0x0f,
+                 self.TENSION_ENABLE if enable else self.TENSION_DISABLE])
+        except Exception as exc:
+            raise gcmd.error("CFS pre-loading change failed: %s" % exc)
+        gcmd.respond_info("CFS pre-loading %s" % ("on" if enable else "off"))
 
     def _finish_unload(self, mask, report_error=True):
         try:
@@ -1081,6 +1232,9 @@ class K2CFS:
             # The callback releases the stage-5 loop; E+9 and stage 7(value=3)
             # follow immediately. Sending another stage 5 after stage 6 is
             # rejected by CFS firmware 1.5.0 as EXTRUDE_ERR8 (state 0x0c).
+            # Stock: pre-loading off and nothing in the shared hub first.
+            self._set_preloading(False)
+            self._clear_hub(gcmd)
             self._run_actuation(
                 'SET_BOX_MODE IDLE',
                 [0xff, 0x04, 0x00, self.MODE_IDLE])
@@ -1099,6 +1253,7 @@ class K2CFS:
 
             reactor = self.printer.get_reactor()
             deadline = reactor.monotonic() + self.load_timeout
+            err8_retries = 0
             while True:
                 try:
                     self._load_stage('EXTRUDE STAGE 5', mask, 5)
@@ -1106,9 +1261,26 @@ class K2CFS:
                     # Firmware 1.5.0 may advance while the nozzle-sensor
                     # callback is arriving, then reject the in-flight stage-5
                     # retry with state 0x0c. The asserted physical sensor
-                    # makes that response terminal success.
-                    if self._nozzle_has_filament() is True:
+                    # makes that response terminal success. The filament can
+                    # still be a moment short of the sensor when the CFS
+                    # advances (seen live 10-24: sensor tripped after the
+                    # load had been failed), so give it a few seconds.
+                    resp = getattr(self, 'last_resp', None)
+                    if self._wait_nozzle_filament(
+                            True, self.load_sensor_grace):
                         break
+                    if (resp and len(resp) > 3 and resp[3] == 0x0c
+                            and err8_retries < 2):
+                        # EXTRUDE_ERR8 has no user message in stock; its
+                        # wrapper retries instead of failing the load.
+                        err8_retries += 1
+                        gcmd.respond_info(
+                            "CFS stage 5 returned EXTRUDE_ERR8; re-sending"
+                            " stage 4 (retry %d/2)" % err8_retries)
+                        self._load_stage('EXTRUDE STAGE 4', mask, 4)
+                        reactor.pause(reactor.monotonic()
+                                      + self.load_poll_interval)
+                        continue
                     raise
                 if self._nozzle_has_filament() is True:
                     break
@@ -1144,6 +1316,16 @@ class K2CFS:
                 [0xff, 0x0f, self.TENSION_ENABLE])
         except Exception as exc:
             self._best_effort_stop(mask)
+            if self._nozzle_has_filament() is not True:
+                # Don't leave a part-loaded slot in the hub.
+                try:
+                    self._clear_hub(gcmd)
+                except Exception:
+                    logging.exception("k2_cfs: hub clear after failed load")
+                try:
+                    self._restore_idle_preload()
+                except Exception:
+                    logging.exception("k2_cfs: pre-loading on after failed load")
             raise gcmd.error("CFS load failed: %s" % exc)
         finally:
             if saved:
@@ -1265,15 +1447,24 @@ class K2CFS:
             slow = chunk * self.purge_slow_fraction
             fast = chunk - slow
             fast_multiplier = 1. if final else self.purge_fast_multiplier
+            retract = ""
+            if final and self.purge_retract_length:
+                retract = "G1 E-%.3f F%.3f\n" % (
+                    self.purge_retract_length,
+                    self.purge_retract_speed * 60.)
             scripts.append(
                 "M83\n"
                 "G1 E%.3f F%.3f\n"
                 "G1 E%.3f F%.3f\n"
+                "%s"
                 "M400"
                 % (slow, speed * 60.,
-                   fast, speed * fast_multiplier * 60.))
+                   fast, speed * fast_multiplier * 60., retract))
+            if final and self.purge_cool_time:
+                scripts.append(None)    # part-fan blast before the wipe
             scripts.append(self._purge_wipe_script(final))
         toolhead = self.printer.lookup_object('toolhead')
+        fans_before = None
         prior_accel = toolhead.get_status(0.).get('max_accel')
         if prior_accel is None:
             raise gcmd.error("Unable to read current acceleration limit")
@@ -1287,10 +1478,18 @@ class K2CFS:
             self.gcode.run_script_from_command(
                 "SET_VELOCITY_LIMIT ACCEL=%.3f" % self.clean_accel)
             for script in scripts:
+                if script is None:
+                    fans_before = self._fan_speeds()
+                    self._set_fans({'fan': self.purge_cool_fan})
+                    self.gcode.run_script_from_command(
+                        "G4 P%d" % (self.purge_cool_time * 1000.))
+                    continue
                 self.gcode.run_script_from_command(script)
         except Exception as exc:
             raise gcmd.error("CFS purge failed: %s" % exc)
         finally:
+            if fans_before is not None:
+                self._set_fans(fans_before)
             if accel_changed:
                 self.gcode.run_script_from_command(
                     "SET_VELOCITY_LIMIT ACCEL=%.3f" % prior_accel)
@@ -1318,11 +1517,143 @@ class K2CFS:
             "CFS purge complete: requested %.3fmm, stock-clamped %.3fmm "
             "at %.3fmm/s" % (length, actual_length, speed))
 
-    def cmd_CFS_PRINT_START(self, gcmd):
+    def _slot_nozzle_temp(self, slot):
+        slots = self.printer.lookup_object('hark_cfs_slots', None)
+        if slots is None:
+            return 0.
+        record = slots.get_status(0.)['slots'].get(slot, {})
+        return float(record.get('nozzle_temp') or 0.)
+
+    def _fan_speeds(self):
+        speeds = {}
+        for name in self.purge_fans:
+            fan = self.printer.lookup_object(name, None)
+            if fan is not None:
+                speeds[name] = fan.get_status(0.).get('speed', 0.)
+        return speeds
+
+    def _set_fans(self, speeds):
+        lines = []
+        for name, speed in speeds.items():
+            if name == 'fan':
+                lines.append("M106 S%d" % round(speed * 255.))
+            else:
+                lines.append("SET_FAN_SPEED FAN=%s SPEED=%.3f"
+                             % (name.split()[-1], speed))
+        if lines:
+            self.gcode.run_script_from_command("\n".join(lines))
+
+    def cmd_CFS_TOOLCHANGE(self, gcmd):
+        # The work stock firmware does behind a T command mid-print: lift
+        # clear of the print, cut and rewind the loaded slot, load and purge
+        # the new one at the hotter of the two temperatures, wipe, and go
+        # back down to where the print left off. Same bounded transaction as
+        # CFS_PRINT_START, so the standalone cut/load/purge gates still apply
+        # everywhere else.
         self._require_actuation(gcmd)
+        print_stats = self.printer.lookup_object('print_stats', None)
+        state = print_stats.get_status(0.).get('state', '') \
+            if print_stats is not None else ''
+        if state != 'printing':
+            raise gcmd.error(
+                "CFS_TOOLCHANGE is only available while printing "
+                "(state is %s)" % (state or "unknown"))
+        slot = gcmd.get('SLOT').upper()
+        if slot not in self.SLOT_MASKS:
+            raise gcmd.error("SLOT must be one of A, B, C, D")
+        if self.print_start_transaction:
+            raise gcmd.error("A CFS transaction is already active")
+
+        mask = self.SLOT_MASKS[slot]
+        active_mask = self._run_query('MEASURING').get('active_mask', 0)
+        nozzle_loaded = self._nozzle_has_filament() is True
+        if nozzle_loaded and active_mask == mask:
+            self._start_feed(
+                gcmd, slot, require_confirm=False, require_selected=True)
+            gcmd.respond_info("CFS slot %s already loaded" % slot)
+            return
+        old_slot = {m: s for s, m in self.SLOT_MASKS.items()}.get(
+            active_mask)
+        if not nozzle_loaded or old_slot is None:
+            raise gcmd.error(
+                "CFS tool change needs a loaded slot to change from "
+                "(nozzle sensor %s, active mask 0x%02x)"
+                % (nozzle_loaded, active_mask))
+
+        toolhead = self.printer.lookup_object('toolhead')
+        start = toolhead.get_position()
+        heater = self.printer.lookup_object('extruder').get_heater()
+        print_temp = heater.get_status(0.).get('target', 0.)
+        new_temp = self._slot_nozzle_temp(slot) or print_temp
+        purge_temp = max(print_temp, new_temp)
+        lift_z = max(start[2] + self.toolchange_lift, self.purge_min_z)
+        fan_speeds = self._fan_speeds()
+        self._set_fans({name: 0. for name in fan_speeds})
+        reactor = self.printer.get_reactor()
+        timings = [reactor.monotonic()]
+        self.gcode.run_script_from_command(
+            "SAVE_GCODE_STATE NAME=K2_CFS_TOOLCHANGE\n"
+            "G90\n"
+            "G1 Z%.3f F600\n"
+            "M104 S%.1f" % (lift_z, purge_temp))
+        self.print_start_transaction = True
+        try:
+            self._move_to_cut_start()
+            unload_gcmd = self.gcode.create_gcode_command(
+                "CFS_CUT_UNLOAD", "", {"SLOT": old_slot, "CONFIRM": "1"})
+            self.cmd_CFS_CUT_UNLOAD(unload_gcmd)
+            timings.append(reactor.monotonic())
+            self.gcode.run_script_from_command("M109 S%.1f" % purge_temp)
+            load_gcmd = self.gcode.create_gcode_command(
+                "CFS_LOAD", "", {"SLOT": slot, "CONFIRM": "1"})
+            self.cmd_CFS_LOAD(load_gcmd)
+            timings.append(reactor.monotonic())
+            self.cmd_CFS_PURGE(load_gcmd)
+            timings.append(reactor.monotonic())
+        except Exception:
+            self._best_effort_stop(mask)
+            self.status.update({
+                'feed_enabled': False,
+                'box_mode_code': self.BOX_MODE_IDLE,
+                'box_mode': 'idle',
+            })
+            raise
+        finally:
+            self.print_start_transaction = False
+            self._set_fans(fan_speeds)
+
+        # Over the print at the lifted height, then straight down.
+        self.gcode.run_script_from_command(
+            "M104 S%.1f\n"
+            "G90\n"
+            "G1 X%.3f Y%.3f F%.3f\n"
+            "M83\n"
+            "G1 E%.3f F%.3f\n"
+            "RESTORE_GCODE_STATE NAME=K2_CFS_TOOLCHANGE MOVE=1 MOVE_SPEED=10"
+            % (new_temp, start[0], start[1], self.purge_speed * 60.,
+               self.purge_retract_length, self.purge_retract_speed * 60.))
+        timings.append(reactor.monotonic())
+        self.status['last_toolchange'] = "%s>%s" % (old_slot, slot)
+        gcmd.respond_info(
+            "CFS tool change complete: slot %s to slot %s in %.0fs "
+            "(cut/unload %.0fs, load %.0fs, purge %.0fs, return %.0fs)"
+            % ((old_slot, slot, timings[-1] - timings[0])
+               + tuple(b - a for a, b in zip(timings, timings[1:]))))
+
+    def cmd_CFS_PRINT_START(self, gcmd):
         self._require_print_start(gcmd)
+        self._load_and_purge(gcmd, "CFS_PRINT_START")
+
+    def cmd_CFS_CHANGE_SLOT(self, gcmd):
+        # The same cut/load/purge as a print start, from the screen while
+        # idle. Asking for the slot already loaded just purges it.
+        self._require_idle(gcmd)
+        self._load_and_purge(gcmd, "CFS_CHANGE_SLOT")
+
+    def _load_and_purge(self, gcmd, command):
+        self._require_actuation(gcmd)
         if gcmd.get_int('CONFIRM', 0, minval=0, maxval=1) != 1:
-            raise gcmd.error("CFS_PRINT_START requires CONFIRM=1")
+            raise gcmd.error("%s requires CONFIRM=1" % command)
         slot = gcmd.get('SLOT').upper()
         if slot not in self.SLOT_MASKS:
             raise gcmd.error("SLOT must be one of A, B, C, D")
@@ -1330,7 +1661,7 @@ class K2CFS:
             raise gcmd.error("CFS print-start transaction is already active")
 
         mask = self.SLOT_MASKS[slot]
-        self._require_safe_motion(gcmd, "CFS_PRINT_START")
+        self._require_safe_motion(gcmd, command)
         self._require_hot_extruder(gcmd)
         filament = self._run_query('FILAMENT_SENSOR')
         slots_loaded = filament.get('slots_loaded')
@@ -1367,9 +1698,15 @@ class K2CFS:
                     self._ensure_purge_position(gcmd)
             else:
                 if active_mask:
-                    raise gcmd.error(
-                        "Nozzle sensor is clear but CFS active mask is 0x%02x"
-                        % active_mask)
+                    # A spool pushed in by hand or an aborted load leaves a
+                    # slot selected with nothing at the nozzle. Stock just
+                    # idles the box; CFS_LOAD then rewinds the hub if needed.
+                    gcmd.respond_info(
+                        "CFS still selects mask 0x%02x with the nozzle clear;"
+                        " idling it before the load" % active_mask)
+                    self._run_actuation(
+                        'SET_BOX_MODE IDLE',
+                        [0xff, 0x04, 0x00, self.MODE_IDLE])
                 self._ensure_purge_position(gcmd)
                 self.cmd_CFS_LOAD(gcmd)
 

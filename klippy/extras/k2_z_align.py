@@ -174,15 +174,15 @@ class K2ZAlign:
                 total_duration = stats.get("total_duration", 1.0e9)
                 print_duration = stats.get("print_duration", 1.0e9)
                 # virtual_sdcard changes print_stats to "printing" before it
-                # invokes START_PRINT. Permit the initial physical Z recovery
-                # only inside that brief pre-print window. This is deliberately
-                # independent of G28 parameters: homing_override does not
-                # reliably receive non-axis parameters on all Klipper builds.
+                # invokes START_PRINT. START_PRINT references Z here on every
+                # print, so permit it until the first extrusion (print_duration
+                # only starts counting then); never once printing has begun.
+                # This is deliberately independent of G28 parameters:
+                # homing_override does not reliably receive non-axis
+                # parameters on all Klipper builds.
                 startup_recovery = (
                     state == "printing"
-                    and "z" not in homed
                     and print_duration == 0.
-                    and total_duration <= 5.
                 )
                 if not startup_recovery:
                     raise gcmd.error(

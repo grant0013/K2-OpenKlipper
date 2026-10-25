@@ -48,8 +48,11 @@ fi
 # This ARMv7 build ships a cross-compiled helper because the K2 has no local
 # compiler. Package transfers can make C sources newer than the helper and
 # trigger an impossible on-printer rebuild, so mark the validated helper fresh.
-[ -f "$MAINLINE/klippy/chelper/c_helper.so" ] \
-    && touch "$MAINLINE/klippy/chelper/c_helper.so"
+# The K2 has no RTC: at boot the clock reads 2020 until NTP syncs, so stamp
+# the helper with its newest source's time rather than "now".
+NEWEST_SRC=$(ls -t "$MAINLINE"/klippy/chelper/*.c "$MAINLINE"/klippy/chelper/*.h 2>/dev/null | head -1)
+[ -f "$MAINLINE/klippy/chelper/c_helper.so" ] && [ -n "$NEWEST_SRC" ] \
+    && touch -r "$NEWEST_SRC" "$MAINLINE/klippy/chelper/c_helper.so"
 echo "starting mainline klippy..."
 echo "config: $CFG"
 taskset 0x2 /usr/share/klippy-env/bin/python \
@@ -62,3 +65,7 @@ echo $! > /var/run/klippy_mainline.pid
 echo "mainline klippy started, pid $(cat /var/run/klippy_mainline.pid)"
 echo "log: $PDATA/logs/klippy.log"
 echo "switch back with: sh $MAINLINE/switch-to-stock.sh"
+# Hark Screen touchscreen UI (takes the panel over from the boot animation)
+[ -x /mnt/UDISK/harkscreen/start.sh ] && sh /mnt/UDISK/harkscreen/start.sh
+# Hark Cam: USB camera as MJPEG on :8080 (Mainsail /webcam/), replacing cam_app/webrtc
+[ -x /mnt/UDISK/harkcam/start.sh ] && sh /mnt/UDISK/harkcam/start.sh

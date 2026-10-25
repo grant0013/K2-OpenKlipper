@@ -71,3 +71,18 @@ item.
 
 Do not test thresholds with an unattended printer. Keep travel short, speed
 low, and an immediate power cutoff available.
+
+## Reading the raw gauge stream (v0.2.0)
+
+Used by `pa_pressure_log.py`:
+
+- After `start_streaming`, the nozzle MCU fills a 64-sample buffer at
+  0.78125 ms per sample and only exposes it once full (about 50 ms). Reads
+  before that return zero ticks.
+- `read_prtouch_pres oid is_src ch idx len` returns at most 7-16 samples per
+  reply. Read from `idx` 0 onward until 64, while still streaming: stopping
+  first empties the buffer.
+- `ticks` decode (unsigned) to MCU clock values. Convert with
+  `clock32_to_clock64` + `clock_to_print_time` for exact timestamps.
+- Drop the first sample after a restart, which reads offset. Resting level is
+  about -1.6M counts with roughly 200 counts of noise.

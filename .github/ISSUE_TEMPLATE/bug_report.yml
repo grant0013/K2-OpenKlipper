@@ -18,7 +18,7 @@ body:
     id: hardware
     attributes:
       label: Printer and hardware revision
-      placeholder: Creality K2 Plus, revision if known
+      placeholder: Creality K2 / K2 Combo (F021), K2 Pro (F012) or K2 Plus (F008)
     validations:
       required: true
   - type: textarea

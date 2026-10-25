@@ -1,0 +1,20 @@
+--- a/moonraker/components/webcam.py
++++ b/moonraker/components/webcam.py
+@@ -217,7 +217,16 @@
+         self.source: str = kwargs["source"]
+ 
+     def as_dict(self):
+-        return {k: v for k, v in self.__dict__.items() if k[0] != "_"}
++        data = {k: v for k, v in self.__dict__.items() if k[0] != "_"}
++        # Hark 2026-10-25: Mainsail 2.18 shows only webcams flagged
++        # "enabled"; this older Moonraker has no such field, so every
++        # webcam was hidden. Fill in the newer API defaults.
++        data.setdefault("enabled", True)
++        data.setdefault("icon", "mdiWebcam")
++        data.setdefault("aspect_ratio", "16:9")
++        data.setdefault("target_fps_idle", 5)
++        data.setdefault("extra_data", {})
++        return data
+ 
+     async def get_stream_url(self, convert_local: bool = False) -> str:
+         return await self._get_url(self.stream_url, convert_local)

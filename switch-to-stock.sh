@@ -1,4 +1,9 @@
 #!/bin/sh
+# Hand the camera back to Creality cam_app/webrtc
+[ -f /tmp/harkcam.pid ] && kill $(cat /tmp/harkcam.pid) 2>/dev/null
+/etc/init.d/webrtc start 2>/dev/null
+# Hand the panel back to the stock UI
+[ -f /tmp/harkscreen.pid ] && kill $(cat /tmp/harkscreen.pid) 2>/dev/null
 # Switch K2 back from mainline instance to stock Creality Klipper.
 [ -f /var/run/klippy_mainline.pid ] && kill "$(cat /var/run/klippy_mainline.pid)" 2>/dev/null
 pkill -f "/mnt/UDISK/.*/klippy/klippy.py" 2>/dev/null

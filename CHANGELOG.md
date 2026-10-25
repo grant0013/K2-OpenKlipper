@@ -1,5 +1,52 @@
 # Changelog
 
+## v0.2.0-alpha.1 - 2026-10-25
+
+### New
+
+- **Strain-gauge pressure advance calibration** (`PA_CAL_RUN`,
+  `pa_pressure_log.py`, `pa_analysis.py`): per-slot PA measured over the purge
+  chute, validated by a printed comparison. See `docs/PA-CALIBRATION.md`.
+- **CFS slot records** (`hark_cfs_slots.py`): per-slot filament, temperatures,
+  PA, flow and retraction, applied on slot selection and mirrored for
+  OrcaSlicer.
+- **Head accelerometer driver** (`lis2dw_k2.py`) for `SHAPER_CALIBRATE` on
+  Creality's nozzle-board LIS2DW protocol.
+- **Hark Screen** touchscreen UI and **harkcam** MJPEG camera for Mainsail.
+- **Motor controller tooling**: `MOTOR_BUS_SEND READ_LEN/TIMEOUT` for
+  telemetry, a full parameter map, scan and A/B test tools. See
+  `docs/MOTOR-CONTROLLER.md`.
+
+### Print start
+
+- One heat cycle before probing: CFS load/purge at temperature over the chute,
+  a cool-wipe, a clean precise Z tap, a bed-strip scrape and the mesh.
+- PA15 bottom-switch Z reference on every print (`k2_z_align` now allows it
+  until the first extrusion).
+- Adaptive heat soak for jobs without a slicer tool.
+- The swamp-and-drag purge line keeps a margin from the parts.
+
+### CFS
+
+- Idle pre-loading (spool take-up) restored after boot and failed loads.
+- EXTRUDE_ERR8 retry, stale active-mask cleanup, a purge-tail retract and a
+  fan blast before the wipe.
+- `CFS_CHANGE_SLOT` and `CFS_LOAD_SLOT` for idle slot changes; firmware
+  retraction set per slot.
+
+### Tuning on F021
+
+- Input shaper X mzv 54.8 Hz / Y mzv 45.4 Hz, extruder PID at 250 °C,
+  minimum cruise ratio 0, `pressure_advance_smooth_time` 0.06.
+- `[gcode_arcs] resolution: 0.1` is back in use on this build: many complete
+  prints with no MCU timing faults (it caused a fault in v62 testing, so watch
+  for it).
+
+### Fixes
+
+- Manual G28 no longer runs the in-print nozzle wipe; the in-print wipe is
+  skipped around START_PRINT's own Z home.
+
 ## v62 - 2026-07-29
 
 ### Printer control

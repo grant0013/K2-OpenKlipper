@@ -1,0 +1,898 @@
+{
+ "195": {
+  "name": "chopper_param_base_pwm",
+  "class": "locked"
+ },
+ "193": {
+  "name": "chopper_param_chopper_mode",
+  "class": "locked"
+ },
+ "198": {
+  "name": "chopper_param_hybrid_decay_ratio",
+  "class": "locked"
+ },
+ "197": {
+  "name": "chopper_param_offset_pwm",
+  "class": "locked"
+ },
+ "196": {
+  "name": "chopper_param_offset_pwm_en",
+  "class": "locked"
+ },
+ "194": {
+  "name": "chopper_param_svpwm_mode",
+  "class": "locked"
+ },
+ "204": {
+  "name": "cmd_int_param_char_cmd_support",
+  "class": "cfg"
+ },
+ "129": {
+  "name": "controller_cur_filter_param_Ts",
+  "class": "locked"
+ },
+ "128": {
+  "name": "controller_cur_filter_param_en",
+  "class": "cfg"
+ },
+ "130": {
+  "name": "controller_cur_filter_param_fc",
+  "class": "cfg"
+ },
+ "111": {
+  "name": "controller_cur_loop_pid_fal_param_a",
+  "class": "cfg"
+ },
+ "112": {
+  "name": "controller_cur_loop_pid_fal_param_d",
+  "class": "locked"
+ },
+ "110": {
+  "name": "controller_cur_loop_pid_fal_param_en",
+  "class": "cfg"
+ },
+ "115": {
+  "name": "controller_cur_loop_pid_fal_param_inteval_gain",
+  "class": "locked"
+ },
+ "114": {
+  "name": "controller_cur_loop_pid_fal_param_section_nums",
+  "class": "locked"
+ },
+ "113": {
+  "name": "controller_cur_loop_pid_fal_param_zoom",
+  "class": "cfg"
+ },
+ "101": {
+  "name": "controller_cur_loop_pid_param_bypass",
+  "class": "locked"
+ },
+ "100": {
+  "name": "controller_cur_loop_pid_param_en",
+  "class": "locked"
+ },
+ "105": {
+  "name": "controller_cur_loop_pid_param_kc",
+  "class": "cfg"
+ },
+ "104": {
+  "name": "controller_cur_loop_pid_param_kd",
+  "class": "locked"
+ },
+ "103": {
+  "name": "controller_cur_loop_pid_param_ki",
+  "class": "cfg"
+ },
+ "102": {
+  "name": "controller_cur_loop_pid_param_kp",
+  "class": "cfg"
+ },
+ "108": {
+  "name": "controller_cur_loop_pid_param_limit_ui",
+  "class": "locked"
+ },
+ "109": {
+  "name": "controller_cur_loop_pid_parma_limit_out",
+  "class": "locked"
+ },
+ "106": {
+  "name": "controller_cur_loop_pid_ud_filter_param_en",
+  "class": "locked"
+ },
+ "107": {
+  "name": "controller_cur_loop_pid_ud_filter_param_fc",
+  "class": "locked"
+ },
+ "123": {
+  "name": "controller_fwc_param_I_max",
+  "class": "cfg"
+ },
+ "124": {
+  "name": "controller_fwc_param_L",
+  "class": "locked"
+ },
+ "122": {
+  "name": "controller_fwc_param_en",
+  "class": "cfg"
+ },
+ "125": {
+  "name": "controller_fwc_param_phi_e",
+  "class": "locked"
+ },
+ "126": {
+  "name": "controller_fwc_param_pole_pair",
+  "class": "locked"
+ },
+ "127": {
+  "name": "controller_fwc_param_wm_base",
+  "class": "cfg"
+ },
+ "117": {
+  "name": "controller_leso_param_b0",
+  "class": "locked"
+ },
+ "116": {
+  "name": "controller_leso_param_b0k",
+  "class": "cfg"
+ },
+ "121": {
+  "name": "controller_leso_param_wd",
+  "class": "cfg"
+ },
+ "119": {
+  "name": "controller_leso_param_wp",
+  "class": "cfg"
+ },
+ "120": {
+  "name": "controller_leso_param_ws",
+  "class": "cfg"
+ },
+ "118": {
+  "name": "controller_leso_param_z3k",
+  "class": "cfg"
+ },
+ "158": {
+  "name": "controller_motor_ripple_compensator_en",
+  "class": "locked"
+ },
+ "159": {
+  "name": "controller_motor_ripple_compensator_sin_coeffs_0_term_A",
+  "class": "locked"
+ },
+ "160": {
+  "name": "controller_motor_ripple_compensator_sin_coeffs_0_term_n",
+  "class": "locked"
+ },
+ "161": {
+  "name": "controller_motor_ripple_compensator_sin_coeffs_0_term_phi",
+  "class": "locked"
+ },
+ "162": {
+  "name": "controller_motor_ripple_compensator_sin_coeffs_1_term_A",
+  "class": "locked"
+ },
+ "163": {
+  "name": "controller_motor_ripple_compensator_sin_coeffs_1_term_n",
+  "class": "locked"
+ },
+ "164": {
+  "name": "controller_motor_ripple_compensator_sin_coeffs_1_term_phi",
+  "class": "locked"
+ },
+ "165": {
+  "name": "controller_motor_ripple_compensator_sin_coeffs_2_term_A",
+  "class": "locked"
+ },
+ "166": {
+  "name": "controller_motor_ripple_compensator_sin_coeffs_2_term_n",
+  "class": "locked"
+ },
+ "167": {
+  "name": "controller_motor_ripple_compensator_sin_coeffs_2_term_phi",
+  "class": "locked"
+ },
+ "65": {
+  "name": "controller_param_control_algorithm",
+  "class": "locked"
+ },
+ "66": {
+  "name": "controller_param_en_feedforward_idiq",
+  "class": "cfg"
+ },
+ "67": {
+  "name": "controller_param_en_feedforward_uduq",
+  "class": "cfg"
+ },
+ "79": {
+  "name": "controller_pos_loop_pid_fal_param_a",
+  "class": "locked"
+ },
+ "80": {
+  "name": "controller_pos_loop_pid_fal_param_d",
+  "class": "locked"
+ },
+ "78": {
+  "name": "controller_pos_loop_pid_fal_param_en",
+  "class": "locked"
+ },
+ "83": {
+  "name": "controller_pos_loop_pid_fal_param_inteval_gain",
+  "class": "locked"
+ },
+ "82": {
+  "name": "controller_pos_loop_pid_fal_param_section_nums",
+  "class": "locked"
+ },
+ "81": {
+  "name": "controller_pos_loop_pid_fal_param_zoom",
+  "class": "locked"
+ },
+ "69": {
+  "name": "controller_pos_loop_pid_param_bypass",
+  "class": "locked"
+ },
+ "68": {
+  "name": "controller_pos_loop_pid_param_en",
+  "class": "locked"
+ },
+ "73": {
+  "name": "controller_pos_loop_pid_param_kc",
+  "class": "locked"
+ },
+ "72": {
+  "name": "controller_pos_loop_pid_param_kd",
+  "class": "locked"
+ },
+ "71": {
+  "name": "controller_pos_loop_pid_param_ki",
+  "class": "locked"
+ },
+ "70": {
+  "name": "controller_pos_loop_pid_param_kp",
+  "class": "cfg"
+ },
+ "76": {
+  "name": "controller_pos_loop_pid_param_limit_ui",
+  "class": "locked"
+ },
+ "77": {
+  "name": "controller_pos_loop_pid_parma_limit_out",
+  "class": "locked"
+ },
+ "74": {
+  "name": "controller_pos_loop_pid_ud_filter_param_en",
+  "class": "locked"
+ },
+ "75": {
+  "name": "controller_pos_loop_pid_ud_filter_param_fc",
+  "class": "locked"
+ },
+ "95": {
+  "name": "controller_spd_loop_pid_fal_param_a",
+  "class": "cfg"
+ },
+ "96": {
+  "name": "controller_spd_loop_pid_fal_param_d",
+  "class": "locked"
+ },
+ "94": {
+  "name": "controller_spd_loop_pid_fal_param_en",
+  "class": "cfg"
+ },
+ "99": {
+  "name": "controller_spd_loop_pid_fal_param_inteval_gain",
+  "class": "locked"
+ },
+ "98": {
+  "name": "controller_spd_loop_pid_fal_param_section_nums",
+  "class": "locked"
+ },
+ "97": {
+  "name": "controller_spd_loop_pid_fal_param_zoom",
+  "class": "cfg"
+ },
+ "85": {
+  "name": "controller_spd_loop_pid_param_bypass",
+  "class": "locked"
+ },
+ "84": {
+  "name": "controller_spd_loop_pid_param_en",
+  "class": "locked"
+ },
+ "89": {
+  "name": "controller_spd_loop_pid_param_kc",
+  "class": "cfg"
+ },
+ "88": {
+  "name": "controller_spd_loop_pid_param_kd",
+  "class": "locked"
+ },
+ "87": {
+  "name": "controller_spd_loop_pid_param_ki",
+  "class": "cfg"
+ },
+ "86": {
+  "name": "controller_spd_loop_pid_param_kp",
+  "class": "cfg"
+ },
+ "92": {
+  "name": "controller_spd_loop_pid_param_limit_ui",
+  "class": "locked"
+ },
+ "93": {
+  "name": "controller_spd_loop_pid_parma_limit_out",
+  "class": "locked"
+ },
+ "90": {
+  "name": "controller_spd_loop_pid_ud_filter_param_en",
+  "class": "locked"
+ },
+ "91": {
+  "name": "controller_spd_loop_pid_ud_filter_param_fc",
+  "class": "locked"
+ },
+ "138": {
+  "name": "controller_spd_out_filter_binary_second_order_param_depth",
+  "class": "locked"
+ },
+ "136": {
+  "name": "controller_spd_out_filter_binary_second_order_param_en",
+  "class": "locked"
+ },
+ "137": {
+  "name": "controller_spd_out_filter_binary_second_order_param_fc",
+  "class": "locked"
+ },
+ "140": {
+  "name": "controller_spd_out_filter_binary_second_order_param_zeta_0D",
+  "class": "locked"
+ },
+ "139": {
+  "name": "controller_spd_out_filter_binary_second_order_param_zeta_0N",
+  "class": "locked"
+ },
+ "149": {
+  "name": "controller_spd_out_filter_notch_0_param_depth",
+  "class": "locked"
+ },
+ "146": {
+  "name": "controller_spd_out_filter_notch_0_param_en",
+  "class": "locked"
+ },
+ "147": {
+  "name": "controller_spd_out_filter_notch_0_param_f0",
+  "class": "locked"
+ },
+ "148": {
+  "name": "controller_spd_out_filter_notch_0_param_f_width",
+  "class": "locked"
+ },
+ "153": {
+  "name": "controller_spd_out_filter_notch_1_param_depth",
+  "class": "locked"
+ },
+ "150": {
+  "name": "controller_spd_out_filter_notch_1_param_en",
+  "class": "locked"
+ },
+ "151": {
+  "name": "controller_spd_out_filter_notch_1_param_f0",
+  "class": "locked"
+ },
+ "152": {
+  "name": "controller_spd_out_filter_notch_1_param_f_width",
+  "class": "locked"
+ },
+ "157": {
+  "name": "controller_spd_out_filter_notch_2_param_depth",
+  "class": "locked"
+ },
+ "154": {
+  "name": "controller_spd_out_filter_notch_2_param_en",
+  "class": "locked"
+ },
+ "155": {
+  "name": "controller_spd_out_filter_notch_2_param_f0",
+  "class": "locked"
+ },
+ "156": {
+  "name": "controller_spd_out_filter_notch_2_param_f_width",
+  "class": "locked"
+ },
+ "143": {
+  "name": "controller_td_fhan_param_f0",
+  "class": "cfg"
+ },
+ "144": {
+  "name": "controller_td_param_d_gain",
+  "class": "cfg"
+ },
+ "145": {
+  "name": "controller_td_param_dd_gain",
+  "class": "cfg"
+ },
+ "141": {
+  "name": "controller_td_param_en",
+  "class": "cfg"
+ },
+ "142": {
+  "name": "controller_td_param_h0_gain_h",
+  "class": "cfg"
+ },
+ "133": {
+  "name": "controller_z3_filter_binary_second_order_param_depth",
+  "class": "locked"
+ },
+ "131": {
+  "name": "controller_z3_filter_binary_second_order_param_en",
+  "class": "locked"
+ },
+ "132": {
+  "name": "controller_z3_filter_binary_second_order_param_fc",
+  "class": "locked"
+ },
+ "135": {
+  "name": "controller_z3_filter_binary_second_order_param_zeta_0D",
+  "class": "locked"
+ },
+ "134": {
+  "name": "controller_z3_filter_binary_second_order_param_zeta_0N",
+  "class": "locked"
+ },
+ "30": {
+  "name": "driver_board_param_R_of_current_sample_ohm",
+  "class": "locked"
+ },
+ "32": {
+  "name": "driver_board_param_adc_calibration_buffer_size",
+  "class": "locked"
+ },
+ "31": {
+  "name": "driver_board_param_adc_calibration_start_index",
+  "class": "locked"
+ },
+ "27": {
+  "name": "driver_board_param_adc_ref_V",
+  "class": "locked"
+ },
+ "28": {
+  "name": "driver_board_param_amp_gain",
+  "class": "locked"
+ },
+ "34": {
+  "name": "driver_board_param_current_dir",
+  "class": "locked"
+ },
+ "33": {
+  "name": "driver_board_param_led_toggle_period_s",
+  "class": "locked"
+ },
+ "36": {
+  "name": "driver_board_param_mos_Ron",
+  "class": "locked"
+ },
+ "37": {
+  "name": "driver_board_param_mos_deadtime",
+  "class": "locked"
+ },
+ "40": {
+  "name": "driver_board_param_mos_max_continuous_current",
+  "class": "locked"
+ },
+ "39": {
+  "name": "driver_board_param_mos_max_peak_current",
+  "class": "locked"
+ },
+ "38": {
+  "name": "driver_board_param_mos_rise_fall_time",
+  "class": "locked"
+ },
+ "26": {
+  "name": "driver_board_param_power_supply_V",
+  "class": "locked"
+ },
+ "29": {
+  "name": "driver_board_param_power_voltage_sample_gain",
+  "class": "locked"
+ },
+ "35": {
+  "name": "driver_board_param_pwm_output_en",
+  "class": "locked"
+ },
+ "55": {
+  "name": "encoder_param_direction",
+  "class": "locked"
+ },
+ "56": {
+  "name": "encoder_param_encoder_bit",
+  "class": "locked"
+ },
+ "57": {
+  "name": "encoder_param_encoder_max_pulse",
+  "class": "locked"
+ },
+ "58": {
+  "name": "encoder_param_fake_encoder_en",
+  "class": "locked"
+ },
+ "59": {
+  "name": "encoder_param_fake_encoder_step",
+  "class": "locked"
+ },
+ "168": {
+  "name": "flash_manager_param_checksum_restore_en",
+  "class": "locked"
+ },
+ "170": {
+  "name": "logger_param_continuous_send",
+  "class": "locked"
+ },
+ "169": {
+  "name": "logger_param_en",
+  "class": "locked"
+ },
+ "172": {
+  "name": "logger_param_n_pack_to_send",
+  "class": "locked"
+ },
+ "171": {
+  "name": "logger_param_sample_interval_n",
+  "class": "locked"
+ },
+ "61": {
+  "name": "mcu_param_HSE_hz",
+  "class": "locked"
+ },
+ "64": {
+  "name": "mcu_param_input_pulse_counter_filter_level",
+  "class": "locked"
+ },
+ "63": {
+  "name": "mcu_param_input_pulse_counter_trigger_mode",
+  "class": "locked"
+ },
+ "60": {
+  "name": "mcu_param_sysclk_hz",
+  "class": "locked"
+ },
+ "62": {
+  "name": "mcu_param_uart_baudrate",
+  "class": "locked"
+ },
+ "47": {
+  "name": "motor_param_B",
+  "class": "locked"
+ },
+ "46": {
+  "name": "motor_param_J",
+  "class": "locked"
+ },
+ "43": {
+  "name": "motor_param_Ke",
+  "class": "cfg"
+ },
+ "44": {
+  "name": "motor_param_Kt",
+  "class": "locked"
+ },
+ "42": {
+  "name": "motor_param_L",
+  "class": "cfg"
+ },
+ "41": {
+  "name": "motor_param_R",
+  "class": "cfg"
+ },
+ "45": {
+  "name": "motor_param_mass",
+  "class": "locked"
+ },
+ "54": {
+  "name": "motor_param_maximum_holding_torque",
+  "class": "locked"
+ },
+ "49": {
+  "name": "motor_param_phase_nums",
+  "class": "locked"
+ },
+ "50": {
+  "name": "motor_param_pole_pair",
+  "class": "locked"
+ },
+ "51": {
+  "name": "motor_param_power_supply",
+  "class": "locked"
+ },
+ "53": {
+  "name": "motor_param_rated_current",
+  "class": "locked"
+ },
+ "52": {
+  "name": "motor_param_rated_voltage",
+  "class": "locked"
+ },
+ "48": {
+  "name": "motor_param_stepping_angle_degree",
+  "class": "locked"
+ },
+ "216": {
+  "name": "motor_phase_check_param_motor_resistance_tolerance_standar_percent",
+  "class": "locked"
+ },
+ "215": {
+  "name": "motor_phase_check_param_run_on_startup",
+  "class": "locked"
+ },
+ "1": {
+  "name": "param_boot_key",
+  "class": "locked"
+ },
+ "15": {
+  "name": "param_calibration_dir",
+  "class": "locked"
+ },
+ "19": {
+  "name": "param_delay_ms_per_read",
+  "class": "locked"
+ },
+ "18": {
+  "name": "param_delay_ms_per_step",
+  "class": "locked"
+ },
+ "8": {
+  "name": "param_elec_angle_calibration_standar_deg",
+  "class": "locked"
+ },
+ "11": {
+  "name": "param_emergency_pin_mode",
+  "class": "locked"
+ },
+ "16": {
+  "name": "param_encoder_cal_count_max",
+  "class": "locked"
+ },
+ "24": {
+  "name": "param_encoder_calibration_round_count",
+  "class": "locked"
+ },
+ "22": {
+  "name": "param_encoder_calibtate_official_cal_count_max",
+  "class": "locked"
+ },
+ "23": {
+  "name": "param_encoder_calibtate_official_ud_cal_set",
+  "class": "cfg"
+ },
+ "17": {
+  "name": "param_encoder_read_count",
+  "class": "locked"
+ },
+ "225": {
+  "name": "param_flash_checksum",
+  "class": "locked"
+ },
+ "224": {
+  "name": "param_flash_key",
+  "class": "locked"
+ },
+ "2": {
+  "name": "param_flash_key_write_retries_num",
+  "class": "locked"
+ },
+ "0": {
+  "name": "param_flash_param_version",
+  "class": "locked"
+ },
+ "21": {
+  "name": "param_motion_dir",
+  "class": "cfg"
+ },
+ "4": {
+  "name": "param_pwm_period_s",
+  "class": "locked"
+ },
+ "7": {
+  "name": "param_singleturn_control_mode",
+  "class": "locked"
+ },
+ "13": {
+  "name": "param_stall_cur_A",
+  "class": "cfg"
+ },
+ "12": {
+  "name": "param_stall_mode",
+  "class": "cfg"
+ },
+ "14": {
+  "name": "param_stall_pos_err_rad",
+  "class": "cfg"
+ },
+ "3": {
+  "name": "param_system_startup_delay_ms",
+  "class": "locked"
+ },
+ "5": {
+  "name": "param_task_period_s",
+  "class": "locked"
+ },
+ "20": {
+  "name": "param_ud_cal_set",
+  "class": "cfg"
+ },
+ "6": {
+  "name": "param_use_default_param",
+  "class": "locked"
+ },
+ "191": {
+  "name": "protection_err_code_backup",
+  "class": "locked"
+ },
+ "178": {
+  "name": "protection_param_encoder_mutation_coefficient_lower",
+  "class": "locked"
+ },
+ "177": {
+  "name": "protection_param_encoder_mutation_coefficient_upper",
+  "class": "locked"
+ },
+ "175": {
+  "name": "protection_param_err_code_mask",
+  "class": "locked"
+ },
+ "190": {
+  "name": "protection_param_mcu_temp_max",
+  "class": "cfg"
+ },
+ "184": {
+  "name": "protection_param_pos_over_limit_max_rad",
+  "class": "locked"
+ },
+ "185": {
+  "name": "protection_param_pos_over_limit_min_rad",
+  "class": "locked"
+ },
+ "189": {
+  "name": "protection_param_power_voltage_min",
+  "class": "cfg"
+ },
+ "173": {
+  "name": "protection_param_protect_en",
+  "class": "cfg"
+ },
+ "174": {
+  "name": "protection_param_protect_report",
+  "class": "locked"
+ },
+ "186": {
+  "name": "protection_param_prt_cmd_mutation_turn",
+  "class": "locked"
+ },
+ "180": {
+  "name": "protection_param_prt_continuous_cur_A",
+  "class": "cfg"
+ },
+ "181": {
+  "name": "protection_param_prt_continuous_time_s",
+  "class": "cfg"
+ },
+ "182": {
+  "name": "protection_param_prt_over_speed_rad_s",
+  "class": "cfg"
+ },
+ "183": {
+  "name": "protection_param_prt_over_speed_time_s",
+  "class": "cfg"
+ },
+ "179": {
+  "name": "protection_param_prt_peak_cur_A",
+  "class": "cfg"
+ },
+ "188": {
+  "name": "protection_param_prt_track_err_time",
+  "class": "cfg"
+ },
+ "187": {
+  "name": "protection_param_prt_track_max_err",
+  "class": "cfg"
+ },
+ "176": {
+  "name": "protection_param_warning_code_mask",
+  "class": "locked"
+ },
+ "192": {
+  "name": "protection_warning_code_backup",
+  "class": "locked"
+ },
+ "226": {
+  "name": "stall_pos_err_rad_for_slicer",
+  "class": "cfg"
+ },
+ "203": {
+  "name": "step_controller_param_extra_trim_pulse",
+  "class": "locked"
+ },
+ "199": {
+  "name": "step_controller_param_pulse_count_max",
+  "class": "locked"
+ },
+ "201": {
+  "name": "step_controller_param_pulse_trim_en",
+  "class": "locked"
+ },
+ "200": {
+  "name": "step_controller_param_subdivision",
+  "class": "cfg"
+ },
+ "202": {
+  "name": "step_controller_param_trim_action_period",
+  "class": "locked"
+ },
+ "214": {
+  "name": "system_id_RL_param_normal_L_range_max",
+  "class": "locked"
+ },
+ "208": {
+  "name": "system_id_RL_param_param_current_buff_size",
+  "class": "locked"
+ },
+ "209": {
+  "name": "system_id_RL_param_param_current_err_size",
+  "class": "locked"
+ },
+ "207": {
+  "name": "system_id_RL_param_param_current_stable_err_condition",
+  "class": "locked"
+ },
+ "213": {
+  "name": "system_id_RL_param_param_normal_L_range_min",
+  "class": "locked"
+ },
+ "212": {
+  "name": "system_id_RL_param_param_normal_R_range_max",
+  "class": "locked"
+ },
+ "211": {
+  "name": "system_id_RL_param_param_normal_R_range_min",
+  "class": "locked"
+ },
+ "210": {
+  "name": "system_id_RL_param_param_prepare_time",
+  "class": "locked"
+ },
+ "206": {
+  "name": "system_id_RL_param_param_uin_calibrate",
+  "class": "locked"
+ },
+ "205": {
+  "name": "system_id_RL_param_param_uin_startup",
+  "class": "locked"
+ },
+ "217": {
+  "name": "zazen_param_zazen_en",
+  "class": "cfg"
+ },
+ "223": {
+  "name": "zazen_param_zazen_gain_cur_ki",
+  "class": "cfg"
+ },
+ "222": {
+  "name": "zazen_param_zazen_gain_cur_kp",
+  "class": "cfg"
+ },
+ "219": {
+  "name": "zazen_param_zazen_gain_pos_kp",
+  "class": "locked"
+ },
+ "221": {
+  "name": "zazen_param_zazen_gain_spd_ki",
+  "class": "cfg"
+ },
+ "220": {
+  "name": "zazen_param_zazen_gain_spd_kp",
+  "class": "cfg"
+ },
+ "218": {
+  "name": "zazen_param_zazen_trigger_time_s",
+  "class": "cfg"
+ }
+}
