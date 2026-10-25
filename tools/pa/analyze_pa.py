@@ -4,7 +4,10 @@
 Usage: analyze_pa.py <dir> <name> [--plot out.png]
 """
 import json, os, sys
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+HERE = os.path.dirname(os.path.abspath(__file__))
+# pa_analysis.py is shared with the printer and lives in klippy/extras
+sys.path.insert(0, os.path.join(HERE, '..', '..', 'klippy', 'extras'))
+sys.path.insert(0, HERE)
 import pa_analysis
 
 

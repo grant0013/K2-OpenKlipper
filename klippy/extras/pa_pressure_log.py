@@ -16,7 +16,7 @@
 # analysis can line them up exactly.
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
-import json, logging, os, subprocess, sys
+import json, logging, os, subprocess, sys, time
 from .prtouch_open import zip as _zip
 
 ANALYSIS = os.path.join(os.path.dirname(__file__), 'pa_analysis.py')
@@ -217,6 +217,9 @@ class PAPressureLog:
         res['name'] = name
         res['slot'] = slot
         res['saved'] = False
+        res['save_requested'] = bool(save)
+        # Lets the touchscreen tell a new result from one already shown
+        res['stamp'] = round(time.time(), 3)
         lines = ["PA analysis %s:" % name]
         for row in res.get('table', []):
             lines.append("  PA %.3f  balance %+.3f  over %.2f  under %.2f  "

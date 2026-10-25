@@ -57,7 +57,11 @@ OBJECTS = {
     "output_pin chamber_led": ["value"],
     "webhooks": ["state", "state_message"],
     "idle_timeout": ["state"],
+    "pa_pressure_log": ["last"],
 }
+
+# The last PA calibration result the user has dismissed (its stamp)
+PA_ACK_FILE = "/mnt/UDISK/harkscreen/.pa_result_ack"
 
 
 class Config:
@@ -438,6 +442,11 @@ class Screen:
         self.last_key = None         # view_key of the drawn base
         self.running = None          # (label, start) of a command we sent
         self.slot_menu = None        # slot sheet: load / purge / unload / set
+        try:
+            with open(PA_ACK_FILE) as f:
+                self.pa_ack = float(f.read().strip() or 0)
+        except Exception:
+            self.pa_ack = 0.
         self.dirty = True
         self.ip = "?"
         self.eta = Eta()
@@ -720,6 +729,14 @@ class Screen:
         return working or bool(self.running and
                                time.time() - self.running[1] <= 4)
 
+    def pa_result(self, st):
+        """A PA calibration result not yet dismissed with OK, or None."""
+        last = (st.get("pa_pressure_log") or {}).get("last") or {}
+        stamp = last.get("stamp")
+        if stamp and stamp != self.pa_ack:
+            return last
+        return None
+
     def view_key(self, st, err):
         """What the page shows, rounded as drawn: redraw only on change."""
         def r(name, key):
@@ -745,7 +762,7 @@ class Screen:
             st.get("toolhead"), st.get("webhooks", {}).get("state"),
             self.wifi.busy, self.wifi.message, self.wifi.networks,
             self.wifi_status, len(self.settings), len(self.filaments),
-            self.ip], sort_keys=True, default=str)
+            self.ip, bool(self.pa_result(st))], sort_keys=True, default=str)
 
     # --- base frame (everything static) ---------------------------------
     def render(self, st, err):
@@ -790,7 +807,48 @@ class Screen:
             self.draw_slot_menu(st)
         if self.confirm:
             self.draw_confirm(d)
+        res = None if err else self.pa_result(st)
+        if res and not self.confirm:
+            self.draw_pa_result(res)
         return self.canvas
+
+    def draw_pa_result(self, res):
+        """Calibration outcome; stays up until OK is pressed."""
+        dim = Image.new("RGB", (W, H), (0, 0, 0))
+        self.canvas = Image.blend(self.canvas, dim, 0.65)
+        d = ImageDraw.Draw(self.canvas)
+        slot = res.get("slot") or "?"
+        saved = res.get("saved")
+        good = res.get("reliable")
+        col = self.c["ok"] if saved else (self.c["accent"] if good
+                                          else self.c["warn"])
+        box = (130, 70, W - 130, 410)
+        self.panel(d, box, col, True)
+        self.text(d, (W // 2, 112), "PA calibration · slot %s" % slot, "m",
+                  anchor="mm")
+        fitted = res.get("fitted")
+        if saved:
+            head = "Saved PA %.3f to slot %s" % (fitted, slot)
+        elif good and fitted is not None:
+            head = "Measured PA %.3f (not saved)" % fitted
+        else:
+            head = "Not saved: result not reliable"
+        self.text(d, (W // 2, 168), head, "s", col, anchor="mm")
+        if good:
+            notes = ["Fit R² %.3f · signal %.0f" % (res.get("r2") or 0,
+                                                    res.get("snr") or 0)]
+            if not saved and not res.get("save_requested"):
+                notes.append("Analysis only: save with CFS_SLOT_SET")
+        else:
+            notes = (res.get("problems") or ["no result"])[:2]
+        y = 214
+        for note in notes:
+            for line in self.wrap(note, "xs", box[2] - box[0] - 60)[:2]:
+                self.text(d, (W // 2, y), line, "xs", "muted", anchor="mm")
+                y += 30
+        self.buttons = []
+        self.button(d, (W // 2 - 110, 320, W // 2 + 110, 390), "OK",
+                    ("pa_ok", res.get("stamp")), "accent", True, "m")
 
     def draw_slot_menu(self, st):
         dim = Image.new("RGB", (W, H), (0, 0, 0))
@@ -834,7 +892,7 @@ class Screen:
             actions.append(("Calibrate PA", ("confirm",
                             "Load slot %s, then calibrate PA?\n"
                             "About 7 min, heats to %d°" % (slot, temp),
-                            "CFS_LOAD_SLOT SLOT=%s\nPA_CAL_RUN SLOT=%s AUTO=1"
+                            "CFS_LOAD_SLOT SLOT=%s COOL=0\nPA_CAL_RUN SLOT=%s AUTO=1"
                             % (slot, slot)), "accent"))
         actions.append(("Set filament", ("slot_set",), "accent"))
         actions.append(("Close", ("slot_close",), "muted"))
@@ -1578,6 +1636,13 @@ class Screen:
                 mr.gcode(action[1])
             elif kind == "confirm":
                 self.confirm = (action[1], action[2])
+            elif kind == "pa_ok":
+                self.pa_ack = action[1] or 0.
+                try:
+                    with open(PA_ACK_FILE, "w") as f:
+                        f.write(repr(self.pa_ack))
+                except Exception:
+                    pass
             elif kind == "edit_slot":
                 self.slot_menu = {"slot": action[1], "rec": action[2]}
             elif kind == "slot_close":
@@ -1706,11 +1771,12 @@ def main():
         taps = touch.pop()
         sleep_after = cfg.num("screen", "sleep_after")
         if screen.asleep:
-            if taps or printing:
+            if taps or printing or screen.pa_result(st):
                 screen.set_sleep(False)
                 touch.last_activity = now
             taps = []
         elif (sleep_after > 0 and not printing and not screen.confirm
+              and not screen.pa_result(st)
               and now - touch.last_activity > sleep_after):
             screen.set_sleep(True)
         for x, y in taps:

@@ -14,7 +14,11 @@ PA_CAL_RUN SLOT=D AUTO=1     ; also save the result to slot D if it passes
 
 The touchscreen slot sheet has a **Calibrate PA** button on every loaded slot.
 It runs the AUTO version, loading that slot first when it isn't the one in
-the nozzle (including after a restart, when no active slot is known). The value is stored with the CFS slot record (`hark_cfs_slots`) and
+the nozzle (including after a restart, when no active slot is known). When it
+finishes, the screen shows the result (saved PA, or why it was not saved) in a
+box that stays up until OK is pressed. Saved values live in the slot record
+(`hark_cfs_slots.json`) and are applied by `CFS_SLOT_APPLY` whenever the slot
+is selected (T0-T3), so they persist across prints and restarts. The value is stored with the CFS slot record (`hark_cfs_slots`) and
 applied whenever that slot is selected. Re-run it for each new reel.
 
 Optional parameters: `TEMP`, `KS` (PA values, default `0.02` to `0.14`),
