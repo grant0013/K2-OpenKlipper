@@ -34,3 +34,11 @@ supervised testing on owned hardware.
 No proprietary Creality firmware image is intended to be distributed here.
 If an included file has unclear provenance, open an issue before reusing or
 redistributing it. Exact build identity is in `K2-BUILD-MANIFEST`.
+
+## Mainsail (Hark K2 edition)
+
+`system/mainsail/` is the build of the Hark K2 edition of Mainsail, revision 1
+(`v2.18.2-hark.1`, based on Mainsail v2.18.2, GPLv3). It adds the CFS panel,
+the control-centre dashboard, appearance settings and movable cards. Source:
+https://github.com/grant0013/mainsail (branch `hark-cfs-panel`, tag
+`v2.18.2-hark.1`). Upstream: https://github.com/mainsail-crew/mainsail.

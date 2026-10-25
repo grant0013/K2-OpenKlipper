@@ -20,6 +20,8 @@ needed, and the stock firmware stays installed for a one-command rollback.
 > It is still experimental printer firmware: supervise prints, keep the
 > rollback path, and read [Project status](docs/PROJECT-STATUS.md) first.
 
+![Mainsail Hark K2 edition: control centre and CFS panel](docs/img/mainsail-dashboard.png)
+
 ## What works
 
 | Area | Open implementation |
@@ -33,7 +35,7 @@ needed, and the stock firmware stays installed for a one-command rollback.
 | Input shaping | Head accelerometer (LIS2DW on the nozzle board) via `[lis2dw_k2]`, standard `SHAPER_CALIBRATE` |
 | Touchscreen | Hark Screen: themeable landscape UI, CFS slots, load/purge, PA calibration, Wi-Fi ([screen and camera](docs/SCREEN-AND-CAMERA.md)) |
 | Camera | Chamber camera as a plain MJPEG stream in Mainsail (and usable by AI failure detection) |
-| Web UI | Mainsail on port 4409, Moonraker on 7126 |
+| Web UI | [Mainsail Hark K2 edition](https://github.com/grant0013/mainsail) (CFS panel, control centre, appearance presets) on port 4409, Moonraker on 7126 |
 
 ## What is different from stock
 
@@ -113,7 +115,9 @@ The full explanation is in `config/ORCA-K2-PROFILE.cfg`.
 - `harkscreen/` - touchscreen app; `harkcam/` - camera streamer
 - `tools/` - deployment helper, PA plotting and simulation, motor parameter
   scan and A/B test tools, boot-animation generator
-- `system/` - Mainsail, Moonraker service and compatibility patches
+- `system/` - Mainsail (Hark K2 edition build, source in
+  [grant0013/mainsail](https://github.com/grant0013/mainsail)), Moonraker
+  service and compatibility patches
 - `docs/` - protocol and design notes:
   [CFS](docs/CFS-PROTOCOL.md), [PRTouch](docs/PRTOUCH.md),
   [motor controller](docs/MOTOR-CONTROLLER.md),
