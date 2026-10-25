@@ -38,9 +38,8 @@
 
 - Input shaper X mzv 54.8 Hz / Y mzv 45.4 Hz, extruder PID at 250 °C,
   minimum cruise ratio 0, `pressure_advance_smooth_time` 0.06.
-- `[gcode_arcs] resolution: 0.1` is back in use on this build: many complete
-  prints with no MCU timing faults (it caused a fault in v62 testing, so watch
-  for it).
+- `[gcode_arcs] resolution: 0.5`. 0.1 starved the move queue on an arc-heavy
+  organic model (MCU "Stepper too far in past"); 1.0 shows chord joints.
 
 ### Fixes
 

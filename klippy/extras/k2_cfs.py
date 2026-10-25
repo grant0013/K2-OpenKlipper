@@ -1708,15 +1708,23 @@ class K2CFS:
                     self._ensure_purge_position(gcmd)
             else:
                 if active_mask:
-                    # A spool pushed in by hand or an aborted load leaves a
-                    # slot selected with nothing at the nozzle. Stock just
-                    # idles the box; CFS_LOAD then rewinds the hub if needed.
+                    # A spool pushed in by hand or an interrupted unload
+                    # leaves a slot selected with nothing at the nozzle,
+                    # often with its filament still in the hub. Idling alone
+                    # does not clear that (10-25), so rewind the selected
+                    # slot home first, then idle.
                     gcmd.respond_info(
                         "CFS still selects mask 0x%02x with the nozzle clear;"
-                        " idling it before the load" % active_mask)
+                        " rewinding it before the load" % active_mask)
                     self._run_actuation(
                         'SET_BOX_MODE IDLE',
                         [0xff, 0x04, 0x00, self.MODE_IDLE])
+                    self._finish_unload(active_mask, report_error=False)
+                    left = self._run_query('MEASURING').get('active_mask', 0)
+                    if left:
+                        raise gcmd.error(
+                            "CFS still selects mask 0x%02x after a rewind; "
+                            "pull that slot's filament back by hand" % left)
                 self._ensure_purge_position(gcmd)
                 self.cmd_CFS_LOAD(gcmd)
 
