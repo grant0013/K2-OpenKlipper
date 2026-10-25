@@ -1391,12 +1391,14 @@ class K2CFS:
         lines.append("M400")
         return "\n".join(lines)
 
-    def _purge_segments(self, requested_length):
+    def _purge_segments(self, requested_length, clamp=True):
         # The stock wrapper clamps its nominal 140mm baseline to an actual
         # 160mm flush. Offline traces of 140/160/240mm requests produce
-        # 90+70, 90+70, and 90+70+80 respectively.
+        # 90+70, 90+70, and 90+70+80 respectively. A short colour-change
+        # purge (the prime tower flushes the rest) is not clamped.
         actual_length = max(
-            requested_length, self.purge_minimum_actual_length)
+            requested_length,
+            self.purge_minimum_actual_length if clamp else 0.)
         segments = [min(self.purge_chunk_length, actual_length)]
         remaining = actual_length - segments[0]
         while remaining > 100.:
@@ -1434,13 +1436,15 @@ class K2CFS:
                 "(reported %s)"
                 % box_mode.get('box_mode'))
 
+        short = gcmd.get_int('SHORT', 0, minval=0, maxval=1)
         length = gcmd.get_float(
             'LENGTH', self.purge_extrude_length,
-            minval=140., maxval=240.)
+            minval=30. if short else 140., maxval=240.)
         speed = gcmd.get_float(
             'SPEED', self.purge_extrude_speed,
             above=0., maxval=9.58)
-        actual_length, segments = self._purge_segments(length)
+        actual_length, segments = self._purge_segments(
+            length, clamp=not short)
         scripts = []
         for index, chunk in enumerate(segments):
             final = index == len(segments) - 1
@@ -1550,6 +1554,9 @@ class K2CFS:
         # back down to where the print left off. Same bounded transaction as
         # CFS_PRINT_START, so the standalone cut/load/purge gates still apply
         # everywhere else.
+        # PURGE=<mm>: a shorter chute purge for a colour change between
+        # like materials, with the prime tower doing the rest of the flush
+        purge_length = gcmd.get_float('PURGE', None, minval=30., maxval=240.)
         self._require_actuation(gcmd)
         print_stats = self.printer.lookup_object('print_stats', None)
         state = print_stats.get_status(0.).get('state', '') \
@@ -1604,8 +1611,11 @@ class K2CFS:
             self.cmd_CFS_CUT_UNLOAD(unload_gcmd)
             timings.append(reactor.monotonic())
             self.gcode.run_script_from_command("M109 S%.1f" % purge_temp)
+            load_params = {"SLOT": slot, "CONFIRM": "1"}
+            if purge_length is not None:
+                load_params.update(LENGTH="%.1f" % purge_length, SHORT="1")
             load_gcmd = self.gcode.create_gcode_command(
-                "CFS_LOAD", "", {"SLOT": slot, "CONFIRM": "1"})
+                "CFS_LOAD", "", load_params)
             self.cmd_CFS_LOAD(load_gcmd)
             timings.append(reactor.monotonic())
             self.cmd_CFS_PURGE(load_gcmd)
