@@ -169,3 +169,36 @@ from live behaviour.
   `CFS_SLOT_APPLY` applies it, including `SET_RETRACTION` for firmware
   retraction. The records are mirrored to Moonraker's `lane_data` database
   namespace for OrcaSlicer.
+
+## Cutting and colour changes (v0.3 work, 10-26)
+
+Measured on F021 with a Phaetus DXC2 extruder, over 23 changes of a two-colour
+print:
+
+| | Before | After |
+| --- | --- | --- |
+| Cut | X-7.6, ram acceleration 3000 | **X-8.0, acceleration 5000** (Creality's own cut acceleration) |
+| CFS rewind (RETRUDE FINISH) | 24-25 s | **15 s average, 17 s max** |
+| Whole change | 113-131 s (one 211 s) | **101 s average** |
+
+- **Incomplete cuts.** At the old settings the knife only notched the
+  filament. The DXC2's 70 mm of post-cut pulls, with the CFS rewinding at the
+  same time, then snapped worn filament near the end of a reel and left a
+  loose piece under the nozzle filament sensor. Three prints stopped with
+  "nozzle sensor still detects filament". The rewind time is a good cut
+  health signal: about 13-17 s for a clean cut, 24 s or more for a dragged one.
+- **Auto-clear.** If the sensor still sees filament after an unload, the
+  module pushes up to 3 x 30 mm through the hot nozzle over the chute and
+  carries on (`unload_clear_tries`, 0 = stop the print as before).
+- **Knife sensor.** PB9 never changed with the DXC2, not during cuts or slow
+  pushes to X-11. Stock firmware only uses it as a knife-at-rest check before
+  and after the cut; stock's `cut_pos_x` comes from a closed-loop motor check
+  (`MOTOR_CHECK_CUT_POS`), not this sensor.
+- **Temperature wait.** The tool change waited with `M109`, which holds until
+  the PID settles within 1 °C: up to 106 s at an unchanged temperature. It now
+  waits until the nozzle is within `toolchange_temp_margin` (3 °C).
+- **Flush length.** Same-material changes purge the slicer's per-change flush
+  (`{flush_length}` from the flush volumes matrix), clamped to 30-240 mm,
+  instead of a fixed 70 mm. The purge runs as Creality's flush blocks (see
+  `docs/START-SEQUENCE.md`).
+- Travel to the chute and cutter runs at Creality's speeds (300 / 200 mm/s).

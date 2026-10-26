@@ -35,6 +35,7 @@
 #   CFS_PRINT_START SLOT=D CONFIRM=1 - select/load/purge initial print slot
 #   T0/T1/T2/T3           - arm only the already-selected A/B/C/D slot
 
+import math
 import logging
 
 
@@ -101,6 +102,10 @@ class K2CFS:
         # Height added above the print before a mid-print tool change moves
         self.toolchange_lift = config.getfloat(
             'toolchange_lift', 2., minval=0.)
+        # How far below the flush temperature a tool change may start
+        # loading (the nozzle finishes heating during the CFS feed)
+        self.toolchange_temp_margin = config.getfloat(
+            'toolchange_temp_margin', 3., minval=0., maxval=10.)
         # Pull back right after the flush so the melt chamber is not left
         # pressurised (Bambu and stock both retract after flushing). A tool
         # change pushes it back in over the print before resuming.
@@ -112,7 +117,7 @@ class K2CFS:
         # sets and snaps off at the nozzle instead of stretching into a
         # string. 0 disables.
         self.purge_cool_time = config.getfloat(
-            'purge_cool_time', 2., minval=0., maxval=10.)
+            'purge_cool_time', 5., minval=0., maxval=10.)
         self.purge_cool_fan = config.getfloat(
             'purge_cool_fan', 1., minval=0., maxval=1.)
         # Fans stopped for a mid-print change, like stock BOX_SAVE_FAN: with
@@ -163,7 +168,7 @@ class K2CFS:
         self.cutter_release_speed = config.getfloat(
             'cutter_release_speed', 150., above=0., maxval=150.)
         self.cutter_ram_accel = config.getfloat(
-            'cutter_ram_accel', 3000., above=0., maxval=3000.)
+            'cutter_ram_accel', 3000., above=0., maxval=5000.)
         self.cutter_retract_length = config.getfloat(
             'cutter_retract_length', 2., above=0., maxval=2.)
         self.cutter_retract_speed = config.getfloat(
@@ -192,6 +197,14 @@ class K2CFS:
             'unload_bus_timeout', 30., above=0., maxval=150.)
         self.unload_sensor_timeout = config.getfloat(
             'unload_sensor_timeout', 10., above=0., maxval=15.)
+        # Pushes through the nozzle to clear a snapped piece left under the
+        # sensor after an unload (0 tries = stop the print as before)
+        self.unload_clear_tries = config.getint(
+            'unload_clear_tries', 3, minval=0, maxval=5)
+        self.unload_clear_length = config.getfloat(
+            'unload_clear_length', 30., above=0., maxval=60.)
+        self.unload_clear_speed = config.getfloat(
+            'unload_clear_speed', 3., above=0., maxval=6.)
         self.sensor_poll_interval = config.getfloat(
             'sensor_poll_interval', .1, minval=.05, maxval=1.)
         self.load_bus_timeout = config.getfloat(
@@ -225,6 +238,17 @@ class K2CFS:
         self.last_actuation_time = 0.
         self.env_poll_failures = 0
         self.cutter_switch_state = None
+        # Knife-sensor changes recorded during a cut, to tell whether the
+        # blade went all the way through (None = not recording)
+        self.cutter_events = None
+        # Stock box.cfg calibration window (pre_cut_cal_pos_x and
+        # check_cut_pos_x_min/max)
+        self.cutter_cal_start_x = config.getfloat(
+            'cutter_cal_start_x', -5., maxval=0.)
+        self.cutter_cal_min_x = config.getfloat(
+            'cutter_cal_min_x', -9.5, minval=-11.)
+        self.cutter_cal_max_x = config.getfloat(
+            'cutter_cal_max_x', -5.5, maxval=0.)
         self.bus = None
         self.status = {'online': None, 'feed_enabled': None}
         buttons = self.printer.load_object(config, 'buttons')
@@ -262,6 +286,9 @@ class K2CFS:
         self.gcode.register_command(
             'CFS_CUTTER_RETURN', self.cmd_CFS_CUTTER_RETURN,
             desc="Leave the K2 cutter staging point without cutting")
+        self.gcode.register_command(
+            'CFS_CUTTER_CALIBRATE', self.cmd_CFS_CUTTER_CALIBRATE,
+            desc="Find where the knife sensor trips (toolhead empty)")
         self.gcode.register_command(
             'CFS_CUTTER_SENSOR', self.cmd_CFS_CUTTER_SENSOR,
             desc="Report the K2 cutter hall-sensor logical state")
@@ -350,6 +377,10 @@ class K2CFS:
         # Preserve the pin resolver's logical state exactly until physical
         # open/pressed semantics have been validated on the K2.
         self.cutter_switch_state = bool(state & 0x01)
+        if self.cutter_events is not None:
+            self.cutter_events.append((eventtime, self.cutter_switch_state))
+        logging.info("k2_cfs: cutter sensor %s",
+                     "returned" if self.cutter_switch_state else "pressed")
 
     # --- decoders: (payload_bytes_after_len, ) -> dict ---
     @staticmethod
@@ -883,6 +914,72 @@ class K2CFS:
             "CFS cutter return reached: X%.3f Y%.3f"
             % (self.purge_return_x, self.purge_safe_y))
 
+    def cmd_CFS_CUTTER_CALIBRATE(self, gcmd):
+        # Stock K2 calibrates the cut by pushing the cutter lever slowly
+        # from pre_cut_cal_pos_x until the knife sensor trips, and stores
+        # that X (cut_pos_x, -6.10 on this printer under stock firmware).
+        # Same here, reported only: set cutter_cut_x from the result.
+        self._require_idle(gcmd)
+        self._require_safe_motion(gcmd, "CFS_CUTTER_CALIBRATE")
+        if (self._nozzle_has_filament() is True
+                and not gcmd.get_int('FORCE', 0, minval=0, maxval=1)):
+            raise gcmd.error(
+                "Filament is at the nozzle: the calibration push would cut "
+                "it. Unload first (or FORCE=1)")
+        if self.cutter_switch_state is not True:
+            raise gcmd.error("The cutter is not in its returned state")
+        start = gcmd.get_float('START', self.cutter_cal_start_x, maxval=0.)
+        stop = gcmd.get_float('STOP', self.cutter_cal_min_x, minval=-11.,
+                              below=start)
+        step = gcmd.get_float('STEP', .05, minval=.01, maxval=.5)
+        push_rate = gcmd.get_float('SPEED', 5., above=0., maxval=20.) * 60.
+        travel_rate = self.cutter_speed * 60.
+        reactor = self.printer.get_reactor()
+        trip = None
+        self.gcode.run_script_from_command("SAVE_GCODE_STATE NAME=K2_CUT_CAL")
+        try:
+            self.gcode.run_script_from_command(
+                "G90\nG1 Y%.3f F%.3f\nG1 X%.3f F%.3f\nG1 X%.3f F%.3f\nM400"
+                % (self.cutter_y, travel_rate, self.cutter_x, travel_rate,
+                   start, push_rate))
+            reactor.pause(reactor.monotonic() + .2)
+            if self.cutter_switch_state is not True:
+                raise gcmd.error(
+                    "Knife sensor already tripped at X%.2f; use a START "
+                    "nearer 0" % start)
+            x = start
+            while x - step >= stop - 1e-6:
+                x -= step
+                self.gcode.run_script_from_command(
+                    "G1 X%.3f F%.3f\nM400" % (x, push_rate))
+                reactor.pause(reactor.monotonic() + .08)
+                if self.cutter_switch_state is False:
+                    trip = x
+                    break
+        finally:
+            self.gcode.run_script_from_command(
+                "G1 X%.3f F%.3f\nG1 X%.3f F%.3f\nM400"
+                % (self.cutter_release_x, push_rate,
+                   self.cutter_x, travel_rate))
+            self.gcode.run_script_from_command(
+                "RESTORE_GCODE_STATE NAME=K2_CUT_CAL")
+        reactor.pause(reactor.monotonic() + .2)
+        returned = self.cutter_switch_state is True
+        self.status['cutter_cal_x'] = trip
+        if trip is None:
+            raise gcmd.error(
+                "Knife sensor never tripped between X%.2f and X%.2f"
+                % (start, stop))
+        in_range = self.cutter_cal_min_x <= trip <= self.cutter_cal_max_x
+        gcmd.respond_info(
+            "CFS cutter: knife sensor trips at X%.2f (stock valid range "
+            "%.1f to %.1f: %s). Current cut position X%.2f is %.2fmm "
+            "past it. Knife %s after release."
+            % (trip, self.cutter_cal_max_x, self.cutter_cal_min_x,
+               "OK" if in_range else "OUT OF RANGE", self.cutter_cut_x,
+               trip - self.cutter_cut_x,
+               "returned" if returned else "DID NOT RETURN"))
+
     def cmd_CFS_CUTTER_SENSOR(self, gcmd):
         state = ("unknown" if self.cutter_switch_state is None else
                  str(int(self.cutter_switch_state)))
@@ -1031,7 +1128,8 @@ class K2CFS:
         # switch callback reaches Klippy. Give the physical filament time to
         # clear instead of reporting a false failure immediately.
         if not self._wait_nozzle_filament(
-                False, self.unload_sensor_timeout):
+                False, self.unload_sensor_timeout) \
+                and not self._clear_nozzle_stub(gcmd):
             raise gcmd.error(
                 "CFS unload finished but the nozzle sensor still "
                 "detects filament after %.1fs"
@@ -1047,6 +1145,40 @@ class K2CFS:
         })
         gcmd.respond_info(
             "CFS slot %s unload complete; nozzle sensor is clear" % slot)
+
+    def _clear_nozzle_stub(self, gcmd):
+        # Brittle filament can snap during the unload pulls and leave a
+        # short loose piece under the nozzle sensor while the CFS rewinds
+        # the rest (twice on white Hyper PLA, 10-25). The unload runs over
+        # the chute with a hot nozzle, so push the piece through the melt
+        # zone a little at a time until the sensor clears.
+        if not self.unload_clear_tries:
+            return False
+        position = self.printer.lookup_object('toolhead').get_position()
+        tolerance = self.purge_position_tolerance
+        if (abs(position[0] - self.purge_x) > tolerance
+                or abs(position[1] - self.purge_y) > tolerance):
+            return False
+        heater = self.printer.lookup_object('extruder').get_heater()
+        if not heater.can_extrude:
+            return False
+        pushed = 0.
+        for unused in range(self.unload_clear_tries):
+            self.gcode.run_script_from_command(
+                "M83\nG1 E%.3f F%.3f\nM400"
+                % (self.unload_clear_length,
+                   self.unload_clear_speed * 60.))
+            pushed += self.unload_clear_length
+            if self._wait_nozzle_filament(False, 1.):
+                self.gcode.run_script_from_command(
+                    "G1 E-%.3f F%.3f\nM400"
+                    % (self.purge_retract_length,
+                       self.purge_retract_speed * 60.))
+                gcmd.respond_info(
+                    "CFS unload: pushed a loose piece of filament out over"
+                    " the chute (%.0fmm); nozzle sensor now clear" % pushed)
+                return True
+        return False
 
     def cmd_CFS_CUT_UNLOAD(self, gcmd):
         self._require_actuation(gcmd)
@@ -1120,6 +1252,7 @@ class K2CFS:
                 raise RuntimeError(
                     "cutter did not report returned at staging point")
             accel_changed = True
+            self.cutter_events = []
             self.gcode.run_script_from_command(
                 "SET_VELOCITY_LIMIT ACCEL=%.3f\n"
                 "G90\n"
@@ -1131,6 +1264,18 @@ class K2CFS:
                    self.cutter_ram_speed * 60.,
                    self.cutter_release_x, self.cutter_y,
                    self.cutter_release_speed * 60.))
+            reactor = self.printer.get_reactor()
+            reactor.pause(reactor.monotonic() + .2)
+            pressed = any(not st for t, st in self.cutter_events)
+            self.cutter_events = None
+            self.status['last_cut_sensor_pressed'] = pressed
+            key = 'cut_sensor_hits' if pressed else 'cut_sensor_misses'
+            self.status[key] = self.status.get(key, 0) + 1
+            if not pressed:
+                # With the DXC2 the sensor has never changed during a cut
+                # (10-25), so this is a log line, not a warning
+                logging.info("k2_cfs: knife sensor did not change during "
+                             "the cut at X%.2f", self.cutter_cut_x)
             if self.cutter_switch_state is not True:
                 raise RuntimeError(
                     "cutter did not return after ram/release")
@@ -1359,22 +1504,22 @@ class K2CFS:
             "CFS slot %s load complete; nozzle sensor is triggered" % slot)
 
     def _purge_wipe_script(self, final):
+        # Creality Print's K2 wipe, run after every flush block: swing in
+        # the chute, a full circle on each half of the silicone brush, then
+        # three passes back over the chute.
         feedrate = self.clean_speed * 60.
+        circle_rate = self.clean_circle_speed * 60.
         lines = [
             "G90",
-            "G1 X%.3f F%.3f" % (self.clean_plate_x, feedrate),
+            "G1 X%.3f F%.3f" % (self.clean_right_x, feedrate),
             "G1 X%.3f F%.3f" % (self.clean_left_x, feedrate),
+            "G1 X%.3f Y%.3f F%.3f"
+            % (self.clean_circle_left_x, self.clean_y, feedrate),
+            "G2 I4 J0 P1 F%.3f" % circle_rate,
+            "G1 X%.3f Y%.3f F%.3f"
+            % (self.clean_circle_right_x, self.clean_y, feedrate),
+            "G3 I-4 J0 P1 F%.3f" % circle_rate,
         ]
-        if final:
-            circle_rate = self.clean_circle_speed * 60.
-            lines.extend([
-                "G1 X%.3f Y%.3f F%.3f"
-                % (self.clean_circle_left_x, self.clean_y, feedrate),
-                "G2 I4 J0 P1 F%.3f" % circle_rate,
-                "G1 X%.3f Y%.3f F%.3f"
-                % (self.clean_circle_right_x, self.clean_y, circle_rate),
-                "G3 I-4 J0 P1 F%.3f" % circle_rate,
-            ])
         for unused in range(3):
             lines.extend([
                 "G1 X%.3f Y%.3f F%.3f"
@@ -1396,18 +1541,13 @@ class K2CFS:
         # 160mm flush. Offline traces of 140/160/240mm requests produce
         # 90+70, 90+70, and 90+70+80 respectively. A short colour-change
         # purge (the prime tower flushes the rest) is not clamped.
+        # Flushed in Creality's blocks of at most purge_chunk_length (90mm),
+        # each one followed by a fan blast and a full wipe.
         actual_length = max(
             requested_length,
             self.purge_minimum_actual_length if clamp else 0.)
-        segments = [min(self.purge_chunk_length, actual_length)]
-        remaining = actual_length - segments[0]
-        while remaining > 100.:
-            chunk = min(self.purge_followup_chunk_length, remaining)
-            segments.append(chunk)
-            remaining -= chunk
-        if remaining > .0001:
-            segments.append(remaining)
-        return actual_length, segments
+        count = int(math.ceil(actual_length / self.purge_chunk_length - 1e-6))
+        return actual_length, [actual_length / count] * count
 
     def cmd_CFS_PURGE(self, gcmd):
         self._require_actuation(gcmd)
@@ -1437,38 +1577,53 @@ class K2CFS:
                 % box_mode.get('box_mode'))
 
         short = gcmd.get_int('SHORT', 0, minval=0, maxval=1)
+        change = gcmd.get_int('CHANGE', 0, minval=0, maxval=1)
         length = gcmd.get_float(
             'LENGTH', self.purge_extrude_length,
-            minval=30. if short else 140., maxval=240.)
+            minval=30. if short else 140., maxval=360.)
         speed = gcmd.get_float(
             'SPEED', self.purge_extrude_speed,
             above=0., maxval=9.58)
         actual_length, segments = self._purge_segments(
             length, clamp=not short)
+        # Creality Print's K2 FLUSH block: fast pushes broken by 1 mm/s
+        # pauses so the strand comes out in pieces, part fan low while
+        # flushing, a full blast so the strand sets and snaps off, then the
+        # retract. A colour change opens with one 36 mm push of the old
+        # colour. Later blocks first push back the previous retract.
+        rate = speed * 60.
+        retract = self.purge_retract_length
         scripts = []
         for index, chunk in enumerate(segments):
             final = index == len(segments) - 1
-            slow = chunk * self.purge_slow_fraction
-            fast = chunk - slow
-            fast_multiplier = 1. if final else self.purge_fast_multiplier
-            retract = ""
-            if final and self.purge_retract_length:
-                retract = "G1 E-%.3f F%.3f\n" % (
-                    self.purge_retract_length,
-                    self.purge_retract_speed * 60.)
-            scripts.append(
-                "M83\n"
-                "G1 E%.3f F%.3f\n"
-                "G1 E%.3f F%.3f\n"
-                "%s"
-                "M400"
-                % (slow, speed * 60.,
-                   fast, speed * fast_multiplier * 60., retract))
-            if final and self.purge_cool_time:
-                scripts.append(None)    # part-fan blast before the wipe
+            lines = ["M83", "M106 S30"]
+            if change and index == 0 and chunk > 36.:
+                rest = chunk - 36.
+                lines.append("G1 E36.000 F%.3f" % rate)
+                for unused in range(4):
+                    lines.append("G1 E%.3f F60" % (rest * .02))
+                    lines.append("G1 E%.3f F%.3f" % (rest * .23, rate))
+            else:
+                pre = retract if index else 0.
+                for pulse in range(5):
+                    lines.append("G1 E%.3f F%.3f"
+                                 % (chunk * .18 + (pre if not pulse else 0.),
+                                    rate))
+                    lines.append("G1 E%.3f F60" % (chunk * .02))
+            lines.append("M400")
+            if self.purge_cool_time:
+                lines.extend([
+                    "M106 S%d" % round(self.purge_cool_fan * 255.),
+                    "G4 P%d" % (self.purge_cool_time * 1000.),
+                    "M106 S30",
+                ])
+            if retract:
+                lines.append("G1 E-%.3f F%.3f"
+                             % (retract, self.purge_retract_speed * 60.))
+            scripts.append("\n".join(lines))
             scripts.append(self._purge_wipe_script(final))
         toolhead = self.printer.lookup_object('toolhead')
-        fans_before = None
+        fans_before = self._fan_speeds()
         prior_accel = toolhead.get_status(0.).get('max_accel')
         if prior_accel is None:
             raise gcmd.error("Unable to read current acceleration limit")
@@ -1482,18 +1637,11 @@ class K2CFS:
             self.gcode.run_script_from_command(
                 "SET_VELOCITY_LIMIT ACCEL=%.3f" % self.clean_accel)
             for script in scripts:
-                if script is None:
-                    fans_before = self._fan_speeds()
-                    self._set_fans({'fan': self.purge_cool_fan})
-                    self.gcode.run_script_from_command(
-                        "G4 P%d" % (self.purge_cool_time * 1000.))
-                    continue
                 self.gcode.run_script_from_command(script)
         except Exception as exc:
             raise gcmd.error("CFS purge failed: %s" % exc)
         finally:
-            if fans_before is not None:
-                self._set_fans(fans_before)
+            self._set_fans(fans_before)
             if accel_changed:
                 self.gcode.run_script_from_command(
                     "SET_VELOCITY_LIMIT ACCEL=%.3f" % prior_accel)
@@ -1610,8 +1758,14 @@ class K2CFS:
                 "CFS_CUT_UNLOAD", "", {"SLOT": old_slot, "CONFIRM": "1"})
             self.cmd_CFS_CUT_UNLOAD(unload_gcmd)
             timings.append(reactor.monotonic())
-            self.gcode.run_script_from_command("M109 S%.1f" % purge_temp)
-            load_params = {"SLOT": slot, "CONFIRM": "1"}
+            # M109 waits for the PID to settle within 1C, which cost up to
+            # 45s per change at an unchanged temperature (10-25). The load
+            # only needs the nozzle near flush temperature; the CFS feed
+            # takes ~20s more before any filament reaches the melt zone.
+            self.gcode.run_script_from_command(
+                "TEMPERATURE_WAIT SENSOR=extruder MINIMUM=%.1f"
+                % (purge_temp - self.toolchange_temp_margin))
+            load_params = {"SLOT": slot, "CONFIRM": "1", "CHANGE": "1"}
             if purge_length is not None:
                 load_params.update(LENGTH="%.1f" % purge_length, SHORT="1")
             load_gcmd = self.gcode.create_gcode_command(
@@ -1637,11 +1791,8 @@ class K2CFS:
             "M104 S%.1f\n"
             "G90\n"
             "G1 X%.3f Y%.3f F%.3f\n"
-            "M83\n"
-            "G1 E%.3f F%.3f\n"
             "RESTORE_GCODE_STATE NAME=K2_CFS_TOOLCHANGE MOVE=1 MOVE_SPEED=10"
-            % (new_temp, start[0], start[1], self.purge_speed * 60.,
-               self.purge_retract_length, self.purge_retract_speed * 60.))
+            % (new_temp, start[0], start[1], self.purge_speed * 60.))
         timings.append(reactor.monotonic())
         self.status['last_toolchange'] = "%s>%s" % (old_slot, slot)
         gcmd.respond_info(
