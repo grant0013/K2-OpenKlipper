@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased (since v0.2.0-alpha.1)
+
+### Colour changes
+
+- Cleaner cuts: cut position X-8.0 at acceleration 5000; the CFS rewind now
+  takes about 15 s instead of 24 s, and the "nozzle sensor still detects
+  filament" stops are gone (23/23 clean on a two-colour test print).
+- Automatic clearing of a snapped piece left under the nozzle sensor.
+- The tool change no longer waits for a fully settled PID; travel at
+  Creality's speeds. About 101 s per change, down from 113-131 s.
+- Chute purge per change from the slicer's flush matrix (`{flush_length}`),
+  run as Creality's pulsed flush blocks with a 5 s fan blast and a full wipe.
+
+### Print start
+
+- Nozzle cleaning copied from Creality Print's K2 profile, including its
+  front-edge prime line.
+- The adaptive mesh covers the prime tower when the slicer passes its
+  position (`TOWER_X`/`TOWER_Y`/`TOWER_W`); the tower no longer comes loose.
+- `BED_MESH_CHECK` stops a print on an implausible mesh.
+- CFS load, unload and PA calibration take Z from the bottom switch, with no
+  nozzle contact.
+
+### Ideas from Kalico, as add-on modules (no core changes)
+
+- `RELOAD_GCODE_MACROS`: reload macro bodies without a restart.
+- `PID_PROFILE`: named hotend PID profiles, loaded per CFS slot material.
+- `BED_MESH_CHECK`: deviation and slope limits on the probed points.
+
+### Tools
+
+- `tools/multicolour-test/`: a generated two-colour pumpkin test print.
+
 ## v0.2.0-alpha.1 - 2026-10-25
 
 ### New
