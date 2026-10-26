@@ -35,6 +35,7 @@ needed, and the stock firmware stays installed for a one-command rollback.
 | Input shaping | Head accelerometer (LIS2DW on the nozzle board) via `[lis2dw_k2]`, standard `SHAPER_CALIBRATE` |
 | Touchscreen | Hark Screen: themeable landscape UI, CFS slots, load/purge, PA calibration, Wi-Fi ([screen and camera](docs/SCREEN-AND-CAMERA.md)) |
 | Camera | Chamber camera as a plain MJPEG stream in Mainsail (and usable by AI failure detection) |
+| Klipper extras | Ideas from Kalico as add-on modules: `RELOAD_GCODE_MACROS`, `PID_PROFILE` per CFS slot material, `BED_MESH_CHECK` |
 | Web UI | [Mainsail Hark K2 edition](https://github.com/grant0013/mainsail) (CFS panel, control centre, appearance presets) on port 4409, Moonraker on 7126 |
 
 ## What is different from stock

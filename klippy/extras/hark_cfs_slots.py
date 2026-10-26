@@ -422,6 +422,13 @@ class HarkCfsSlots:
                               % (slot, length,
                                  " at %.0fmm/s" % speed if speed > 0 else "",
                                  rec['name']))
+        # Hotend PID tuned for this material, if a profile exists for it
+        # (hark_pid_profiles; otherwise the config's default PID)
+        pid = self.printer.lookup_object('hark_pid_profiles', None)
+        if rec.get('loaded') and pid is not None:
+            msg = pid.apply_material(rec.get('type', ''))
+            if msg:
+                gcmd.respond_info("CFS slot %s: %s" % (slot, msg))
 
     # --- filament library ---------------------------------------------
     def _new_id(self, name):
