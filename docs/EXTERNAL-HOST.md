@@ -74,19 +74,48 @@ Host side (Debian/Ubuntu; replace `USER` in the files):
 
 1. Remove ModemManager and brltty (both probe new serial ports), add the user
    to `dialout` (and `video` for the camera).
-2. Clone this repo to `~/k2/K2-OpenKlipper`, make a venv `~/k2/klippy-env` with
-   Klipper's requirements plus numpy, and build the C helper (it builds on first
-   start).
+2. Clone a release of this repo to `~/k2/K2-OpenKlipper`
+   (`git clone --branch v0.3.0-alpha.1 https://github.com/grant0013/K2-OpenKlipper ~/k2/K2-OpenKlipper`),
+   make a venv `~/k2/klippy-env` with Klipper's requirements plus numpy, and
+   delete `klippy/chelper/c_helper.so`: the repo ships the K2's ARM build, and
+   Klipper only builds its own on first start when the file is missing.
 3. Install Moonraker (KIAUH is fine) and give the K2 its own instance: data dir
-   `~/printer_data_k2`, port 7126, `klippy_uds_address` in that data dir. Copy
-   `config/mainline_stage2.cfg` there as `printer.cfg` with the overrides from
-   `host/linux/printer-host-overrides.cfg`, and copy the K2's CFS material
-   database to `creality_dir`.
+   `~/printer_data_k2`, port 7126, `klippy_uds_address` in that data dir. In
+   `~/printer_data_k2/config`, make the same two-file layout as on the K2:
+   - `k2-openklipper.cfg`: a copy of `config/mainline_stage2.cfg`. Don't edit it.
+   - `printer-overrides.cfg`: a copy of `host/linux/printer-host-overrides.cfg`
+     (replace `USER`), plus your printer's settings underneath (extruder,
+     first-layer correction).
+   - `printer.cfg`: just `[include k2-openklipper.cfg]` and
+     `[include printer-overrides.cfg]`.
+
+   Then copy the K2's CFS material database (`creality/userdata/box` on the
+   K2) to `creality_dir`.
 4. Install `host/linux/99-k2-gadget.rules`, `reconnect.sh` (to `~/k2/`), the
    units and drop-ins in `host/linux/systemd/`, and the env files.
 5. Mainsail on port 4409: `host/linux/nginx-mainsail-k2.conf`.
 6. `systemctl enable --now moonraker-k2 klipper-k2`, plug in the cable, reboot
    the K2, and check that the K2 comes back by itself.
+
+## Updating a host
+
+The **Update** button and `OKL_UPDATE` install onto the K2 itself, so the host
+overrides switch automatic update offers off (`[hark_update]`); run
+`OKL_UPDATE_CHECK` in the console to see whether a new release is out. Then,
+with nothing printing:
+
+```sh
+cd ~/k2/K2-OpenKlipper
+git checkout -- klippy/chelper/c_helper.so    # put it back so git can switch
+git fetch --tags && git checkout v0.4.0       # the new release's tag
+rm -f klippy/chelper/c_helper.so              # the K2's ARM build again
+cp config/mainline_stage2.cfg ~/printer_data_k2/config/k2-openklipper.cfg
+sudo systemctl restart klipper-k2
+```
+
+`printer-overrides.cfg` is untouched, so your settings carry over. Klipper
+rebuilds its C helper on the first start (a few seconds). The K2 side
+(`host/k2/`) only needs copying again when a release says it changed.
 
 ## Things that bit us
 
