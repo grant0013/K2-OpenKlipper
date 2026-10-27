@@ -14,6 +14,15 @@ input shaping and pressure advance.
 
 It runs on the printer's own board. No external host or hardware changes are
 needed, and the stock firmware stays installed for a one-command rollback.
+Optionally, Klipper can run on a separate PC over one USB cable
+([external host](docs/EXTERNAL-HOST.md)).
+
+**Install: [step-by-step guide](docs/INSTALL.md)**, about 15 minutes.
+
+<p>
+<img src="docs/img/photos/k2-screen-klipper-theme.jpg" alt="K2 printing on K2 OpenKlipper, touchscreen in the default Klipper theme" width="49%">
+<img src="docs/img/screen/klipper-cfs.png" alt="Touchscreen CFS page: four slots with material, temperature and pressure advance" width="49%">
+</p>
 
 > **Status: alpha (v0.2.0-alpha.1).** It is in daily use on one K2 (F021,
 > K2 / K2 Combo) and has completed full prints, CFS loads and multi-slot jobs.

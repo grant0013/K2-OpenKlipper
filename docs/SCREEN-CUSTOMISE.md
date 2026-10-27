@@ -12,6 +12,13 @@ The same app with the Hark Tech theme (`harkscreen/themes/hark-tech.cfg`):
 
 ![Hark Tech theme](img/screen/hark-status.png)
 
+On the printer, the default Klipper theme and the Hark Tech theme:
+
+<p>
+<img src="img/photos/k2-screen-klipper-theme.jpg" alt="Klipper theme on the K2's screen during a print" width="40%">
+<img src="img/photos/k2-screen-hark-theme.jpg" alt="Hark Tech theme on the K2's screen" width="58%">
+</p>
+
 ## Edit it in Mainsail
 
 1. Open Mainsail (`http://PRINTER-IP:4409`), then **Machine** in the left menu.

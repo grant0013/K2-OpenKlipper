@@ -47,6 +47,15 @@ the AI failure watcher ([../tools/ai-detect/](../tools/ai-detect/)) beside it.
   ready. The first restart can land before the boards answer
   ("Failed automated reset of MCU"); the script retries up to four times.
 
+<p>
+<img src="img/photos/k2-board-mini-usb.jpg" alt="The mini-USB port on the K2 mainboard (T113-i), with the blue USB cable plugged in" width="49%">
+<img src="img/photos/host-pc-usb.jpg" alt="The host PC on top of the printer stand, with the USB cable from the K2" width="49%">
+</p>
+
+*Left: the mini-USB port on the K2's mainboard (the board with the T113-i
+processor), with the blue cable in. Right: the host PC
+next to the printer. Use a data cable: two of our three were charge-only.*
+
 ## Setting it up
 
 K2 side (as root over SSH):
