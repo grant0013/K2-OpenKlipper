@@ -91,7 +91,12 @@ MODEL=$(head -1 /mnt/UDISK/printer_data/config/printer.cfg 2>/dev/null | tr -dc 
 FW=$(fw_printenv version 2>/dev/null | cut -d= -f2)
 [ -n "$FW" ] || FW=unknown
 INSTALLED=$(cat "$BUILD/VERSION" 2>/dev/null || echo none)
-echo "    model: ${MODEL:-unknown}   Creality firmware: $FW   installed K2 OpenKlipper: $INSTALLED"
+if [ "$INSTALLED" = none ] && [ -d "$BUILD" ]; then
+    SHOW_INSTALLED="0.2 or earlier"
+else
+    SHOW_INSTALLED=$INSTALLED
+fi
+echo "    model: ${MODEL:-unknown}   Creality firmware: $FW   installed K2 OpenKlipper: $SHOW_INSTALLED"
 case "$MODEL" in
     F021) ;;
     F012|F008)
@@ -387,7 +392,8 @@ mv /etc/nginx/nginx.conf.okl-new /etc/nginx/nginx.conf
 # upgrade-server would let an OTA wipe this install.
 RESULT=$(appinit_edit /etc/init.d/app)
 case "$RESULT" in
-    ok|already) echo "    /etc/init.d/app: master-server, Monitor and upgrade-server removed from APP_LIST" ;;
+    ok) echo "    /etc/init.d/app: master-server, Monitor and upgrade-server removed from APP_LIST" ;;
+    already) echo "    /etc/init.d/app: master-server, Monitor and upgrade-server already off" ;;
     *) die "editing /etc/init.d/app failed: $RESULT (backup in $BACKUP)" ;;
 esac
 

@@ -17,7 +17,7 @@ if [ "$STATE" = "printing" ] || { [ "$STATE" = "paused" ] && [ "$PRINTER_STATE" 
 fi
 
 echo "stopping stock klipper..."
-/etc/init.d/klipper stop
+/etc/init.d/klipper stop >/dev/null 2>&1 || true
 sleep 2
 [ -f /var/run/klippy_mainline.pid ] \
     && kill "$(cat /var/run/klippy_mainline.pid)" 2>/dev/null

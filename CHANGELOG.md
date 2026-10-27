@@ -26,6 +26,9 @@
   stock's watermark) while printing; M141/M191 set the target; an explicit
   M106 P1 / M107 P1 wins for that print.
 - Creality's Fluidd page (4408) talks to the open stack's Moonraker.
+- Hark Screen stops Creality's screen app (`display-server`), which could draw
+  over it after an install without a reboot and used CPU Klipper needs;
+  `switch-to-stock.sh` and the uninstall start it again.
 - No nginx access logs: on the K2 they live in RAM, and a camera-polling tab
   filled 222 MB overnight.
 
