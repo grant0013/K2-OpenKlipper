@@ -255,7 +255,9 @@ class K2CFS:
             'cutter_cal_max_x', -5.5, maxval=0.)
         self.bus = None
         self.status = {'online': None, 'feed_enabled': None,
-                       'feed_slot': None, 'last_loaded_slot': None}
+                       'feed_slot': None, 'last_loaded_slot': None,
+                       'running_out': None, 'runout_next': '',
+                       'runout_warning': ''}
         buttons = self.printer.load_object(config, 'buttons')
         buttons.register_buttons(
             [self.cutter_switch_pin], self._handle_cutter_switch)
@@ -374,7 +376,82 @@ class K2CFS:
             self.env_poll_failures += 1
             if self.env_poll_failures >= 3:
                 self.status['online'] = False
+        self._check_running_out()
         return eventtime + self.env_poll_interval
+
+    def _check_running_out(self):
+        # Early runout warning. The end of a spool passes the slot's entry
+        # sensor while about a tube's length is still on its way to the
+        # nozzle, so tell the user what will happen when it gets there.
+        slot = self.status.get('feed_slot')
+        stats = self.printer.lookup_object('print_stats', None)
+        printing = (stats is not None and
+                    stats.get_status(0.).get('state') == 'printing')
+        if not printing or not slot or not self.status.get('feed_enabled'):
+            if self.status.get('running_out'):
+                self._clear_runout_warning()
+            return
+        if self.status.get('running_out') == slot:
+            return
+        try:
+            loaded = self._run_query('FILAMENT_SENSOR').get('slots_loaded')
+        except Exception:
+            logging.exception("k2_cfs: runout check failed")
+            return
+        if not loaded or len(loaded) < 4:
+            return
+        self.status['slots_loaded'] = loaded
+        if loaded[ord(slot) - ord('A')]:
+            return
+        pick = self._matching_slot(slot, loaded)
+        macro = self.printer.lookup_object('gcode_macro _RUNOUT_REFILL', None)
+        enabled = macro is None or int(
+            macro.variables.get('enabled', 1) or 0) == 1
+        if pick and enabled:
+            msg = ("Slot %s is running out. Slot %s (same filament) takes over"
+                   " automatically when it does." % (slot, pick))
+        else:
+            msg = ("Slot %s is running out and no other slot has the same"
+                   " filament. The print will pause when it runs out: have a"
+                   " new spool ready." % slot)
+        self.status['running_out'] = slot
+        self.status['runout_next'] = pick if (pick and enabled) else ''
+        self.status['runout_warning'] = msg
+        self.gcode.respond_info(msg)
+        display = self.printer.lookup_object('display_status', None)
+        if display is not None:
+            display.message = msg
+        logging.info("k2_cfs: %s", msg)
+
+    def _clear_runout_warning(self):
+        display = self.printer.lookup_object('display_status', None)
+        if (display is not None and self.status.get('runout_warning')
+                and display.message == self.status['runout_warning']):
+            display.message = None
+        self.status['running_out'] = None
+        self.status['runout_next'] = ''
+        self.status['runout_warning'] = ''
+
+    def _matching_slot(self, slot, loaded=None):
+        # The slot _RUNOUT_REFILL would pick: same material type and colour,
+        # with a record, and filament at its entry sensor when known
+        slots = self.printer.lookup_object('hark_cfs_slots', None)
+        if slots is None:
+            return None
+        records = slots.get_status(0.)['slots']
+        old = records.get(slot, {})
+        want_type = (old.get('type') or '').upper()
+        want_colour = (old.get('color') or '').upper()
+        if not want_type:
+            return None
+        for index, name in enumerate('ABCD'):
+            rec = records.get(name, {})
+            if (name != slot and rec.get('loaded')
+                    and (rec.get('type') or '').upper() == want_type
+                    and (rec.get('color') or '').upper() == want_colour
+                    and (loaded is None or loaded[index])):
+                return name
+        return None
 
     def get_status(self, eventtime):
         out = dict(self.status)
@@ -1893,6 +1970,7 @@ class K2CFS:
         finally:
             self.print_start_transaction = False
         self.status['last_runout_refill'] = slot
+        self._clear_runout_warning()
         gcmd.respond_info(
             "Runout: refilled from slot %s, resuming the print" % slot)
         self.gcode.run_script_from_command("RESUME")

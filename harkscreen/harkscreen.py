@@ -51,7 +51,9 @@ OBJECTS = {
     "fan": ["speed"],
     "toolhead": ["homed_axes"],
     "gcode_move": ["gcode_position"],
-    "k2_cfs": ["online", "active_slot", "temperature", "humidity"],
+    "k2_cfs": ["online", "active_slot", "feed_slot", "running_out",
+               "runout_next",
+               "temperature", "humidity"],
     "hark_cfs_slots": ["slots"],
     "k2_motor_bus": ["motors_ready"],
     "output_pin chamber_led": ["value"],
@@ -1054,14 +1056,27 @@ class Screen:
         fan = st.get("fan", {}).get("speed", 0)
         fy = y1 - pad - 54
         self.panel(d, (x0 + pad, fy, x1 - pad, fy + 54))
-        slot = cfs.get("active_slot")
+        # The CFS deselects its slot while just following the extruder, so
+        # mid-print the slot feeding the print is feed_slot
+        printing = st.get("print_stats", {}).get("state") in (
+            "printing", "paused")
+        slot = cfs.get("active_slot") or (
+            cfs.get("feed_slot") if printing else None)
         rec = slots.get(slot, {}) if slot else {}
         sx = x0 + pad + 32
+        warning = cfs.get("running_out") if printing else None
         self.icon(d, "spool", sx, fy + 27, 30,
                   hex_rgb(rec.get("color"), self.c["muted"]))
-        self.text(d, (sx + 28, fy + 27), "Slot %s · %s" % (
-            slot or "-", rec.get("name", "no filament") if slot else
-            "no filament"), "s", anchor="lm")
+        if warning:
+            # Early runout warning from the CFS entry sensor
+            nxt = cfs.get("runout_next")
+            self.text(d, (sx + 28, fy + 27), "Slot %s running out · %s" % (
+                warning, ("%s takes over" % nxt) if nxt else "will pause"),
+                "s", color="accent", anchor="lm")
+        else:
+            self.text(d, (sx + 28, fy + 27), "Slot %s · %s" % (
+                slot or "-", rec.get("name", "no filament") if slot else
+                "no filament"), "s", anchor="lm")
         fx = x1 - pad - 140
         self.text(d, (x1 - pad - 18, fy + 27), "fan %d%%" % round(fan * 100),
                   "s", anchor="rm")

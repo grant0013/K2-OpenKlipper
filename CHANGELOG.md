@@ -22,6 +22,10 @@
 - Runout auto-refill: `CFS_RUNOUT_REFILL` loads another slot with the same
   material and colour from the runout pause and resumes; if none matches, or
   anything fails, the print stays paused as before.
+- Early runout warning: when the end of a spool passes its CFS slot's entry
+  sensor mid-print, the console, Mainsail's status line and the touchscreen
+  say which slot takes over (or that the print will pause), while about a
+  tube's length is still on its way to the nozzle.
 - Automatic chamber fan: the exhaust fan vents above the chamber target (35C,
   stock's watermark) while printing; M141/M191 set the target; an explicit
   M106 P1 / M107 P1 wins for that print.
