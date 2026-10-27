@@ -131,6 +131,12 @@ chmod 755 "$BUILD/switch-to-mainline.sh" "$BUILD/switch-to-stock.sh" \
 python3 -m py_compile "$BUILD/system/moonraker-compat/update_manager.py"
 
 mkdir -p "$PDATA/config" "$PDATA/logs" "$FLAGS"
+# Share the stock G-code library. This must exist before Moonraker first
+# starts, or Moonraker creates an empty gcodes folder of its own.
+if [ -d "$PDATA/gcodes" ] && [ ! -L "$PDATA/gcodes" ] && [ -z "$(ls -A "$PDATA/gcodes")" ]; then
+    rmdir "$PDATA/gcodes"
+fi
+[ -e "$PDATA/gcodes" ] || ln -s /mnt/UDISK/printer_data/gcodes "$PDATA/gcodes"
 cp -a "$BUILD/system/mainsail" /mnt/UDISK/mainsail-mainline
 [ -f "$PDATA/config/moonraker.conf" ] || cp "$BUILD/system/moonraker-mainline.conf" "$PDATA/config/moonraker.conf"
 cp "$BUILD/system/moonraker-mainline.init" /etc/init.d/moonraker-mainline
