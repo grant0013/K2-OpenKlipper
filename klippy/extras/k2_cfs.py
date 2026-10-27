@@ -33,10 +33,204 @@
 #   CFS_LOAD SLOT=D CONFIRM=1       - stock staged CFS/hotend load handshake
 #   CFS_PURGE CONFIRM=1              - stock nominal-140/actual-160mm flush
 #   CFS_PRINT_START SLOT=D CONFIRM=1 - select/load/purge initial print slot
+#   CFS_RFID_READ [SLOT=x]           - read the RFID records (no motion)
 #   T0/T1/T2/T3           - arm only the already-selected A/B/C/D slot
+#
+# Portions adapted from Jacob10383's K2 Plus custom firmware
+# (https://github.com/Jacob10383/k2-plus-custom-firmware, extras/box.py,
+# extras/box_protocol.py, extras/box_change.py, extras/box_gcode.py), GPLv3:
+# the status code texts, the ff 0a slot-event/runout decode, the stall
+# retry motion, the measuring-wheel clog check, the flush matrix purge and
+# the RFID record decode.
 
 import math
+import os
+import re
+import struct
 import logging
+
+
+# Box status byte (the first payload byte of every reply): Creality's own
+# name where we know it from the stock module tables, Jacob10383's name and
+# his plain-English text (box_protocol.py STATUS_NAMES / STATUS_TEXT).
+STATUS_OK = 0x00
+STATUS_BUSY = 0x03
+STATUS_ODOMETER_STALLED = 0x0c
+STATUS_STAGE7_NO_MOTION = 0x0e
+STATUS_UNLOAD_MOTOR_BLOCKED = 0x19
+STATUS_SLOT_EVENT = 0x30
+STATUS_RUNOUT = 0x50
+STATUS_INFO = {
+    0x01: ('PARAMS', 'INVALID_PARAM',
+           "The box rejected a command as invalid."),
+    0x02: ('CRC', 'BAD_CRC',
+           "The box is rejecting corrupted messages. If this keeps "
+           "happening, check its cable."),
+    0x03: ('STATE', 'BUSY',
+           "The box is still finishing another operation."),
+    0x04: ('LENGTH', None, "The box rejected the message length."),
+    0x05: ('EXTRUDE_ERR1', 'STAGE0_SENSOR_TIMEOUT',
+           "Filament never reached the hub's sensor within 7 s. Check that "
+           "it's seated in the slot gears and not tangled."),
+    0x06: (None, 'BUFFER_FILL_TIMEOUT', "The buffer did not fill in time."),
+    0x08: ('EXTRUDE_ERR4', 'SLOT_EMPTY',
+           "There's no filament at this slot's inlet."),
+    0x09: ('EXTRUDE_ERR5', 'STAGE0_ODOMETER_TIMEOUT',
+           "The hub's measuring wheel didn't turn for 2 s. Check for a "
+           "tangle, or that the hub is gripping the filament."),
+    0x0a: ('EXTRUDE_ERR6', 'FEED_TIMEOUT',
+           "The hub fed for 25 s without filament reaching the printhead."),
+    0x0b: ('EXTRUDE_ERR7', 'OVERTRAVEL',
+           "The hub fed 3 m, but filament never reached the printhead. "
+           "Check for a disconnected PTFE tube."),
+    0x0c: ('EXTRUDE_ERR8', 'ODOMETER_STALLED',
+           "The hub's measuring wheel stopped while feeding. Check for a "
+           "jam or resistance in the path."),
+    0x0d: ('EXTRUDE_ERR10', 'BUFFER_NOT_FULL',
+           "The buffer didn't report full within 3 s of feeding. Check the "
+           "PTFE into the buffer."),
+    0x0e: ('EXTRUDE_ERR9', 'STAGE7_NO_MOTION',
+           "The final load nudge moved under 1.5 mm."),
+    0x13: ('RETRUDE_ERR1', 'UNLOAD_BUFFER_TIMEOUT',
+           "The hub tried to pull back, but the buffer never released "
+           "within 5 s, so the filament is likely jammed. Check for a jam "
+           "between the hub and the printhead."),
+    0x14: (None, 'UNLOAD_HUB_PE_TIMEOUT',
+           "The retract waited for the hub path to clear, and it never "
+           "did. Check for filament stuck in the hub."),
+    0x16: (None, 'UNLOAD_NO_FILAMENT',
+           "This slot shows no filament at its inlet."),
+    0x17: (None, 'UNLOAD_INLET_CLEAR',
+           "The slot's inlet already showed no filament when the retract "
+           "started."),
+    0x18: (None, 'UNLOAD_ALL_EMPTY', "No slot shows filament."),
+    0x19: (None, 'UNLOAD_MOTOR_BLOCKED',
+           "The hub motor stalled while pulling filament back. Check for a "
+           "jam."),
+    0x1a: (None, 'UNLOAD_ODOMETER_TIMEOUT',
+           "The hub pulled back for 40 s without the path clearing."),
+    0x30: (None, 'SLOT_EVENT', "A spool was inserted or removed."),
+    0x50: (None, 'RUNOUT', "The spool ran out."),
+    0x51: (None, 'BUFFER_REFILL_STALLED',
+           "The hub is feeding, but the buffer stays empty. Check the PTFE "
+           "from the hub into the buffer."),
+    0x52: (None, 'BUFFER_REFILL_NO_MOTION',
+           "The hub tried to refill the buffer, but the filament moved "
+           "less than 5 mm. Check for a jam or tangle."),
+}
+
+
+def status_label(code):
+    # "0x0c EXTRUDE_ERR8 / ODOMETER_STALLED: The hub's measuring wheel..."
+    if code is None:
+        return "no response: the box didn't respond."
+    creality, name, text = STATUS_INFO.get(
+        code, (None, None, "The box reported an unknown status."))
+    names = " / ".join(n for n in (creality, name) if n)
+    return "0x%02x%s: %s" % (code, " " + names if names else "", text)
+
+
+class CFSStatusError(RuntimeError):
+    # A reply that came back with a non-zero box status byte
+    def __init__(self, message, status):
+        RuntimeError.__init__(self, message)
+        self.status = status
+
+
+def _parse_moves(text, x_max, y_max, error):
+    # "Y255, X220, Y40, X40": comma-separated absolute XY moves (Jacob10383's
+    # filament_retry_moves format), kept inside the bed and in front of the
+    # purge safe line
+    moves = []
+    for item in str(text).split(','):
+        words = item.upper().split()
+        move = {}
+        try:
+            if not words:
+                raise ValueError(item)
+            for word in words:
+                axis, value = word[0], float(word[1:])
+                if axis not in 'XY' or axis in move:
+                    raise ValueError(item)
+                limit = x_max if axis == 'X' else y_max
+                if not 0. <= value <= limit:
+                    raise ValueError(item)
+                move[axis] = value
+        except ValueError:
+            raise error("Invalid stall_retry_moves entry %r (X 0-%.0f, "
+                        "Y 0-%.0f)" % (item.strip(), x_max, y_max))
+        moves.append(move)
+    return moves
+
+
+def read_flush_metadata(path, limit=1024 * 1024):
+    # Orca/Creality Print write their settings at the end of the file:
+    # "; flush_volumes_matrix = 0,280,..." (mm^3, row = from tool, column =
+    # to tool) and "; flush_multiplier = 1". After Jacob10383's
+    # box_gcode.read_metadata.
+    with open(path, 'rb') as stream:
+        offset = max(0, os.fstat(stream.fileno()).st_size - limit)
+        stream.seek(offset)
+        tail = stream.read(limit)
+    if offset:
+        tail = tail.partition(b'\n')[2]
+    return parse_flush_metadata(tail.decode('utf-8', 'replace'))
+
+
+def parse_flush_metadata(text):
+    fields = dict(re.findall(
+        r"^;[ \t]*(flush_volumes_matrix|flush_multiplier)[ \t]*=[ \t]*"
+        r"([^\r\n]*)", text, re.M))
+    try:
+        volumes = [float(v) for v in
+                   fields.get('flush_volumes_matrix', '').split(',')]
+    except ValueError:
+        volumes = []
+    size = int(math.sqrt(len(volumes)) + .5) if volumes else 0
+    matrix = None
+    if (size and size * size == len(volumes)
+            and all(v >= 0. and not math.isinf(v) for v in volumes)):
+        matrix = [volumes[i * size:(i + 1) * size] for i in range(size)]
+    try:
+        multiplier = float(fields.get('flush_multiplier', '1').split(',')[0])
+    except ValueError:
+        multiplier = 1.
+    if not multiplier > 0.:
+        multiplier = 1.
+    return {'matrix': matrix, 'multiplier': multiplier}
+
+
+# Creality RFID record layout: (field, offset, length) in the 40-character
+# record (Jacob10383's box_protocol.RFID_RECORD_FIELDS)
+RFID_RECORD_FIELDS = (
+    ('month', 0x00, 1), ('day', 0x01, 2), ('year', 0x03, 2),
+    ('supplier', 0x05, 4), ('batch', 0x09, 2), ('mat_id', 0x0b, 6),
+    ('color', 0x11, 7), ('len', 0x18, 4), ('number', 0x1c, 6),
+    ('reserve', 0x22, 6),
+)
+
+
+def decode_rfid_records(p):
+    # p = status 02 "A:<40 chars>;B:...;" (ascii)
+    if len(p) < 2 or p[0] != STATUS_OK:
+        return {'error': status_label(p[0] if p else None)}
+    try:
+        text = bytes(p[2:]).decode('ascii')
+    except UnicodeDecodeError:
+        return {'error': 'record is not ASCII', 'raw': bytes(p).hex(' ')}
+    records = {}
+    for entry in text.split(';'):
+        if ':' not in entry:
+            continue
+        slot, record = entry.split(':', 1)
+        record = record.strip('\x00')
+        fields = {}
+        if (len(record) == 0x28
+                and record.strip().lower() not in ('busy', 'none')):
+            fields = dict((name, record[o:o + n])
+                          for name, o, n in RFID_RECORD_FIELDS)
+        records[slot.strip()] = {'record': record, 'fields': fields}
+    return {'records': records}
 
 
 class K2CFS:
@@ -65,8 +259,20 @@ class K2CFS:
         'FILAMENT_SENSOR': ([0xff, 0x08, 0x00], '_dec_filament'),
         'HARDWARE_STATUS': ([0xff, 0x15], '_dec_raw'),
         'VERSION_SN':      ([0xff, 0x14], '_dec_version_sn'),
-        'MEASURING_WHEEL': ([0xff, 0x0e, 0x01], '_dec_raw'),
+        # Hub measuring wheel, big-endian float mm (Jacob10383's
+        # query_encoder)
+        'MEASURING_WHEEL': ([0xff, 0x0e, 0x01], '_dec_wheel'),
     }
+    # ff 0a box_state byte (Jacob10383's BOX_STATE_*; the same numbering as
+    # Creality's GET_BOX_MODE table)
+    BOX_STATE_NAMES = {0: 'idle', 1: 'preload', 2: 'print', 3: 'reload',
+                       4: 'error', 5: 'test'}
+    BOX_STATE_PRINT = 2
+    BOX_STATE_ERROR = 4
+    # ff 0a SLOT_EVENT reply: one byte per slot
+    SLOT_EVENT_NAMES = {1: 'inserted', 2: 'removed', 3: 'rfid_ready'}
+    # Slot events queue in the box; read until a normal reply comes back
+    STATE_EVENT_DRAIN = 4
     NUM_SLOTS = 4
     SLOT_MASKS = {'A': 0x01, 'B': 0x02, 'C': 0x04, 'D': 0x08}
     MODE_PRINT = 0x00
@@ -159,6 +365,16 @@ class K2CFS:
         # new slot loads (stock runout_gcode pushes E30)
         self.runout_push_length = config.getfloat(
             'runout_push_length', 30., minval=0., maxval=60.)
+        # Runout refill purge (mm). Both slots hold the same material and
+        # colour, so only the butt joint with the old tail and the air gap
+        # have to clear: the load already feeds 14 mm, then this short
+        # purge (Jacob10383's runout primes 20 mm). 0 = the full stock
+        # purge, as before.
+        self.runout_purge_length = config.getfloat(
+            'runout_purge_length', 40., minval=0., maxval=240.)
+        if 0. < self.runout_purge_length < 30.:
+            raise config.error(
+                "runout_purge_length must be 0 or 30-240 (CFS_PURGE SHORT)")
         self.cutter_y = config.getfloat('cutter_y', 150.)
         self.cutter_speed = config.getfloat(
             'cutter_speed', 100., above=0.)
@@ -219,6 +435,54 @@ class K2CFS:
             'load_sensor_grace', 3., minval=0.)
         self.load_poll_interval = config.getfloat(
             'load_poll_interval', 1., minval=0.1, maxval=5.)
+        # Between stage-5 sends, check the nozzle sensor this often. The
+        # sensor is local (no bus traffic), so the stage-5 rate is
+        # unchanged; stock reacts on the sensor callback, Jacob10383 polls
+        # every 0.1 s. Set it equal to load_poll_interval for the old
+        # check-once-per-send behaviour.
+        self.load_arrival_poll_interval = config.getfloat(
+            'load_arrival_poll_interval', .1, minval=.05, maxval=5.)
+        # A box BUSY (0x03) reply is not a fault: wait and send again
+        self.busy_retries = config.getint(
+            'busy_retries', 2, minval=0, maxval=10)
+        self.busy_retry_delay = config.getfloat(
+            'busy_retry_delay', 1., minval=.1, maxval=5.)
+        # EXTRUDE_ERR8 (hub wheel stopped) on a load or UNLOAD_MOTOR_BLOCKED
+        # (0x19) on a rewind: flex the PTFE path with a toolhead move before
+        # retrying, like Jacob10383's filament_retry_motion. Off = only the
+        # plain retries, as before.
+        self.stall_retry_motion = config.getboolean(
+            'stall_retry_motion', False)
+        x_max = 262.
+        try:
+            x_max = config.getsection('stepper_x').getfloat(
+                'position_max', x_max, note_valid=False)
+        except Exception:
+            pass
+        self.stall_retry_moves = _parse_moves(
+            config.get('stall_retry_moves', 'Y255, X220, Y40, X40'),
+            x_max, self.purge_safe_y, config.error)
+        # The box can report active mask 0 while it follows the extruder.
+        # Accept feed_slot as the owner of the toolhead path when the nozzle
+        # sensor sees filament and the hub sensor shows that slot.
+        self.path_owner_from_feed_slot = config.getboolean(
+            'path_owner_from_feed_slot', True)
+        # Tool change purge from the print file's flush_volumes_matrix when
+        # the slicer did not pass one (no PURGE=), like Jacob10383's
+        # _purge_plan. Off = the fixed fallbacks, as before.
+        self.toolchange_purge_from_file = config.getboolean(
+            'toolchange_purge_from_file', False)
+        self.flush_cache = None
+        # Clog check from the hub measuring wheel (Jacob10383's _check_clog):
+        # pause when the extruder has fed clog_extruder_length while the
+        # wheel moved less than clog_wheel_reset_length
+        self.clog_detection = config.getboolean('clog_detection', False)
+        self.clog_extruder_length = config.getfloat(
+            'clog_extruder_length', 80., minval=30.)
+        # The box refills the buffer in ~25-30 mm chunks
+        self.clog_wheel_reset_length = config.getfloat(
+            'clog_wheel_reset_length', 18., above=0.)
+        self.clog_baseline = None
         self.load_engage_length = config.getfloat(
             'load_engage_length', 5., above=0., maxval=5.)
         self.load_engage_speed = config.getfloat(
@@ -239,6 +503,9 @@ class K2CFS:
         # often and stay quiet while an actuation sequence is in progress.
         self.env_poll_interval = config.getfloat(
             'env_poll_interval', 10., minval=0.)
+        # Poll interval while printing (0 = env_poll_interval)
+        self.print_poll_interval = config.getfloat(
+            'print_poll_interval', 0., minval=0.)
         self.last_actuation_time = 0.
         self.env_poll_failures = 0
         self.cutter_switch_state = None
@@ -326,6 +593,9 @@ class K2CFS:
         self.gcode.register_command(
             'CFS_PRELOAD', self.cmd_CFS_PRELOAD,
             desc="Turn CFS pre-loading and buffer tension on (idle) or off")
+        self.gcode.register_command(
+            'CFS_RFID_READ', self.cmd_CFS_RFID_READ,
+            desc="Read the CFS RFID records and remaining (no motion)")
         for tool, slot in enumerate(('A', 'B', 'C', 'D')):
             def select_tool(gcmd, selected_slot=slot):
                 self._select_tool(gcmd, selected_slot)
@@ -356,16 +626,25 @@ class K2CFS:
         self._run_actuation('TIGHTEN_UP ENABLE',
                             [0xff, 0x0f, self.TENSION_ENABLE])
 
+    def _printing(self):
+        stats = self.printer.lookup_object('print_stats', None)
+        return (stats is not None and
+                stats.get_status(0.).get('state') == 'printing')
+
     def _env_poll(self, eventtime):
+        interval = self.env_poll_interval
+        if self.print_poll_interval and self._printing():
+            interval = self.print_poll_interval
         if (self.print_start_transaction
                 or eventtime - self.last_actuation_time < 5.):
-            return eventtime + self.env_poll_interval
+            self.clog_baseline = None
+            return eventtime + interval
         try:
-            m = self._run_query('MEASURING')
+            m = self._measuring()
         except Exception:
             logging.exception("k2_cfs: environment poll failed")
             m = {'error': 'exception'}
-        if 'temperature' in m:
+        if 'temperature' in m or 'box_state' in m:
             self.env_poll_failures = 0
             self.status['online'] = True
             for key in ('temperature', 'humidity', 'active_mask',
@@ -377,16 +656,71 @@ class K2CFS:
             if self.env_poll_failures >= 3:
                 self.status['online'] = False
         self._check_running_out()
-        return eventtime + self.env_poll_interval
+        try:
+            self._check_clog(eventtime)
+        except Exception:
+            logging.exception("k2_cfs: clog check failed")
+            self.clog_baseline = None
+        return eventtime + interval
+
+    def _check_clog(self, eventtime):
+        # Jacob10383's _check_clog: while the box feeds the print, the hub
+        # wheel turns as the buffer is refilled in ~25-30 mm chunks. If the
+        # extruder has pushed clog_extruder_length since the wheel last
+        # moved, nothing is coming through from the CFS.
+        # A spool that is running out stops the wheel too: leave that to
+        # the runout handling.
+        feeding = (self.status.get('feed_enabled')
+                   or self.status.get('box_state') == self.BOX_STATE_PRINT)
+        if (not self.clog_detection or not self._printing() or not feeding
+                or not self.status.get('feed_slot')
+                or self.status.get('running_out')
+                or self.status.get('box_runout')):
+            self.clog_baseline = None
+            return
+        wheel = self._run_query('MEASURING_WHEEL').get('wheel_mm')
+        if wheel is None:
+            return
+        toolhead = self.printer.lookup_object('toolhead')
+        mcu = self.printer.lookup_object('mcu')
+        position = toolhead.get_extruder().find_past_position(
+            mcu.estimated_print_time(eventtime))
+        self.status['wheel_mm'] = round(wheel, 2)
+        base = self.clog_baseline
+        if base is None or abs(wheel - base[1]) > self.clog_wheel_reset_length:
+            self.clog_baseline = (position, wheel)
+            return
+        extruded = position - base[0]
+        if extruded <= self.clog_extruder_length:
+            return
+        self.clog_baseline = None
+        msg = ("CFS clog check: the extruder fed %.0f mm but the CFS"
+               " measuring wheel moved only %.1f mm, so filament is not"
+               " coming through from slot %s. Print paused: check for a"
+               " tangle or a jam between the CFS and the toolhead, then"
+               " RESUME." % (extruded, abs(wheel - base[1]),
+                             self.status.get('feed_slot')))
+        self.status['last_clog'] = msg
+        logging.info("k2_cfs: %s", msg)
+        pause_resume = self.printer.lookup_object('pause_resume', None)
+        if pause_resume is None:
+            return
+        pause_resume.send_pause_command()
+
+        def pause(eventtime):
+            try:
+                self.gcode.respond_raw("!! " + msg)
+                self.gcode.run_script("PAUSE")
+            except Exception:
+                logging.exception("k2_cfs: clog pause failed")
+        self.printer.get_reactor().register_callback(pause)
 
     def _check_running_out(self):
         # Early runout warning. The end of a spool passes the slot's entry
         # sensor while about a tube's length is still on its way to the
         # nozzle, so tell the user what will happen when it gets there.
         slot = self.status.get('feed_slot')
-        stats = self.printer.lookup_object('print_stats', None)
-        printing = (stats is not None and
-                    stats.get_status(0.).get('state') == 'printing')
+        printing = self._printing()
         if not printing or not slot or not self.status.get('feed_enabled'):
             if self.status.get('running_out'):
                 self._clear_runout_warning()
@@ -482,29 +816,107 @@ class K2CFS:
                 'uniid': p[4:16].hex(' ')}
 
     def _dec_measuring(self, p):
-        # observed: 00 0a <temp> <humidity> 00 00 <mask> <setting>. Bytes 2/3
-        # are the CFS AHT10 reading: degrees C and relative humidity %
-        # (matched against stock master-server's boxTemp/dry_and_humidity
-        # over a day of stock logs, 2026-10-24). Bytes 6/7
-        # retain the selected-slot mask and selection setting.  They do not
-        # change when stock's global IDLE command (ff 04 00 01) succeeds, so
-        # they must not be used as the live CFS mode.  GET_BOX_MODE (ff 0c)
-        # is authoritative for that.
-        if len(p) >= 4:
-            out = {'temperature': p[2], 'humidity': p[3],
-                   'raw': p.hex(' ')}
-            if len(p) >= 8:
-                mask, selection_setting = p[6], p[7]
-                slots = [name for name, bit in self.SLOT_MASKS.items()
-                         if mask & bit]
-                out.update({
-                    'active_mask': mask,
-                    'active_slots': slots,
-                    'active_slot': slots[0] if len(slots) == 1 else None,
-                    'selection_setting': selection_setting,
-                })
+        # observed: <status> 0a <temp> <humidity> 00 <state> <mask> <setting>.
+        # Bytes 2/3 are the CFS AHT10 reading: degrees C and relative
+        # humidity % (matched against stock master-server's
+        # boxTemp/dry_and_humidity over a day of stock logs, 2026-10-24).
+        # Byte 5 is the box state (Jacob10383's decode: 2 = PRINT while the
+        # box follows the extruder). Bytes 6/7 retain the selected-slot
+        # mask (his "downstream" path mask) and selection setting (which he
+        # also reads as a slot mask). They do not change when stock's
+        # global IDLE command (ff 04 00 01) succeeds, so they must not be
+        # used as the live CFS mode. GET_BOX_MODE (ff 0c) is authoritative
+        # for that.
+        # Status 0x30 (SLOT_EVENT) replaces the whole body with one event
+        # byte per slot (1 inserted, 2 removed, 3 RFID ready), and status
+        # 0x50 (RUNOUT) is the box's own runout flag on a normal body.
+        # Before 10-27 an event reply was read as temperature/humidity.
+        status = p[0] if len(p) else None
+        out = {'raw': p.hex(' '), 'status': status}
+        body = p[2:]
+        if status == STATUS_SLOT_EVENT:
+            if len(body) == self.NUM_SLOTS:
+                out['slot_events'] = dict(
+                    (name, self.SLOT_EVENT_NAMES.get(body[i], body[i]))
+                    for i, name in enumerate('ABCD') if body[i])
             return out
+        if status in (0x01, 0x02) or len(body) < 2:
+            return out
+        out['temperature'] = struct.unpack('b', bytes(body[:1]))[0]
+        out['humidity'] = body[1]
+        if len(body) >= 6:
+            state, mask, selection_setting = body[3], body[4], body[5]
+            slots = [name for name, bit in self.SLOT_MASKS.items()
+                     if mask & bit]
+            out.update({
+                'box_state': state,
+                'box_state_name': self.BOX_STATE_NAMES.get(state, 'unknown'),
+                'box_runout': status == STATUS_RUNOUT,
+                'active_mask': mask,
+                'active_slots': slots,
+                'active_slot': slots[0] if len(slots) == 1 else None,
+                'selection_setting': selection_setting,
+            })
+        return out
+
+    def _dec_wheel(self, p):
+        # observed: 00 0e <4-byte big-endian float>, mm the hub wheel has
+        # measured (Jacob10383's query_encoder)
+        if len(p) >= 6 and p[0] == STATUS_OK:
+            return {'wheel_mm': struct.unpack('>f', bytes(p[2:6]))[0],
+                    'raw': p.hex(' ')}
         return {'raw': p.hex(' ')}
+
+    def _measuring(self):
+        # MEASURING with any queued slot events read off first
+        m = {}
+        for unused in range(self.STATE_EVENT_DRAIN):
+            m = self._run_query('MEASURING')
+            events = m.get('slot_events')
+            if events is None:
+                break
+            if events:
+                text = ", ".join("%s %s" % (s, e)
+                                 for s, e in sorted(events.items()))
+                self.status['last_slot_event'] = text
+                logging.info("k2_cfs: slot event: %s", text)
+        else:
+            logging.info("k2_cfs: slot events did not drain after %d reads",
+                         self.STATE_EVENT_DRAIN)
+        if 'box_state' in m:
+            if m['box_runout'] and not self.status.get('box_runout'):
+                logging.info("k2_cfs: the box reports a runout (0x50)")
+            for key in ('box_state', 'box_state_name', 'box_runout'):
+                self.status[key] = m[key]
+            self.status['box_status_code'] = m['status']
+        return m
+
+    def _path_mask(self, measuring):
+        # Mask of the slot whose filament is in the toolhead path. The box
+        # reports mask 0 while it just follows the extruder, which used to
+        # fail tool changes. Then the slot we armed (feed_slot) owns the
+        # path when the nozzle sensor sees filament and the hub sensor
+        # shows that slot's filament (Jacob10383 keeps his path owner while
+        # the nozzle sensor sees filament).
+        mask = measuring.get('active_mask', 0)
+        slot = self.status.get('feed_slot')
+        if (mask or not self.path_owner_from_feed_slot
+                or slot not in self.SLOT_MASKS
+                or measuring.get('box_state') == self.BOX_STATE_ERROR
+                or self._nozzle_has_filament() is not True):
+            return mask
+        try:
+            hub = self._hub_mask()
+        except Exception:
+            logging.exception("k2_cfs: hub read for the path owner failed")
+            return mask
+        if hub != self.SLOT_MASKS[slot]:
+            logging.info("k2_cfs: mask 0, feed slot %s, hub 0x%02x: no owner",
+                         slot, hub)
+            return mask
+        logging.info("k2_cfs: box reports mask 0; slot %s owns the path "
+                     "(nozzle sensor and hub)", slot)
+        return self.SLOT_MASKS[slot]
 
     def _dec_box_mode(self, p):
         # observed live: 00 0c 00 after stock IDLE command.  Creality's own
@@ -574,7 +986,8 @@ class K2CFS:
         online = False
         results = {}
         for name in self.QUERIES:
-            r = self._run_query(name)
+            r = (self._measuring() if name == 'MEASURING'
+                 else self._run_query(name))
             results[name] = r
             if 'error' not in r:
                 online = True
@@ -606,7 +1019,9 @@ class K2CFS:
         # returned by GET_BOX_MODE. Preserve the locally known state instead
         # of inventing it from MEASURING's stale selection bytes.
         st['feed_enabled'] = self.status.get('feed_enabled')
-        self.status = st
+        # Update rather than replace: feed_slot and the load history must
+        # survive a status query
+        self.status.update(st)
         gcmd.respond_info("CFS addr %d\n%s" % (self.addr, "\n".join(out)))
 
     def cmd_CFS_QUERY(self, gcmd):
@@ -622,22 +1037,36 @@ class K2CFS:
                 "CFS actuation is disabled; set allow_actuation: true")
 
     def _run_actuation(self, name, payload, timeout=0.2):
-        start = self.last_actuation_time = \
-            self.printer.get_reactor().monotonic()
-        frame, resp = self.bus.xfer(
-            self.addr, payload, timeout=timeout)
-        logging.info("k2_cfs: %s took %.2fs resp %s", name,
-                     self.printer.get_reactor().monotonic() - start,
-                     resp.hex(' ') if resp else '(none)')
-        self.last_resp = resp
-        p = self._payload(resp)
+        reactor = self.printer.get_reactor()
         opcode = payload[1]
-        if p is None or len(p) < 2 or p[0] != 0 or p[1] != opcode:
+        busy = 0
+        while True:
+            start = self.last_actuation_time = reactor.monotonic()
+            frame, resp = self.bus.xfer(
+                self.addr, payload, timeout=timeout)
+            logging.info("k2_cfs: %s took %.2fs resp %s", name,
+                         reactor.monotonic() - start,
+                         resp.hex(' ') if resp else '(none)')
+            self.last_resp = resp
+            p = self._payload(resp)
+            if p is not None and len(p) >= 2 and p[1] == opcode:
+                if p[0] == STATUS_OK:
+                    return frame, resp
+                if p[0] == STATUS_BUSY and busy < self.busy_retries:
+                    # Not a fault: the box is finishing another operation
+                    busy += 1
+                    logging.info("k2_cfs: %s: box busy, retry %d/%d", name,
+                                 busy, self.busy_retries)
+                    reactor.pause(reactor.monotonic() + self.busy_retry_delay)
+                    continue
+                raise CFSStatusError(
+                    "%s failed: box status %s (sent %s resp %s)"
+                    % (name, status_label(p[0]), frame.hex(' '),
+                       resp.hex(' ')), p[0])
             raise RuntimeError(
                 "%s failed: sent %s resp %s"
                 % (name, frame.hex(' '),
                    resp.hex(' ') if resp else '(none)'))
-        return frame, resp
 
     def _nozzle_has_filament(self):
         sensor = self.printer.lookup_object(
@@ -653,7 +1082,7 @@ class K2CFS:
             "SET_FILAMENT_SENSOR SENSOR=%s ENABLE=%d"
             % (self.filament_sensor_name, int(enabled)))
 
-    def _wait_nozzle_filament(self, expected, timeout):
+    def _wait_nozzle_filament(self, expected, timeout, poll=None):
         reactor = self.printer.get_reactor()
         deadline = reactor.monotonic() + timeout
         while True:
@@ -663,7 +1092,7 @@ class K2CFS:
             if now >= deadline:
                 return False
             reactor.pause(
-                min(deadline, now + self.sensor_poll_interval))
+                min(deadline, now + (poll or self.sensor_poll_interval)))
 
     def _require_idle(self, gcmd):
         # The standalone cut/load/purge commands remain blocked once a print
@@ -748,8 +1177,8 @@ class K2CFS:
             raise gcmd.error(
                 "No filament at nozzle; loaded-path feed only")
 
-        measuring = self._run_query('MEASURING')
-        old_mask = measuring.get('active_mask', 0)
+        measuring = self._measuring()
+        old_mask = self._path_mask(measuring)
         if require_selected and old_mask != mask:
             raise gcmd.error(
                 "T%d requests slot %s but CFS selected mask is 0x%02x; "
@@ -775,9 +1204,9 @@ class K2CFS:
             self._best_effort_stop(mask)
             raise gcmd.error(str(exc))
 
-        verified = self._run_query('MEASURING')
+        verified = self._measuring()
         box_mode = self._run_query('BOX_MODE')
-        if (verified.get('active_mask') != mask
+        if (self._path_mask(verified) != mask
                 or box_mode.get('box_mode_code')
                 != self.BOX_MODE_IDLE):
             self._best_effort_stop(mask)
@@ -1136,6 +1565,55 @@ class K2CFS:
             raise gcmd.error("CFS pre-loading change failed: %s" % exc)
         gcmd.respond_info("CFS pre-loading %s" % ("on" if enable else "off"))
 
+    def cmd_CFS_RFID_READ(self, gcmd):
+        # Read-only: the box's cached RFID records (ff 02 <mask>) and
+        # remaining % (ff 03 <mask>), after Jacob10383's query_rfid_records
+        # and query_rfid_remaining. No forced read (ff 0d <mask> 02), which
+        # spins the slot to find the tag.
+        if self.print_start_transaction:
+            raise gcmd.error("A CFS transaction is active")
+        slot = gcmd.get('SLOT', '').upper()
+        if slot and slot not in self.SLOT_MASKS:
+            raise gcmd.error("SLOT must be one of A, B, C, D")
+        mask = self.SLOT_MASKS[slot] if slot else 0x0f
+        frame, resp = self.bus.xfer(
+            self.addr, [0xff, 0x02, mask], read_len=260, timeout=.5)
+        p = self._payload(resp)
+        if p is None or len(p) < 2 or p[1] != 0x02:
+            raise gcmd.error("CFS RFID read: no/short response %s"
+                             % (resp.hex(' ') if resp else '(none)'))
+        result = decode_rfid_records(p)
+        if 'error' in result:
+            raise gcmd.error("CFS RFID read failed: %s" % result['error'])
+        remain = self._dec_remain(self._payload(self.bus.xfer(
+            self.addr, [0xff, 0x03, mask], timeout=.5)[1]) or b'').get(
+                'remain', [])
+        lines = []
+        for index, name in enumerate('ABCD'):
+            if not mask & (1 << index):
+                continue
+            entry = result['records'].get(name)
+            left = ("%d%%" % remain[index] if index < len(remain)
+                    and remain[index] <= 100 else "?")
+            if entry is None:
+                lines.append("%s: no record" % name)
+            elif entry['fields']:
+                f = entry['fields']
+                lines.append(
+                    "%s: material %s colour %s supplier %s batch %s "
+                    "length %s date %s-%s-%s serial %s reserve %s, "
+                    "remaining %s"
+                    % (name, f['mat_id'], f['color'], f['supplier'],
+                       f['batch'], f['len'], f['year'], f['month'],
+                       f['day'], f['number'], f['reserve'], left))
+            else:
+                lines.append("%s: %s, remaining %s"
+                             % (name, entry['record'] or 'empty', left))
+        self.status['rfid'] = dict(
+            (name, entry['fields'] or entry['record'])
+            for name, entry in result['records'].items())
+        gcmd.respond_info("CFS RFID\n" + "\n".join(lines))
+
     def _finish_unload(self, mask, report_error=True):
         try:
             return self._run_actuation(
@@ -1167,12 +1645,12 @@ class K2CFS:
         slot_index = ord(slot) - ord('A')
         if not slots_loaded or not slots_loaded[slot_index]:
             raise gcmd.error("CFS slot %s does not report filament" % slot)
-        measuring = self._run_query('MEASURING')
-        if measuring.get('active_mask') != mask:
+        path_mask = self._path_mask(self._measuring())
+        if path_mask != mask:
             raise gcmd.error(
                 "CFS_UNLOAD slot %s requires active mask 0x%02x "
                 "(reported 0x%02x)"
-                % (slot, mask, measuring.get('active_mask', 0)))
+                % (slot, mask, path_mask))
         if self._nozzle_has_filament() is not True:
             raise gcmd.error(
                 "CFS unload requires filament at the nozzle sensor")
@@ -1214,7 +1692,17 @@ class K2CFS:
                 "M400"
                 % (self.unload_final_length,
                    self.unload_final_speed * 60.))
-            self._finish_unload(mask)
+            try:
+                self._finish_unload(mask)
+            except CFSStatusError as exc:
+                if (exc.status != STATUS_UNLOAD_MOTOR_BLOCKED
+                        or not self.stall_retry_motion
+                        or not self._flex_filament_path(
+                            gcmd, "CFS hub motor stalled during the rewind"
+                            " (UNLOAD_MOTOR_BLOCKED); moving the toolhead to"
+                            " free the tube, then retrying")):
+                    raise
+                self._finish_unload(mask)
             finish_sent = True
         except Exception as exc:
             if not finish_sent:
@@ -1282,6 +1770,48 @@ class K2CFS:
                 return True
         return False
 
+    def _flex_filament_path(self, gcmd, message):
+        # Jacob10383's filament_retry_motion: sweep the toolhead across the
+        # bed so the PTFE tube to the head changes shape, which frees
+        # filament dragging in a tight bend. Runs from the purge chute (the
+        # load and the rewind both run there) at the current Z, which the
+        # callers have already checked (purge_min_z, or the bed parked low
+        # at print start), and ends back at the chute. The moves stay inside
+        # the bed and in front of the purge safe line.
+        toolhead = self.printer.lookup_object('toolhead')
+        position = toolhead.get_position()
+        tolerance = self.purge_position_tolerance
+        if (abs(position[0] - self.purge_x) > tolerance
+                or abs(position[1] - self.purge_y) > tolerance):
+            return False
+        prior_accel = toolhead.get_status(0.).get('max_accel')
+        if prior_accel is None:
+            return False
+        gcmd.respond_info(message)
+        rate = self.purge_speed * 60.
+        lines = ["G90", "G1 Y%.3f F%.3f" % (self.purge_safe_y, rate)]
+        for move in self.stall_retry_moves:
+            lines.append("G1 %s F%.3f" % (" ".join(
+                "%s%.3f" % (axis, move[axis]) for axis in sorted(move)), rate))
+        lines.extend([
+            "G1 Y%.3f F%.3f" % (self.purge_safe_y, rate),
+            "G1 X%.3f F%.3f" % (self.purge_entry_x, rate),
+            "G1 Y%.3f F%.3f" % (self.purge_y, rate),
+            "G1 X%.3f Y%.3f F%.3f" % (self.purge_gate_x, self.purge_y, rate),
+            "G1 X%.3f Y%.3f F%.3f" % (self.purge_x, self.purge_y, rate),
+            "M400",
+        ])
+        self.gcode.run_script_from_command(
+            "SET_VELOCITY_LIMIT ACCEL=%.3f" % self.clean_accel)
+        try:
+            self.gcode.run_script_from_command("\n".join(lines))
+        finally:
+            self.gcode.run_script_from_command(
+                "SET_VELOCITY_LIMIT ACCEL=%.3f" % prior_accel)
+        self.status['stall_retry_motions'] = \
+            self.status.get('stall_retry_motions', 0) + 1
+        return True
+
     def cmd_CFS_CUT_UNLOAD(self, gcmd):
         self._require_actuation(gcmd)
         self._require_idle(gcmd)
@@ -1301,12 +1831,12 @@ class K2CFS:
         slot_index = ord(slot) - ord('A')
         if not slots_loaded or not slots_loaded[slot_index]:
             raise gcmd.error("CFS slot %s does not report filament" % slot)
-        measuring = self._run_query('MEASURING')
-        if measuring.get('active_mask') != mask:
+        path_mask = self._path_mask(self._measuring())
+        if path_mask != mask:
             raise gcmd.error(
                 "CFS_CUT_UNLOAD slot %s requires active mask 0x%02x "
                 "(reported 0x%02x)"
-                % (slot, mask, measuring.get('active_mask', 0)))
+                % (slot, mask, path_mask))
         if self._nozzle_has_filament() is not True:
             raise gcmd.error(
                 "CFS cut/unload requires filament at the nozzle sensor")
@@ -1460,7 +1990,7 @@ class K2CFS:
         slot_index = ord(slot) - ord('A')
         if not slots_loaded or not slots_loaded[slot_index]:
             raise gcmd.error("CFS slot %s does not report filament" % slot)
-        measuring = self._run_query('MEASURING')
+        measuring = self._measuring()
         old_mask = measuring.get('active_mask', 0)
         if old_mask not in (0, mask):
             raise gcmd.error(
@@ -1501,10 +2031,11 @@ class K2CFS:
             reactor = self.printer.get_reactor()
             deadline = reactor.monotonic() + self.load_timeout
             err8_retries = 0
+            flexed = False
             while True:
                 try:
                     self._load_stage('EXTRUDE STAGE 5', mask, 5)
-                except Exception:
+                except Exception as exc:
                     # Firmware 1.5.0 may advance while the nozzle-sensor
                     # callback is arriving, then reject the in-flight stage-5
                     # retry with state 0x0c. The asserted physical sensor
@@ -1512,18 +2043,25 @@ class K2CFS:
                     # still be a moment short of the sensor when the CFS
                     # advances (seen live 10-24: sensor tripped after the
                     # load had been failed), so give it a few seconds.
-                    resp = getattr(self, 'last_resp', None)
                     if self._wait_nozzle_filament(
                             True, self.load_sensor_grace):
                         break
-                    if (resp and len(resp) > 3 and resp[3] == 0x0c
+                    if (getattr(exc, 'status', None)
+                            == STATUS_ODOMETER_STALLED
                             and err8_retries < 2):
                         # EXTRUDE_ERR8 has no user message in stock; its
                         # wrapper retries instead of failing the load.
                         err8_retries += 1
-                        gcmd.respond_info(
-                            "CFS stage 5 returned EXTRUDE_ERR8; re-sending"
-                            " stage 4 (retry %d/2)" % err8_retries)
+                        moved = False
+                        if self.stall_retry_motion and not flexed:
+                            moved = flexed = self._flex_filament_path(
+                                gcmd, "CFS hub wheel stopped during the load"
+                                " (EXTRUDE_ERR8); moving the toolhead to free"
+                                " the tube, then retrying")
+                        if not moved:
+                            gcmd.respond_info(
+                                "CFS stage 5 returned EXTRUDE_ERR8; re-sending"
+                                " stage 4 (retry %d/2)" % err8_retries)
                         self._load_stage('EXTRUDE STAGE 4', mask, 4)
                         reactor.pause(reactor.monotonic()
                                       + self.load_poll_interval)
@@ -1536,7 +2074,13 @@ class K2CFS:
                     raise RuntimeError(
                         "no filament at nozzle sensor after %.1fs"
                         % self.load_timeout)
-                reactor.pause(min(deadline, now + self.load_poll_interval))
+                # Watch the sensor until the next stage-5 send, so the load
+                # moves on as soon as filament arrives instead of up to a
+                # whole interval later (the box keeps feeding meanwhile)
+                if self._wait_nozzle_filament(
+                        True, min(deadline - now, self.load_poll_interval),
+                        poll=self.load_arrival_poll_interval):
+                    break
 
             self.gcode.run_script_from_command(
                 "M83\n"
@@ -1551,9 +2095,19 @@ class K2CFS:
                 "M400"
                 % (self.load_extrude_length,
                    self.load_extrude_speed * 60.))
-            self._load_stage(
-                'EXTRUDE STAGE 7', mask, 7,
-                value=self.load_box_finish_length)
+            try:
+                self._load_stage(
+                    'EXTRUDE STAGE 7', mask, 7,
+                    value=self.load_box_finish_length)
+            except CFSStatusError as exc:
+                # STAGE7_NO_MOTION: the final nudge moved under 1.5 mm
+                # because the filament is already home. Jacob10383 logs
+                # it and carries on when the nozzle sensor confirms.
+                if (exc.status != STATUS_STAGE7_NO_MOTION
+                        or self._nozzle_has_filament() is not True):
+                    raise
+                logging.info("k2_cfs: stage 7 moved under 1.5 mm (0x0e);"
+                             " nozzle sensor confirms filament, carrying on")
             self._run_query('BUFFER_STATE')
             self._run_actuation(
                 'SET_BOX_MODE PRINT',
@@ -1583,7 +2137,7 @@ class K2CFS:
             self._best_effort_stop(mask)
             raise gcmd.error(
                 "CFS load finished but the nozzle sensor is not triggered")
-        verified = self._run_query('MEASURING')
+        verified = self._measuring()
         box_mode = self._run_query('BOX_MODE')
         if (verified.get('active_mask') != mask
                 or box_mode.get('box_mode_code')
@@ -1666,8 +2220,7 @@ class K2CFS:
                 "CFS purge requires filament at the nozzle sensor")
         self._require_hot_extruder(gcmd)
 
-        measuring = self._run_query('MEASURING')
-        mask = measuring.get('active_mask', 0)
+        mask = self._path_mask(self._measuring())
         if mask not in self.SLOT_MASKS.values():
             raise gcmd.error(
                 "CFS purge requires exactly one active slot "
@@ -1755,9 +2308,9 @@ class K2CFS:
         if self._nozzle_has_filament() is not True:
             raise gcmd.error(
                 "CFS purge finished but the nozzle sensor is clear")
-        verified = self._run_query('MEASURING')
+        verified = self._measuring()
         box_mode = self._run_query('BOX_MODE')
-        if (verified.get('active_mask') != mask
+        if (self._path_mask(verified) != mask
                 or box_mode.get('box_mode_code')
                 != self.BOX_MODE_IDLE):
             raise gcmd.error(
@@ -1806,8 +2359,12 @@ class K2CFS:
         # CFS_PRINT_START, so the standalone cut/load/purge gates still apply
         # everywhere else.
         # PURGE=<mm>: a shorter chute purge for a colour change between
-        # like materials, with the prime tower doing the rest of the flush
+        # like materials, with the prime tower doing the rest of the flush.
+        # PURGE_FALLBACK=<mm>: the same, used only when
+        # toolchange_purge_from_file finds nothing in the print file.
         purge_length = gcmd.get_float('PURGE', None, minval=30., maxval=240.)
+        purge_fallback = gcmd.get_float(
+            'PURGE_FALLBACK', None, minval=30., maxval=240.)
         self._require_actuation(gcmd)
         print_stats = self.printer.lookup_object('print_stats', None)
         state = print_stats.get_status(0.).get('state', '') \
@@ -1823,7 +2380,7 @@ class K2CFS:
             raise gcmd.error("A CFS transaction is already active")
 
         mask = self.SLOT_MASKS[slot]
-        active_mask = self._run_query('MEASURING').get('active_mask', 0)
+        active_mask = self._path_mask(self._measuring())
         nozzle_loaded = self._nozzle_has_filament() is True
         if nozzle_loaded and active_mask == mask:
             self._start_feed(
@@ -1837,6 +2394,12 @@ class K2CFS:
                 "CFS tool change needs a loaded slot to change from "
                 "(nozzle sensor %s, active mask 0x%02x)"
                 % (nozzle_loaded, active_mask))
+        full_length = None
+        if purge_length is None and self.toolchange_purge_from_file:
+            purge_length, full_length = self._file_purge(
+                gcmd, old_slot, slot)
+        if purge_length is None and full_length is None:
+            purge_length = purge_fallback
 
         toolhead = self.printer.lookup_object('toolhead')
         start = toolhead.get_position()
@@ -1871,6 +2434,8 @@ class K2CFS:
             load_params = {"SLOT": slot, "CONFIRM": "1", "CHANGE": "1"}
             if purge_length is not None:
                 load_params.update(LENGTH="%.1f" % purge_length, SHORT="1")
+            elif full_length is not None:
+                load_params.update(LENGTH="%.1f" % full_length)
             load_gcmd = self.gcode.create_gcode_command(
                 "CFS_LOAD", "", load_params)
             self.cmd_CFS_LOAD(load_gcmd)
@@ -1904,6 +2469,53 @@ class K2CFS:
             % ((old_slot, slot, timings[-1] - timings[0])
                + tuple(b - a for a, b in zip(timings, timings[1:]))))
 
+    def _flush_matrix(self):
+        # The print file's flush matrix, read once per file
+        sdcard = self.printer.lookup_object('virtual_sdcard', None)
+        path = sdcard.get_status(0.).get('file_path') if sdcard else None
+        if not path:
+            return None
+        try:
+            key = (path, os.path.getmtime(path), os.path.getsize(path))
+            if self.flush_cache is None or self.flush_cache[0] != key:
+                self.flush_cache = (key, read_flush_metadata(path))
+        except (OSError, IOError):
+            logging.exception("k2_cfs: reading the flush matrix failed")
+            return None
+        return self.flush_cache[1]
+
+    def _file_purge(self, gcmd, old_slot, slot):
+        # Jacob10383's _purge_plan: flush volume (mm^3) for this change from
+        # the file's matrix over the filament area. T0-T3 are slots A-D.
+        # Returns (short purge, full purge): between like materials it is a
+        # SHORT purge clamped to 30-240 mm; otherwise the stock purge, made
+        # longer when the file asks for more.
+        meta = self._flush_matrix()
+        matrix = meta and meta['matrix']
+        src, dst = ord(old_slot) - ord('A'), ord(slot) - ord('A')
+        if not matrix or src >= len(matrix) or dst >= len(matrix[src]):
+            gcmd.respond_info("CFS tool change: no usable flush matrix in "
+                              "the print file; using the fixed purge")
+            return None, None
+        extruder = self.printer.lookup_object('extruder')
+        area = getattr(extruder, 'filament_area', math.pi * .875 ** 2)
+        volume = matrix[src][dst] * meta['multiplier']
+        length = volume / area
+        slots = self.printer.lookup_object('hark_cfs_slots', None)
+        records = slots.get_status(0.)['slots'] if slots is not None else {}
+        old_type = (records.get(old_slot, {}).get('type') or '').upper()
+        new_type = (records.get(slot, {}).get('type') or '').upper()
+        if old_type and old_type == new_type:
+            short, full = min(max(length, 30.), 240.), None
+        else:
+            short = None
+            full = min(max(length, self.purge_extrude_length, 140.), 360.)
+        gcmd.respond_info(
+            "CFS tool change purge from the file's flush matrix: T%d>T%d "
+            "%.0f mm^3 = %.0f mm, purging %.0f mm"
+            % (src, dst, volume, length, short or full))
+        return short, full
+
     def cmd_CFS_RUNOUT_REFILL(self, gcmd):
         # Stock BOX_CHECK_MATERIAL_REFILL: the loaded slot ran out mid-print
         # and another slot holds the same filament. Klipper has already
@@ -1935,18 +2547,27 @@ class K2CFS:
             if self.runout_push_length > 0:
                 self.gcode.run_script_from_command(
                     "M83\nG1 E%.1f F300\nM400" % self.runout_push_length)
-            old_mask = self._run_query('MEASURING').get('active_mask', 0)
+            old_mask = self._measuring().get('active_mask', 0)
             if old_mask not in (0, mask):
                 # The empty slot is still selected: put the box idle
                 self._best_effort_stop(old_mask)
-                old_mask = self._run_query('MEASURING').get('active_mask', 0)
+                old_mask = self._measuring().get('active_mask', 0)
                 if old_mask not in (0, mask):
                     raise gcmd.error(
                         "the CFS still selects mask 0x%02x" % old_mask)
             load_gcmd = self.gcode.create_gcode_command(
                 "CFS_LOAD", "", {"SLOT": slot, "CONFIRM": "1", "CHANGE": "1"})
             self.cmd_CFS_LOAD(load_gcmd)
-            self.cmd_CFS_PURGE(load_gcmd)
+            if self.runout_purge_length:
+                # Same material and colour: a short purge (no colour-change
+                # opening push) clears the joint with the old tail
+                purge_gcmd = self.gcode.create_gcode_command(
+                    "CFS_PURGE", "", {
+                        "CONFIRM": "1", "SHORT": "1",
+                        "LENGTH": "%.1f" % self.runout_purge_length})
+            else:
+                purge_gcmd = load_gcmd
+            self.cmd_CFS_PURGE(purge_gcmd)
             self.gcode.run_script_from_command("NOZZLE_WIPE CONFIRM=1")
             # The purge ends with a retract; push it back so the first
             # millimetres after RESUME are not thin (a visible line)
@@ -2003,8 +2624,7 @@ class K2CFS:
         slot_index = ord(slot) - ord('A')
         if not slots_loaded or not slots_loaded[slot_index]:
             raise gcmd.error("CFS slot %s does not report filament" % slot)
-        measuring = self._run_query('MEASURING')
-        active_mask = measuring.get('active_mask', 0)
+        active_mask = self._path_mask(self._measuring())
         nozzle_loaded = self._nozzle_has_filament() is True
 
         mask_to_slot = {
@@ -2027,7 +2647,7 @@ class K2CFS:
                         " rewinding the others (mask 0x%02x)"
                         % (active_mask, mask_to_slot[hub], stray))
                     self._finish_unload(stray, report_error=False)
-                    active_mask = self._run_query('MEASURING').get(
+                    active_mask = self._measuring().get(
                         'active_mask', 0)
             if nozzle_loaded:
                 active_slot = mask_to_slot.get(active_mask)
@@ -2063,7 +2683,7 @@ class K2CFS:
                         'SET_BOX_MODE IDLE',
                         [0xff, 0x04, 0x00, self.MODE_IDLE])
                     self._finish_unload(active_mask, report_error=False)
-                    left = self._run_query('MEASURING').get('active_mask', 0)
+                    left = self._measuring().get('active_mask', 0)
                     if left:
                         raise gcmd.error(
                             "CFS still selects mask 0x%02x after a rewind; "
