@@ -155,6 +155,10 @@ class K2CFS:
         self.clean_accel = config.getfloat(
             'clean_accel', 5000., above=0., maxval=5000.)
         self.cutter_x = config.getfloat('cutter_x', 10.)
+        # Runout refill: filament pushed through at the chute before the
+        # new slot loads (stock runout_gcode pushes E30)
+        self.runout_push_length = config.getfloat(
+            'runout_push_length', 30., minval=0., maxval=60.)
         self.cutter_y = config.getfloat('cutter_y', 150.)
         self.cutter_speed = config.getfloat(
             'cutter_speed', 100., above=0.)
@@ -313,6 +317,9 @@ class K2CFS:
         self.gcode.register_command(
             'CFS_TOOLCHANGE', self.cmd_CFS_TOOLCHANGE,
             desc="Change to another CFS slot during a print")
+        self.gcode.register_command(
+            'CFS_RUNOUT_REFILL', self.cmd_CFS_RUNOUT_REFILL,
+            desc="From a runout pause: load SLOT (same filament) and resume")
         self.gcode.register_command(
             'CFS_PRELOAD', self.cmd_CFS_PRELOAD,
             desc="Turn CFS pre-loading and buffer tension on (idle) or off")
@@ -1813,6 +1820,67 @@ class K2CFS:
             "(cut/unload %.0fs, load %.0fs, purge %.0fs, return %.0fs)"
             % ((old_slot, slot, timings[-1] - timings[0])
                + tuple(b - a for a, b in zip(timings, timings[1:]))))
+
+    def cmd_CFS_RUNOUT_REFILL(self, gcmd):
+        # Stock BOX_CHECK_MATERIAL_REFILL: the loaded slot ran out mid-print
+        # and another slot holds the same filament. Klipper has already
+        # paused and parked (pause_on_runout). Push the old tail through at
+        # the chute, release the empty slot, load and purge the new one,
+        # wipe, then RESUME. Any failure leaves the print paused, as before.
+        slot = gcmd.get('SLOT').upper()
+        if slot not in self.SLOT_MASKS:
+            raise gcmd.error("SLOT must be one of A, B, C, D")
+        print_stats = self.printer.lookup_object('print_stats', None)
+        state = print_stats.get_status(0.).get('state', '') \
+            if print_stats is not None else ''
+        if state != 'paused':
+            raise gcmd.error(
+                "CFS_RUNOUT_REFILL runs from a runout pause (state is %s)"
+                % (state or "unknown"))
+        if self.print_start_transaction:
+            raise gcmd.error("A CFS transaction is already active")
+        mask = self.SLOT_MASKS[slot]
+        self.print_start_transaction = True
+        try:
+            self._require_actuation(gcmd)
+            self._require_hot_extruder(gcmd)
+            if self._nozzle_has_filament() is True:
+                raise gcmd.error("the nozzle sensor still sees filament")
+            self._ensure_purge_position(gcmd)
+            if self.runout_push_length > 0:
+                self.gcode.run_script_from_command(
+                    "M83\nG1 E%.1f F300\nM400" % self.runout_push_length)
+            old_mask = self._run_query('MEASURING').get('active_mask', 0)
+            if old_mask not in (0, mask):
+                # The empty slot is still selected: put the box idle
+                self._best_effort_stop(old_mask)
+                old_mask = self._run_query('MEASURING').get('active_mask', 0)
+                if old_mask not in (0, mask):
+                    raise gcmd.error(
+                        "the CFS still selects mask 0x%02x" % old_mask)
+            load_gcmd = self.gcode.create_gcode_command(
+                "CFS_LOAD", "", {"SLOT": slot, "CONFIRM": "1", "CHANGE": "1"})
+            self.cmd_CFS_LOAD(load_gcmd)
+            self.cmd_CFS_PURGE(load_gcmd)
+            self.gcode.run_script_from_command("NOZZLE_WIPE CONFIRM=1")
+        except Exception as e:
+            self._best_effort_stop(mask)
+            self.status.update({
+                'feed_enabled': False,
+                'box_mode_code': self.BOX_MODE_IDLE,
+                'box_mode': 'idle',
+            })
+            self.status['last_runout_refill'] = "failed: %s" % (str(e)[:80],)
+            gcmd.respond_raw(
+                "!! Automatic refill from slot %s failed (%s). The print "
+                "stays paused: load filament, then RESUME." % (slot, e))
+            return
+        finally:
+            self.print_start_transaction = False
+        self.status['last_runout_refill'] = slot
+        gcmd.respond_info(
+            "Runout: refilled from slot %s, resuming the print" % slot)
+        self.gcode.run_script_from_command("RESUME")
 
     def cmd_CFS_PRINT_START(self, gcmd):
         self._require_print_start(gcmd)

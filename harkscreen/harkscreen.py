@@ -58,6 +58,7 @@ OBJECTS = {
     "webhooks": ["state", "state_message"],
     "idle_timeout": ["state"],
     "pa_pressure_log": ["last"],
+    "hark_update": ["installed", "latest", "update_available", "updating"],
 }
 
 # The last PA calibration result the user has dismissed (its stamp)
@@ -1199,6 +1200,14 @@ class Screen:
                 pr.get("max_z_velocity", 0), pr.get("max_z_accel", 0)),
              None),
         ]
+        upd = st.get("hark_update", {})
+        update_ready = bool(upd.get("update_available")) and not upd.get("updating")
+        if upd.get("updating"):
+            rows.append(("Software", "updating...", None))
+        elif update_ready:
+            rows.append(("Update", "%s: tap" % upd.get("latest", "?"), False))
+        elif upd.get("installed"):
+            rows.append(("Software", upd.get("installed"), None))
         cw = (x1 - x0 - 3 * pad) // 2
         per_col = 5
         rh = (y1 - y0 - pad - per_col * 10) // per_col
@@ -1216,6 +1225,12 @@ class Screen:
                       anchor="lm")
             self.text(d, (cx + cw - 14, cy + rh // 2), value, "xs",
                       anchor="rm")
+            printing = st.get("print_stats", {}).get("state") in ("printing", "paused")
+            if label == "Update" and update_ready and not printing:
+                self.buttons.append((cx, cy, cx + cw, cy + rh, (
+                    "confirm", "Update to %s? Settings are kept; the printer "
+                    "restarts (about 2 min)." % upd.get("latest", "?"),
+                    "OKL_UPDATE CONFIRM=1")))
 
     # --- CFS slot editor (idle only) -------------------------------------
     FILTERS = ("All", "PLA", "PETG", "ABS", "TPU", "Other")

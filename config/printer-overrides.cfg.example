@@ -1,0 +1,23 @@
+# printer-overrides.cfg: YOUR settings for this printer.
+#
+# k2-openklipper.cfg (next to this file) is the managed open-stack config: it
+# is replaced from the installed build on every start and every update, so
+# never edit it. This file is loaded after it, so anything here wins, and
+# updates never touch it.
+#
+# To change a setting, repeat its section header here with only the options
+# you want to change. For example, a lower nozzle on the first layer:
+#
+#   [gcode_macro START_PRINT]
+#   variable_hot_z_comp: 0.05
+#
+# or a different input shaper result:
+#
+#   [input_shaper]
+#   shaper_freq_x: 52.0
+
+# Extruder, set by the installer (stock Creality extruder or Phaetus DXC2):
+# cut depth and the pull-back after each cut. See docs/INSTALL.md.
+[k2_cfs]
+cutter_cut_x: __CUT_X__
+unload_pull_length: __PULL__

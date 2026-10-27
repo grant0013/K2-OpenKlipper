@@ -2,6 +2,33 @@
 
 ## Unreleased (since v0.2.0-alpha.1)
 
+### Updates and settings
+
+- Updates from GitHub releases only (tested versions, never branches): a
+  dialog in Mainsail with **Update now**, an **Update** row on the
+  touchscreen's Machine page, `OKL_UPDATE_CHECK` / `OKL_UPDATE CONFIRM=1`
+  (`[hark_update]`), and `install.sh --update`. Never offers an older version.
+- The configuration is now `k2-openklipper.cfg` (managed, refreshed from the
+  installed version on every start) plus `printer-overrides.cfg` (this
+  printer's settings, loaded last, never touched by updates). The first
+  update moves a v0.2 install's settings across. SAVE_CONFIG blocks in
+  printer.cfg are kept.
+- `creality-update.sh`: saves your settings to the G-code folder and returns
+  the printer to stock for a Creality firmware update; the installer restores
+  them afterwards.
+
+### Stock features
+
+- Runout auto-refill: `CFS_RUNOUT_REFILL` loads another slot with the same
+  material and colour from the runout pause and resumes; if none matches, or
+  anything fails, the print stays paused as before.
+- Automatic chamber fan: the exhaust fan vents above the chamber target (35C,
+  stock's watermark) while printing; M141/M191 set the target; an explicit
+  M106 P1 / M107 P1 wins for that print.
+- Creality's Fluidd page (4408) talks to the open stack's Moonraker.
+- No nginx access logs: on the K2 they live in RAM, and a camera-polling tab
+  filled 222 MB overnight.
+
 ### Installer
 
 - `install.sh` / `uninstall.sh`: one-command install next to the stock

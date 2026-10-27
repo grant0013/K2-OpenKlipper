@@ -131,10 +131,17 @@ reasons for each line are in [config/ORCA-K2-PROFILE.cfg](../config/ORCA-K2-PROF
    up, homes, loads and purges the slot, cleans the nozzle, measures Z with the
    nozzle strain gauge, scrapes the nozzle on the bed strip, probes the mesh and
    prints a prime line. That takes about 5 minutes, all shown in Mainsail.
-3. Watch the first layer. If it does not stick or looks too squashed, the
-   first-layer correction is `variable_hot_z_comp` in the `START_PRINT` macro
-   (Mainsail > Machine > `k2-mainline-20260729-v62.cfg`; 0.04 mm on our printer;
-   bigger = nozzle lower).
+3. Watch the first layer. If it does not stick or looks too squashed, change
+   the first-layer correction in **`printer-overrides.cfg`** (Mainsail >
+   Machine): add
+
+   ```ini
+   [gcode_macro START_PRINT]
+   variable_hot_z_comp: 0.05
+   ```
+
+   (0.04 mm by default; bigger = nozzle lower), save and restart. See
+   "Your settings" below.
 4. Optional: make the touchscreen your own (name, logo, colours):
    [customising the screen](SCREEN-CUSTOMISE.md).
 5. Optional, per filament slot: pressure advance measured by the nozzle strain
@@ -156,9 +163,51 @@ Creality's services. Your G-code files are not touched, and the open-stack
 files stay on the printer so `install.sh` can bring it back. To delete them as
 well: `sh /mnt/UDISK/k2-mainline-20260729-v62/uninstall.sh --purge`.
 
-Run the uninstall before installing a Creality firmware update. If a Creality
-update ever replaces the system anyway, the printer simply comes back as
-stock; run the install again afterwards.
+## Your settings
+
+The configuration is two files in Mainsail's **Machine** page:
+
+- **`k2-openklipper.cfg`**: the open-stack configuration. It is managed:
+  replaced from the installed version on every start and every update, so
+  never edit it.
+- **`printer-overrides.cfg`**: your printer's own settings, loaded last so they
+  win. Updates never touch it. To change a setting, repeat its section header
+  with only the options you want to change, for example
+  `[gcode_macro START_PRINT]` and `variable_hot_z_comp: 0.05`. The installer
+  puts your extruder settings here.
+
+## Updates
+
+New versions come from this project's **GitHub releases**: versions tested on
+a K2 before they are released, never unreleased work. When one is out:
+
+- Mainsail shows a **K2 OpenKlipper update** dialog (while the printer is idle)
+  with **Update now**, and
+- the touchscreen's **Machine** page shows an **Update** row you can tap.
+
+Or from Mainsail's console: `OKL_UPDATE_CHECK` to check, `OKL_UPDATE CONFIRM=1`
+to install. Over SSH: `sh /mnt/UDISK/k2-mainline-20260729-v62/install.sh --update`.
+
+An update keeps `printer-overrides.cfg`, your touchscreen theme, CFS slot data
+and Mainsail settings, backs up first, and restarts Klipper (about 2 minutes).
+It is refused while printing. A printer installed before v0.3.0 has its
+settings moved into `printer-overrides.cfg` on the first update.
+
+## Creality firmware updates
+
+While K2 OpenKlipper is installed, Creality's updater is switched off: a
+Creality update once wiped an earlier install. To update Creality's firmware
+safely:
+
+```sh
+sh /mnt/UDISK/k2-mainline-20260729-v62/creality-update.sh
+```
+
+It saves your settings to the G-code folder (`okl-settings-backup-<date>.tar.gz`,
+also downloadable from Mainsail), puts the printer back to stock, and tells you
+the next steps: reboot, update from the touchscreen as usual, then run the
+install command (steps 3 to 5) again. The installer finds the backup and
+restores your settings.
 
 ## What the installer changes
 
@@ -169,7 +218,7 @@ stock; run the install again afterwards.
 | `/mnt/UDISK/mainsail-mainline`, `harkscreen`, `harkcam` | Web interface, touchscreen app, camera stream |
 | `/etc/init.d/app` | Edited in place: master-server, Monitor and upgrade-server are removed from its start list (they would fight Klipper for the printer, and allow an OTA). Nothing else in Creality's file changes |
 | `/etc/rc.local` | One line: start the open stack 30 s after boot while `/mnt/UDISK/.system/boot-mainline` exists |
-| `/etc/nginx/nginx.conf` | Adds Mainsail on port 4409. Creality's Fluidd page on 4408 stays but talks to the stock Moonraker, which is switched off: use Mainsail |
+| `/etc/nginx/nginx.conf` | Adds Mainsail on port 4409; Creality's Fluidd page on 4408 now talks to the open stack too. No access logs (they live in RAM) |
 | Moonraker | A second instance on port 7126; the stock one on 7125 is switched off |
 
 All of these are backed up in `/mnt/UDISK/openklipper-backups/` first. Nothing
@@ -180,7 +229,7 @@ settings are only ever written to RAM, so a power cycle restores them.
 
 - **Colour-change cuts are incomplete** (the CFS reports it cannot pull the
   filament back, or a strand stays in the extruder): the cutter does not go in
-  far enough. In Mainsail, make `cutter_cut_x` in the printer config 0.2 to
+  far enough. In Mainsail, make `cutter_cut_x` in `printer-overrides.cfg` 0.2 to
   0.4 more negative (allowed range -10 to -5), save, and restart.
 
 - **Mainsail says Klipper is not ready, or homing fails after a restart:**

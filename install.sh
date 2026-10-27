@@ -1,29 +1,40 @@
 #!/bin/sh
 # K2 OpenKlipper installer. Run on the K2 as root (SSH in first, see
 # docs/INSTALL.md). Installs next to the stock firmware: nothing of Creality's
-# is deleted, every file it replaces is backed up first, and uninstall.sh puts
+# is deleted, every file it changes is backed up first, and uninstall.sh puts
 # the printer back to stock.
 #
-#   sh install.sh            install (downloads the release unless run from an
-#                            unpacked copy of this repository)
+#   sh install.sh            install the latest release (downloads it, unless
+#                            run from an unpacked copy of this repository)
+#   sh install.sh --update   update to the latest release, keeping this
+#                            printer's settings (printer-overrides.cfg, the
+#                            touchscreen theme, Moonraker and slot data)
 #   sh install.sh --check    only check the printer, change nothing
 #
-# Environment: OKL_REF=<tag or branch> (default below), OKL_FORCE=1 to install
-# on a model other than the K2 / K2 Combo (F021), at your own risk,
-# OKL_EXTRUDER=stock|dxc2 to answer the extruder question in advance.
+# Environment: OKL_REF=<tag or branch> to install something other than the
+# latest release, OKL_FORCE=1 to install on a model other than the K2 / K2
+# Combo (F021), at your own risk, OKL_EXTRUDER=stock|dxc2 to answer the
+# extruder question in advance.
 set -eu
 
 REPO=grant0013/K2-OpenKlipper
-REF=${OKL_REF:-main}
+REF=${OKL_REF:-}
 BUILD=/mnt/UDISK/k2-mainline-20260729-v62
 PDATA=/mnt/UDISK/printer_data_mainline
+CONF=$PDATA/config
 FLAGS=/mnt/UDISK/.system
 STAMP=$(date +%Y%m%d-%H%M%S)
 BACKUP=/mnt/UDISK/openklipper-backups/$STAMP
-CHECK=0
-[ "${1:-}" = "--check" ] && CHECK=1
+MODE=install
+case "${1:-}" in
+    --check) MODE=check ;;
+    --update) MODE=update ;;
+    "") ;;
+    *) echo "usage: sh install.sh [--check|--update]"; exit 2 ;;
+esac
 
 say() { echo "==> $*"; }
+die() { echo "STOPPED: $*" >&2; exit 1; }
 
 # Remove master-server, upgrade-server and Monitor from APP_LIST in Creality's
 # /etc/init.d/app (in place; the original is backed up). --check only tests
@@ -54,7 +65,21 @@ open(path, "w").write(text)
 print("ok")
 PY
 }
-die() { echo "STOPPED: $*" >&2; exit 1; }
+
+# Read option values from a Klipper config file: cfg_values FILE SECTION KEY...
+cfg_values() {
+    python3 - "$@" <<'PY'
+import configparser, sys
+path, section, keys = sys.argv[1], sys.argv[2], sys.argv[3:]
+cp = configparser.RawConfigParser(strict=False, inline_comment_prefixes=(";", "#"))
+try:
+    with open(path) as f:
+        cp.read_string("\n".join(l for l in f.read().split("\n") if not l.startswith("#*#")))
+    print(" ".join(cp.get(section, k).split()[0] if cp.has_option(section, k) else "-" for k in keys))
+except Exception:
+    print(" ".join("-" for k in keys))
+PY
+}
 
 # ---------------------------------------------------------------- checks
 say "Checking the printer"
@@ -63,9 +88,10 @@ grep -q OpenWrt /etc/os-release 2>/dev/null || die "this is not a Creality K2 (n
 command -v python3 >/dev/null || die "python3 not found"
 
 MODEL=$(head -1 /mnt/UDISK/printer_data/config/printer.cfg 2>/dev/null | tr -dc 'A-Z0-9')
-VERSION=$(fw_printenv version 2>/dev/null | cut -d= -f2)
-[ -n "$VERSION" ] || VERSION=unknown
-echo "    model: ${MODEL:-unknown}   Creality firmware: $VERSION"
+FW=$(fw_printenv version 2>/dev/null | cut -d= -f2)
+[ -n "$FW" ] || FW=unknown
+INSTALLED=$(cat "$BUILD/VERSION" 2>/dev/null || echo none)
+echo "    model: ${MODEL:-unknown}   Creality firmware: $FW   installed K2 OpenKlipper: $INSTALLED"
 case "$MODEL" in
     F021) ;;
     F012|F008)
@@ -73,10 +99,13 @@ case "$MODEL" in
         echo "    WARNING: $MODEL is untested, continuing because OKL_FORCE=1" ;;
     *)  [ "${OKL_FORCE:-0}" = 1 ] || die "unknown model '$MODEL' (expected F021)" ;;
 esac
-case "$VERSION" in
+case "$FW" in
     1.1.7.0) ;;
-    *) echo "    NOTE: tested on Creality firmware 1.1.7.0; yours is $VERSION" ;;
+    *) echo "    NOTE: tested on Creality firmware 1.1.7.0; yours is $FW" ;;
 esac
+if [ "$MODE" = update ] && [ "$INSTALLED" = none ] && [ ! -d "$BUILD" ]; then
+    die "K2 OpenKlipper is not installed here; run sh install.sh"
+fi
 
 FREE_MB=$(df -m /mnt/UDISK | awk 'NR==2 {print $4}')
 echo "    free space on /mnt/UDISK: ${FREE_MB} MB"
@@ -100,37 +129,62 @@ case "$STATE" in
     printing|paused) die "a print is $STATE. Finish or cancel it first" ;;
 esac
 
-# Extruder: the stock Creality one, or a Phaetus DXC2 (it needs longer
-# post-cut pulls, per Phaetus' K2 instructions, and a deeper cut).
-EXTRUDER=${OKL_EXTRUDER:-}
-if [ -z "$EXTRUDER" ]; then
-    ANSWER=""
-    if [ -t 0 ] || (: < /dev/tty) 2>/dev/null; then
-        echo ""
-        echo "    Which extruder is fitted to this printer?"
-        echo "      1) Stock Creality extruder (as shipped)"
-        echo "      2) Phaetus DXC2 upgrade"
-        printf "    Enter 1 or 2 [1]: "
-        if [ -t 0 ]; then
-            read ANSWER || ANSWER=1
-        else
-            read ANSWER < /dev/tty || ANSWER=1
-        fi
-    else
-        echo "    No terminal to ask on: assuming the stock extruder (set OKL_EXTRUDER=dxc2 for a DXC2)"
-    fi
-    case "$ANSWER" in
-        2) EXTRUDER=dxc2 ;;
-        *) EXTRUDER=stock ;;
-    esac
+# Where this printer's settings come from: an existing printer-overrides.cfg is
+# kept; a v0.2 install (one edited config) is migrated; otherwise ask.
+LEGACY_CFG="$CONF/$(basename "$BUILD").cfg"
+# A settings backup made by creality-update.sh before a Creality update
+SETTINGS_BACKUP=""
+if [ ! -f "$CONF/printer-overrides.cfg" ] && [ ! -f "$LEGACY_CFG" ]; then
+    SETTINGS_BACKUP=$(ls -t /mnt/UDISK/printer_data/gcodes/okl-settings-backup-*.tar.gz 2>/dev/null | head -1 || true)
 fi
-case "$EXTRUDER" in
-    stock|dxc2) ;;
-    *) die "OKL_EXTRUDER must be stock or dxc2" ;;
-esac
-# The printer's own Creality cutter calibration, if the stock config has one
-STOCK_CUT=$(grep -h "^#\*# cut_pos_x" /mnt/UDISK/printer_data/config/printer.cfg 2>/dev/null | tail -1 | awk '{print $NF}')
-CUT_X=$(python3 - "$EXTRUDER" "${STOCK_CUT:-}" <<'PY'
+if [ -n "$SETTINGS_BACKUP" ] && tar -tzf "$SETTINGS_BACKUP" 2>/dev/null | grep -q "config/printer-overrides.cfg"; then
+    SETTINGS=restore
+    echo "    settings: restoring $(basename "$SETTINGS_BACKUP") (made before a Creality update)"
+elif [ -f "$CONF/printer-overrides.cfg" ]; then
+    SETTINGS=keep
+    echo "    settings: keeping printer-overrides.cfg"
+elif [ -f "$LEGACY_CFG" ]; then
+    SETTINGS=migrate
+    set -- $(cfg_values "$LEGACY_CFG" k2_cfs cutter_cut_x unload_pull_length)
+    CUT_X=$1; PULL=$2
+    HOTZ=$(cfg_values "$LEGACY_CFG" "gcode_macro START_PRINT" variable_hot_z_comp)
+    [ "$CUT_X" = "-" ] && CUT_X=-7.2
+    [ "$PULL" = "-" ] && PULL=10
+    echo "    settings: moving your $(basename "$LEGACY_CFG") values into printer-overrides.cfg"
+    echo "              (cutter_cut_x $CUT_X, unload_pull_length $PULL, hot_z_comp ${HOTZ})"
+else
+    SETTINGS=new
+    # Extruder: the stock Creality one, or a Phaetus DXC2 (it needs longer
+    # post-cut pulls, per Phaetus' K2 instructions, and a deeper cut).
+    EXTRUDER=${OKL_EXTRUDER:-}
+    if [ -z "$EXTRUDER" ]; then
+        ANSWER=""
+        if [ -t 0 ] || (: < /dev/tty) 2>/dev/null; then
+            echo ""
+            echo "    Which extruder is fitted to this printer?"
+            echo "      1) Stock Creality extruder (as shipped)"
+            echo "      2) Phaetus DXC2 upgrade"
+            printf "    Enter 1 or 2 [1]: "
+            if [ -t 0 ]; then
+                read ANSWER || ANSWER=1
+            else
+                read ANSWER < /dev/tty || ANSWER=1
+            fi
+        else
+            echo "    No terminal to ask on: assuming the stock extruder (set OKL_EXTRUDER=dxc2 for a DXC2)"
+        fi
+        case "$ANSWER" in
+            2) EXTRUDER=dxc2 ;;
+            *) EXTRUDER=stock ;;
+        esac
+    fi
+    case "$EXTRUDER" in
+        stock|dxc2) ;;
+        *) die "OKL_EXTRUDER must be stock or dxc2" ;;
+    esac
+    # The printer's own Creality cutter calibration, if the stock config has one
+    STOCK_CUT=$(grep -h "^#\*# cut_pos_x" /mnt/UDISK/printer_data/config/printer.cfg 2>/dev/null | tail -1 | awk '{print $NF}')
+    CUT_X=$(python3 - "$EXTRUDER" "${STOCK_CUT:-}" <<'PY'
 import sys
 extruder, stock = sys.argv[1], sys.argv[2]
 try:
@@ -147,8 +201,9 @@ else:
 print("%.2f" % max(-10.0, min(-5.0, cut)))
 PY
 )
-if [ "$EXTRUDER" = dxc2 ]; then PULL=20; else PULL=10; fi
-echo "    extruder: $EXTRUDER   cutter depth X$CUT_X   post-cut pulls 3 x ${PULL} mm + 10 mm${STOCK_CUT:+   (Creality calibration $STOCK_CUT)}"
+    if [ "$EXTRUDER" = dxc2 ]; then PULL=20; else PULL=10; fi
+    echo "    extruder: $EXTRUDER   cutter depth X$CUT_X   post-cut pulls 3 x ${PULL} mm + 10 mm${STOCK_CUT:+   (Creality calibration $STOCK_CUT)}"
+fi
 
 APPINIT=$(appinit_edit /etc/init.d/app --check)
 case "$APPINIT" in
@@ -160,14 +215,57 @@ if [ -f "$FLAGS/boot-hostlink" ]; then
     die "this K2 is set up for an external host PC (boot-hostlink). Remove that setup first"
 fi
 
-if [ "$CHECK" = 1 ]; then
+# Which version: the latest release unless OKL_REF says otherwise. Users only
+# ever get versions that were tested and tagged; main is not installed by
+# default.
+if [ -z "$REF" ]; then
+    REF=$(python3 - "$REPO" <<'PY'
+import json, sys, urllib.request
+try:
+    req = urllib.request.Request("https://api.github.com/repos/%s/releases?per_page=10" % sys.argv[1],
+                                 headers={"Accept": "application/vnd.github+json", "User-Agent": "k2-openklipper"})
+    rel = [r for r in json.load(urllib.request.urlopen(req, timeout=30)) if not r.get("draft")]
+    print(rel[0]["tag_name"] if rel else "main")
+except Exception:
+    print("main")
+PY
+)
+fi
+echo "    version to install: $REF"
+if [ "$MODE" = update ] && [ -z "${OKL_REF:-}" ]; then
+    NEWER=$(python3 - "$REF" "$INSTALLED" <<'PY'
+import re, sys
+def key(v):
+    v = (v or "").strip().lstrip("vV")
+    main, _, pre = v.partition("-")
+    nums = tuple(int(n) for n in re.findall(r"\d+", main)[:3])
+    nums += (0,) * (3 - len(nums))
+    if not pre:
+        return nums, (9, 0)
+    rank = {"alpha": 0, "beta": 1, "rc": 2}.get(re.sub(r"[^a-z]", "", pre.lower()), 0)
+    num = re.findall(r"\d+", pre)
+    return nums, (rank, int(num[0]) if num else 0)
+try:
+    print("yes" if key(sys.argv[1]) > key(sys.argv[2]) else "no")
+except Exception:
+    print("yes")
+PY
+)
+    if [ "$NEWER" != yes ]; then
+        say "Already up to date ($INSTALLED; newest release $REF). Nothing to do."
+        exit 0
+    fi
+fi
+
+if [ "$MODE" = check ]; then
     say "Checks passed. Nothing was changed (--check)."
     exit 0
 fi
 
 # ---------------------------------------------------------------- source
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-if [ -f "$HERE/klippy/klippy.py" ] && [ -f "$HERE/config/mainline_stage2.cfg" ]; then
+if [ "$MODE" = install ] && [ "$HERE" != "$BUILD" ] \
+        && [ -f "$HERE/klippy/klippy.py" ] && [ -f "$HERE/config/mainline_stage2.cfg" ]; then
     SRC=$HERE
     say "Installing from $SRC"
 else
@@ -190,7 +288,7 @@ PY
     SRC=$(find "$TMP" -maxdepth 1 -type d -name 'K2-OpenKlipper-*' | head -1)
     [ -n "$SRC" ] && [ -f "$SRC/klippy/klippy.py" ] || die "download did not unpack as expected"
 fi
-[ "$SRC" = "$BUILD" ] && die "run install.sh from a download or a copy, not from $BUILD itself"
+NEW_VERSION=$(cat "$SRC/VERSION" 2>/dev/null || echo "$REF")
 
 # ---------------------------------------------------------------- backup
 say "Backing up to $BACKUP"
@@ -203,7 +301,16 @@ cp -a /usr/share/moonraker/components/update_manager/update_manager.py "$BACKUP/
 cp -a /usr/share/moonraker/.version "$BACKUP/moonraker.version" 2>/dev/null || true
 [ -e /etc/init.d/moonraker-mainline ] && cp -a /etc/init.d/moonraker-mainline "$BACKUP/moonraker-mainline.init"
 /etc/init.d/moonraker enabled 2>/dev/null && touch "$BACKUP/stock-moonraker-was-enabled" || true
-[ -d "$PDATA/config" ] && cp -a "$PDATA/config" "$BACKUP/printer_data_mainline-config"
+# On an update or reinstall the system files are already ours: carry the
+# first install's copies of Creality's originals forward, so uninstall.sh
+# still restores stock.
+PREV=$(cat /mnt/UDISK/openklipper-backups/LATEST 2>/dev/null || true)
+if [ "$APPINIT" = already ] && [ -n "$PREV" ] && [ -f "$PREV/app.init" ]; then
+    for f in app.init rc.local nginx.conf moonraker-stock.conf update_manager.py moonraker.version stock-moonraker-was-enabled; do
+        [ -e "$PREV/$f" ] && cp -a "$PREV/$f" "$BACKUP/$f"
+    done
+fi
+[ -d "$CONF" ] && cp -a "$CONF" "$BACKUP/printer_data_mainline-config"
 [ -e "$BUILD" ] && mv "$BUILD" "$BACKUP/build.previous"
 for d in mainsail-mainline harkscreen harkcam; do
     [ -e "/mnt/UDISK/$d" ] && mv "/mnt/UDISK/$d" "$BACKUP/$d.previous"
@@ -211,13 +318,14 @@ done
 echo "$BACKUP" > /mnt/UDISK/openklipper-backups/LATEST
 
 # ---------------------------------------------------------------- files
-say "Installing the open stack to $BUILD"
+say "Installing K2 OpenKlipper $NEW_VERSION to $BUILD"
 cp -a "$SRC" "$BUILD"
-chmod 755 "$BUILD/switch-to-mainline.sh" "$BUILD/switch-to-stock.sh" \
+echo "$NEW_VERSION" > "$BUILD/VERSION"
+chmod 755 "$BUILD/switch-to-mainline.sh" "$BUILD/switch-to-stock.sh" "$BUILD/install.sh" "$BUILD/creality-update.sh" \
     "$BUILD/system/moonraker-mainline.init" "$BUILD/uninstall.sh" 2>/dev/null || true
 python3 -m py_compile "$BUILD/system/moonraker-compat/update_manager.py"
 
-mkdir -p "$PDATA/config" "$PDATA/logs" "$FLAGS"
+mkdir -p "$CONF" "$PDATA/logs" "$FLAGS"
 # Share the stock G-code library. This must exist before Moonraker first
 # starts, or Moonraker creates an empty gcodes folder of its own.
 if [ -d "$PDATA/gcodes" ] && [ ! -L "$PDATA/gcodes" ] && [ -z "$(ls -A "$PDATA/gcodes")" ]; then
@@ -225,31 +333,44 @@ if [ -d "$PDATA/gcodes" ] && [ ! -L "$PDATA/gcodes" ] && [ -z "$(ls -A "$PDATA/g
 fi
 [ -e "$PDATA/gcodes" ] || ln -s /mnt/UDISK/printer_data/gcodes "$PDATA/gcodes"
 cp -a "$BUILD/system/mainsail" /mnt/UDISK/mainsail-mainline
-[ -f "$PDATA/config/moonraker.conf" ] || cp "$BUILD/system/moonraker-mainline.conf" "$PDATA/config/moonraker.conf"
+[ -f "$CONF/moonraker.conf" ] || cp "$BUILD/system/moonraker-mainline.conf" "$CONF/moonraker.conf"
 cp "$BUILD/system/moonraker-mainline.init" /etc/init.d/moonraker-mainline
 chmod 755 /etc/init.d/moonraker-mainline
 cp "$BUILD/system/moonraker-compat/update_manager.py" /usr/share/moonraker/components/update_manager/update_manager.py
 cp "$BUILD/system/moonraker-compat/.version" /usr/share/moonraker/.version
 
-# Printer configuration: seeded once (later edits in Mainsail are kept), with
-# the extruder settings chosen above.
-BUILD_CFG="$PDATA/config/$(basename "$BUILD").cfg"
-if [ ! -f "$BUILD_CFG" ]; then
-    cp "$BUILD/config/mainline_stage2.cfg" "$BUILD_CFG"
-    sed -i -e "s/^cutter_cut_x: .*/cutter_cut_x: $CUT_X/" \
-           -e "s/^unload_pull_length: .*/unload_pull_length: $PULL/" "$BUILD_CFG"
-    echo "    printer config: extruder $EXTRUDER (cutter_cut_x $CUT_X, unload_pull_length $PULL)"
-else
-    echo "    printer config: keeping your existing $(basename "$BUILD_CFG") (extruder settings unchanged)"
-fi
+# Printer configuration: k2-openklipper.cfg (managed, written by the switch
+# script on every start) plus printer-overrides.cfg (this printer's settings,
+# never touched by updates).
+case "$SETTINGS" in
+    keep) ;;
+    restore)
+        tar -xzf "$SETTINGS_BACKUP" -C "$PDATA"
+        rm -f "$CONF/k2-openklipper.cfg"
+        echo "    printer config: settings restored from $(basename "$SETTINGS_BACKUP")"
+        ;;
+    new|migrate)
+        sed -e "s/__CUT_X__/$CUT_X/" -e "s/__PULL__/$PULL/" \
+            "$BUILD/config/printer-overrides.cfg.example" > "$CONF/printer-overrides.cfg"
+        if [ "$SETTINGS" = migrate ]; then
+            if [ "${HOTZ:-"-"}" != "-" ]; then
+                printf '\n# First-layer correction carried over from your previous config\n[gcode_macro START_PRINT]\nvariable_hot_z_comp: %s\n' "$HOTZ" >> "$CONF/printer-overrides.cfg"
+            fi
+            mv "$LEGACY_CFG" "$LEGACY_CFG.pre-v0.3"
+            echo "    your old config is kept as $(basename "$LEGACY_CFG").pre-v0.3: copy any other"
+            echo "    settings you changed into printer-overrides.cfg"
+        fi
+        echo "    printer config: printer-overrides.cfg written (cutter_cut_x $CUT_X, unload_pull_length $PULL)"
+        ;;
+esac
 
 # Touchscreen and camera
 cp -a "$BUILD/harkscreen" /mnt/UDISK/harkscreen
 # Default look: Klipper logo and colours. An existing harkscreen.cfg (your own
 # theme) is kept. See docs/SCREEN-CUSTOMISE.md.
-if [ ! -f "$PDATA/config/harkscreen.cfg" ]; then
-    cp "$BUILD/harkscreen/harkscreen.cfg.example" "$PDATA/config/harkscreen.cfg"
-    cp "$BUILD/harkscreen/klipper-logo.png" "$PDATA/config/klipper-logo.png"
+if [ ! -f "$CONF/harkscreen.cfg" ]; then
+    cp "$BUILD/harkscreen/harkscreen.cfg.example" "$CONF/harkscreen.cfg"
+    cp "$BUILD/harkscreen/klipper-logo.png" "$CONF/klipper-logo.png"
 fi
 cp -a "$BUILD/harkcam" /mnt/UDISK/harkcam
 chmod 755 /mnt/UDISK/harkscreen/start.sh /mnt/UDISK/harkcam/start.sh
@@ -337,7 +458,7 @@ IP=$(ip -4 addr show wlan0 2>/dev/null | awk '/inet /{sub("/.*","",$2); print $2
 [ -n "$IP" ] || IP=$(ip -4 addr show eth0 2>/dev/null | awk '/inet /{sub("/.*","",$2); print $2; exit}')
 cat <<EOF
 
-==> Done.
+==> Done: K2 OpenKlipper $NEW_VERSION.
     Mainsail:   http://${IP:-<printer-ip>}:4409/
     Backup:     $BACKUP
     Undo:       sh $BUILD/uninstall.sh

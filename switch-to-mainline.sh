@@ -29,17 +29,41 @@ mkdir -p "$PDATA/config" "$PDATA/logs"
 # Keep the running configuration inside Moonraker's visible config root.  Seed
 # each build once so later edits made in Mainsail are preserved across restarts.
 BUILD_NAME=$(basename "$MAINLINE")
-BUILD_CFG="$PDATA/config/${BUILD_NAME}.cfg"
-if [ ! -f "$BUILD_CFG" ]; then
-    cp "$CFG_SOURCE" "$BUILD_CFG"
+CONF="$PDATA/config"
+if [ -f "$CONF/printer-overrides.cfg" ]; then
+    # Managed layout (v0.3+): the open-stack config is refreshed from this
+    # build on every start, so updates reach it; the printer's own settings
+    # live in printer-overrides.cfg, which is loaded last and wins.
+    {
+        echo "# MANAGED BY K2 OpenKlipper: replaced from the installed build on every"
+        echo "# start and update. Do not edit; put changes in printer-overrides.cfg."
+        echo
+        cat "$CFG_SOURCE"
+    } > "$CONF/k2-openklipper.cfg"
+    NOTE="# k2-openklipper.cfg is managed (replaced on update); edit printer-overrides.cfg."
+    POINTER="[include k2-openklipper.cfg]
+[include printer-overrides.cfg]"
+else
+    # Legacy layout (v0.2 installs): one seeded copy, edited directly.
+    BUILD_CFG="$CONF/${BUILD_NAME}.cfg"
+    if [ ! -f "$BUILD_CFG" ]; then
+        cp "$CFG_SOURCE" "$BUILD_CFG"
+    fi
+    NOTE="# Edit ${BUILD_NAME}.cfg in Mainsail."
+    POINTER="[include ${BUILD_NAME}.cfg]"
 fi
-cat >"$PDATA/config/printer.cfg" <<EOF
-# Active open-stack configuration.
-# Edit ${BUILD_NAME}.cfg in Mainsail; this small pointer makes build rollback
-# explicit and keeps every changed setting visible in the configuration editor.
-[include ${BUILD_NAME}.cfg]
-EOF
-CFG="$PDATA/config/printer.cfg"
+# Keep any SAVE_CONFIG block Klipper appended to printer.cfg.
+SAVED=$(sed -n '/^#\*# <-* SAVE_CONFIG -*>/,$p' "$CONF/printer.cfg" 2>/dev/null)
+{
+    echo "# Active open-stack configuration."
+    echo "$NOTE"
+    echo "$POINTER"
+    if [ -n "$SAVED" ]; then
+        echo
+        echo "$SAVED"
+    fi
+} > "$CONF/printer.cfg"
+CFG="$CONF/printer.cfg"
 
 # Share the existing uploaded G-code library without duplicating it.
 if [ ! -e "$PDATA/gcodes" ]; then
