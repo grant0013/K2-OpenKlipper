@@ -20,6 +20,13 @@
 # to the client as {'data': [(print_time, raw), ...]} until the client
 # returns False, the same interface as Klipper's load_cell.
 #
+# PA_GAUGE_SETUP [SRC=0|1] [PERIOD=<s>] [CAPTURE=<name>]
+#                              settings for the next load-cell session only:
+#                              SRC=1 streams the raw ADC instead of the MCU's
+#                              processed samples, PERIOD the window restart
+#                              period, CAPTURE writes <name>_{pressure,extruder}
+#                              .csv like PA_LOG_STOP for offline analysis
+#
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import json, logging, os, subprocess, sys, time
 from .prtouch_open import zip as _zip
@@ -45,6 +52,10 @@ class PAPressureLog:
         self.src = 0
         self.clients = []
         self.client_mode = False
+        self.next_setup = {}
+        self.capture_name = None
+        self.capture_samples = []
+        self.base_period = self.period
         self.analysing = False
         self.last_result = {}
         self.reset()
@@ -53,7 +64,9 @@ class PAPressureLog:
                 ('PA_LOG_START', "Start logging the nozzle strain gauge"),
                 ('PA_LOG_MARK', "Tag the next move in the pressure log"),
                 ('PA_LOG_STOP', "Stop logging and write the CSV files"),
-                ('PA_CAL_ANALYZE', "Pick pressure advance from a PA log")):
+                ('PA_CAL_ANALYZE', "Pick pressure advance from a PA log"),
+                ('PA_GAUGE_SETUP',
+                 "Gauge settings for the next pa_tester run")):
             self.gcode.register_command(
                 name, getattr(self, 'cmd_' + name), desc=desc)
 
@@ -115,6 +128,8 @@ class PAPressureLog:
             idx += n
         self.windows += 1
         if self.client_mode:
+            if self.capture_name:
+                self.capture_samples.extend(self.samples[first:])
             self._feed_clients(self.samples[first:])
             del self.samples[:]
 
@@ -132,9 +147,14 @@ class PAPressureLog:
         self.clients.append(callback)
         if self.timer is None:
             self.reset()
-            self.src = 0
+            setup, self.next_setup = self.next_setup, {}
+            self.src = setup.get('src', 0)
+            self.period = setup.get('period', self.base_period)
+            self.capture_name = setup.get('capture')
+            self.capture_samples = []
             self.client_mode = True
             self.started_at = self.reactor.monotonic()
+            self.pulled_to = self._now_print_time() - 1.
             self.timer = self.reactor.register_timer(
                 self._poll, self.reactor.NOW)
 
@@ -155,6 +175,20 @@ class PAPressureLog:
     def _finish_client_mode(self):
         timer, self.timer = self.timer, None
         self.client_mode = False
+        self.period = self.base_period
+        if self.capture_name:
+            name, self.capture_name = self.capture_name, None
+            try:
+                self._pull_moves()
+                self.samples = self.capture_samples
+                base = self._write_csv(name)
+                logging.info("pa_pressure_log: captured %d samples, %d "
+                             "extruder moves -> %s_*", len(self.samples),
+                             len(self.moves), base)
+            except Exception:
+                logging.exception("pa_pressure_log: capture write failed")
+            self.samples = []
+            self.capture_samples = []
         self.reactor.register_callback(
             lambda et: self.reactor.unregister_timer(timer))
 
@@ -179,7 +213,8 @@ class PAPressureLog:
             s.start_streaming(min_hold=cfg.min_hold, max_hold=cfg.max_hold,
                               add_hold=cfg.add_hold)
             self.streaming = True
-            if not self.client_mode and eventtime - self.started_at > 1.:
+            if ((not self.client_mode or self.capture_name)
+                    and eventtime - self.started_at > 1.):
                 self._pull_moves()
         except Exception:
             logging.exception("pa_pressure_log: poll failed")
@@ -226,6 +261,14 @@ class PAPressureLog:
             self.streaming = False
         self._pull_moves()
         name = gcmd.get('NAME', 'pa_log')
+        base = self._write_csv(name)
+        gcmd.respond_info(
+            "PA log: %d pressure samples (%d windows), "
+            "%d extruder moves, %d marks -> %s_*"
+            % (len(self.samples), self.windows,
+               len(self.moves), len(self.marks), base))
+
+    def _write_csv(self, name):
         os.makedirs(self.out_dir, exist_ok=True)
         base = os.path.join(self.out_dir, name)
         with open(base + '_pressure.csv', 'w') as f:
@@ -241,11 +284,18 @@ class PAPressureLog:
             f.write("print_time,label\n")
             for t, label in self.marks:
                 f.write("%.6f,%s\n" % (t, label))
-        gcmd.respond_info(
-            "PA log: %d pressure samples (%d windows), "
-            "%d extruder moves, %d marks -> %s_*"
-            % (len(self.samples), self.windows,
-               len(self.moves), len(self.marks), base))
+        return base
+
+    def cmd_PA_GAUGE_SETUP(self, gcmd):
+        setup = {'src': gcmd.get_int('SRC', 0, minval=0, maxval=1)}
+        period = gcmd.get_float('PERIOD', None, minval=0.052, maxval=0.2)
+        if period is not None:
+            setup['period'] = period
+        capture = gcmd.get('CAPTURE', None)
+        if capture:
+            setup['capture'] = capture
+        self.next_setup = setup
+        gcmd.respond_info("Gauge for the next pa_tester run: %s" % (setup,))
 
 
     def cmd_PA_CAL_ANALYZE(self, gcmd):

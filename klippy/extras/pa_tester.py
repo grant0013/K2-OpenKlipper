@@ -3,6 +3,7 @@
 # Copyright (C) 2026  Dmitry Butyugin <dmbutyugin@google.com>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
+# K2 OpenKlipper: unchanged apart from the max_fit_mse option.
 
 import bisect, collections, importlib, logging, math, multiprocessing, traceback
 import chelper, mathutil, queuelogger
@@ -1281,6 +1282,10 @@ class PATester:
                 'search_overshoot': SearchOvershootTest(self.printer,
                                                         self.numpy, self.scipy),
             }
+        # K2 OpenKlipper: the fit quality limit as an option (the K2 nozzle
+        # gauge arrives in 50 ms windows, unlike a continuous load cell)
+        self.methods['step_response'].MAX_FIT_MSE_PHASE1 = config.getfloat(
+            'max_fit_mse', StepResponseTest.MAX_FIT_MSE_PHASE1, above=0.)
         self.default_method = config.getchoice(
             'method', list(self.methods.keys()), 'step_response')
         self.extruder_test = PACalibrationExtruderTest(config)
