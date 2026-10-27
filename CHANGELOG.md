@@ -30,6 +30,15 @@ Logic adapted (GPLv3, with credit in each file) from
   the Z home and mesh points, a temperature-scaled hot-nozzle correction
   (`variable_hot_z_rate`), scrub-until-clean before the Z tap, one retry after
   a missed probe.
+- PRTouch: `PRTOUCH_SCRUB`, the K2 Plus strip-detecting nozzle scrub. Three
+  normal and three firmer taps (MCU hold thresholds x 2.5) at the strip centre
+  tell a flexible tab from a solid strip and set the depth (0.15 or 0.05 mm),
+  then the nozzle scrubs the strip line following its measured slope and
+  repeats until the contact stops dropping. K2 coordinates (X155-165,
+  Y264.5-266.5) come from the existing strip scrub. Opt-in:
+  `NOZZLE_CLEAR METHOD=detect`, or `variable_scrub_method: 'detect'` in
+  `START_PRINT` to scrub before the Z tap; settings `scrub_*` in
+  `[prtouch_mainline]`. Default print starts are unchanged.
 - CFS: a same-filament runout refill purges 40 mm instead of the full colour
   purge (`runout_purge_length`), box BUSY replies are retried, a final load
   nudge that barely moves (0x0E) counts as success when the nozzle sensor sees

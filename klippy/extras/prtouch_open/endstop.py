@@ -16,7 +16,8 @@
 # Portions adapted from Jacob10383's K2 Plus custom firmware
 # (https://github.com/Jacob10383/k2-plus-custom-firmware, extras/prtouch.py),
 # GPLv3: fail-closed arming (ack err check, trigger line asserted/released
-# checks, disarm on motors off) and the no-trigger pressure-buffer dump.
+# checks, disarm on motors off), the no-trigger pressure-buffer dump and the
+# firmer-press hold scaling used by PRTOUCH_SCRUB.
 #
 # Note: the upstream `home_start` returns True immediately because v1/v2
 # prtouch implements its own probe motion via `probe_by_step` rather than
@@ -41,6 +42,7 @@ Per ADR-001 (see docs/ADRs/ADR-001-probe-api-integration.md):
   load_config() entry-point drops the hijack line.
 """
 
+import contextlib
 import logging
 import math
 
@@ -49,6 +51,7 @@ from . import pres as pres_mod
 from . import step as step_mod
 from . import motion as motion_mod
 from . import zip as zip_mod
+from . import scrub as scrub_mod
 
 # The nozzle MCU's pressure buffer holds 64 samples (docs/PRTOUCH.md).
 _PRES_BUF_LEN = 64
@@ -203,6 +206,9 @@ class PRTouchEndstopWrapper:
         # retry in prtouch_mainline.py.
         self.last_no_trigger = False
         self.last_cleanup_ok = False
+        # Pressure hold thresholds scale by this for the next probe moves
+        # (PRTOUCH_SCRUB's firmer press). Only firm_press() changes it.
+        self.hold_ratio = 1.0
 
         # ---- PressureSampler + OID + callbacks (early registration) ------
         self.sampler = pres_mod.PressureSampler(self.pres_mcu, self.cfg)
@@ -500,12 +506,30 @@ class PRTouchEndstopWrapper:
         if self in hmove.get_mcu_endstops():
             self.probe_finish(hmove)
 
+    @contextlib.contextmanager
+    def firm_press(self, ratio):
+        """Arm probes inside the block with the hold thresholds x ratio.
+
+        The ratio goes back to its previous value however the block ends.
+        """
+        if ratio <= 0.:
+            raise ValueError("hold ratio must be above 0")
+        previous = self.hold_ratio
+        self.hold_ratio = ratio
+        try:
+            yield
+        finally:
+            self.hold_ratio = previous
+
     def probe_prepare(self, hmove):
         if self._probe_active:
             raise self.obj.printer.command_error(
                 "K2-PRTouch pressure session already active")
         self.last_no_trigger = False
         self.last_cleanup_ok = False
+        min_hold, max_hold, add_hold = scrub_mod.scaled_holds(
+            self.cfg.min_hold, self.cfg.max_hold, self.cfg.add_hold,
+            self.hold_ratio)
         # Arm step capture first so no pressure edge can precede its timestamp
         # history. Both MCUs use the stock 0.78125ms acquisition period.
         step_ack = self.step.start_capture()
@@ -516,9 +540,9 @@ class PRTouchEndstopWrapper:
                 ned_tftr=self.cfg.pres_ned_tftr,
                 ned_hftr=self.cfg.pres_ned_hftr,
                 ned_lftr=self.cfg.pres_ned_lftr,
-                min_hold=self.cfg.min_hold,
-                max_hold=self.cfg.max_hold,
-                add_hold=self.cfg.add_hold,
+                min_hold=min_hold,
+                max_hold=max_hold,
+                add_hold=add_hold,
                 lmt_dead=self.cfg.pres_dead_samples,
             )
             for ack in pres_acks or ():
@@ -540,8 +564,7 @@ class PRTouchEndstopWrapper:
             "K2-PRTouch hardware session armed: filters=%d,%d,%d "
             "holds=%d,%d,%d dead=%d warmup=%.4f",
             self.cfg.pres_ned_tftr, self.cfg.pres_ned_hftr,
-            self.cfg.pres_ned_lftr, self.cfg.min_hold,
-            self.cfg.max_hold, self.cfg.add_hold,
+            self.cfg.pres_ned_lftr, min_hold, max_hold, add_hold,
             self.cfg.pres_dead_samples, warmup,
         )
         # A line that already reads "contact" would stop the move at once and

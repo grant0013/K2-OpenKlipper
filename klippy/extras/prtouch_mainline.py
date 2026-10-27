@@ -1,7 +1,8 @@
 """Upstream-Klipper entry point for the open K2 PRTouch driver."""
 # Portions adapted from Jacob10383's K2 Plus custom firmware
 # (https://github.com/Jacob10383/k2-plus-custom-firmware, extras/prtouch.py),
-# GPLv3: multi-tap selection and the bounded no-trigger retry.
+# GPLv3: multi-tap selection, the bounded no-trigger retry and PRTOUCH_SCRUB
+# (strip detection by a firmer press, slope-following scrub until clean).
 
 import logging
 import statistics
@@ -10,9 +11,12 @@ from . import manual_probe
 from . import probe as probe_helpers
 from . import k2_mesh_guard
 from .prtouch_open import endstop as prtouch_endstop
+from .prtouch_open import scrub
 from .prtouch_open import tap_select
 
 _NO_TRIGGER_ERROR = "No trigger on probe after full movement"
+# Z moves to and from the scrub start height, like the macros' G1 Z5 F600.
+_SCRUB_CLEAR_Z_SPEED = 10.
 
 
 class _PRTouchHardwareSession:
@@ -213,6 +217,53 @@ class PRTouchMainlineProbe:
         self.no_trigger_retry_max_distance = config.getfloat(
             "probe_no_trigger_retry_max_distance", 2.0, above=0.0, maxval=10.0
         )
+        # PRTOUCH_SCRUB (K2 Plus firmware method, opt-in through NOZZLE_CLEAR
+        # METHOD=detect). The line defaults are the strip coordinates the
+        # stock-style scrub already uses: X155-165 (around stock
+        # prth_clr_pose X160, the smooth right tab) and its Y264.5-266.5
+        # zigzag around stock Y265.5. The K2 Plus values (X173-223,
+        # Y353-356) are for its bigger bed.
+        self.scrub_x_start = config.getfloat(
+            "scrub_x_start", 155., minval=0., maxval=255.)
+        self.scrub_x_end = config.getfloat(
+            "scrub_x_end", 165., minval=0., maxval=255.)
+        self.scrub_y_min = config.getfloat(
+            "scrub_y_min", 264.5, minval=0., maxval=290.)
+        self.scrub_y_max = config.getfloat(
+            "scrub_y_max", 266.5, minval=0., maxval=290.)
+        if self.scrub_y_min > self.scrub_y_max:
+            raise config.error("scrub_y_min must not exceed scrub_y_max")
+        if self.scrub_x_start == self.scrub_x_end:
+            raise config.error("scrub_x_start and scrub_x_end must differ")
+        self.scrub_detect_hold_ratio = config.getfloat(
+            "scrub_detect_hold_ratio", 2.5, above=1., maxval=5.)
+        self.scrub_detect_deflection = config.getfloat(
+            "scrub_detect_deflection", 0.035, above=0., maxval=0.4)
+        self.scrub_tab_depth = config.getfloat(
+            "scrub_tab_depth", 0.15, minval=0., maxval=0.20)
+        self.scrub_no_tab_depth = config.getfloat(
+            "scrub_no_tab_depth", 0.05, minval=0., maxval=0.20)
+        if self.scrub_no_tab_depth > self.scrub_tab_depth:
+            raise config.error(
+                "scrub_no_tab_depth must not exceed scrub_tab_depth")
+        self.scrub_speed = config.getfloat(
+            "scrub_speed", 10., above=0., maxval=100.)
+        self.scrub_max_passes = config.getint(
+            "scrub_max_passes", 3, minval=1, maxval=6)
+        self.scrub_shorten_done = config.getfloat(
+            "scrub_shorten_done", 0.01, above=0., maxval=0.1)
+        # First tap height, like NOZZLE_CLEAR's G1 Z5. Later taps start
+        # sample_retract_dist above the contact already measured.
+        self.scrub_start_z = config.getfloat(
+            "scrub_start_z", 5., minval=1., maxval=10.)
+        self.scrub_travel_speed = config.getfloat(
+            "scrub_travel_speed", 100., above=0., maxval=300.)
+        # NOZZLE_CLEAR heats before it scrubs; START_PRINT scrubs at 140C.
+        self.scrub_min_temp = config.getfloat(
+            "scrub_min_temp", 130., minval=0., maxval=300.)
+        self.scrub_z_max = config.getsection("stepper_z").getfloat(
+            "position_max", 270., note_valid=False)
+        self.last_scrub = {"state": "none"}
         self.contact_plane_frame = None
         self.probe_session = probe_helpers.SampleAveragingHelper(
             config, self.param_helper, self._start_hardware_session
@@ -225,6 +276,12 @@ class PRTouchMainlineProbe:
             "PRTOUCH_HOME_Z",
             self.cmd_PRTOUCH_HOME_Z,
             desc="Probe Z using configured samples and define median contact as zero",
+        )
+        gcode.register_command(
+            "PRTOUCH_SCRUB",
+            self.cmd_PRTOUCH_SCRUB,
+            desc="Detect a flexible strip tab and scrub the nozzle along the "
+                 "rear strip until the contact stops dropping",
         )
         probe_helpers.HomingViaProbeHelper(
             config,
@@ -343,7 +400,9 @@ class PRTouchMainlineProbe:
         return self.probe_offsets.get_offsets(gcmd)
 
     def get_status(self, eventtime):
-        return self.cmd_helper.get_status(eventtime)
+        status = dict(self.cmd_helper.get_status(eventtime))
+        status["last_scrub"] = dict(self.last_scrub)
+        return status
 
     def start_probe_session(self, gcmd):
         return self.probe_session.start_probe_session(gcmd)
@@ -459,6 +518,171 @@ class PRTouchMainlineProbe:
         if len(best) != len(trigger_zs):
             msg += " (best %d of %d taps)" % (len(best), len(trigger_zs))
         gcmd.respond_info(msg)
+
+
+    # ---- PRTOUCH_SCRUB ---------------------------------------------------
+
+    def _scrub_move(self, coord, speed):
+        toolhead = self.printer.lookup_object("toolhead")
+        toolhead.manual_move(coord, speed)
+        toolhead.wait_moves()
+
+    def _scrub_tap(self, gcmd, point, ref_z, hold_ratio=1.):
+        """One single tap at point (x, y), lifted back to its start Z.
+
+        Without ref_z the tap starts at scrub_start_z and may search down to
+        probe_minimum_z. With ref_z (a contact measured on this strip) it
+        starts sample_retract_dist above it and searches at most
+        home_followup_guard below it, never below probe_minimum_z.
+        """
+        toolhead = self.printer.lookup_object("toolhead")
+        reactor = self.printer.get_reactor()
+        params = self.param_helper.get_probe_params(gcmd)
+        if ref_z is None:
+            start_z = self.scrub_start_z
+            target_z = max(probe_helpers.lookup_minimum_z(self.config),
+                           self.probe_minimum_z)
+            z_speed = _SCRUB_CLEAR_Z_SPEED
+        else:
+            start_z = ref_z + params["sample_retract_dist"]
+            target_z = max(ref_z - self.home_followup_guard,
+                           self.probe_minimum_z)
+            z_speed = params["lift_speed"]
+        if toolhead.get_position()[2] != start_z:
+            self._scrub_move([None, None, start_z], z_speed)
+        self._scrub_move([point[0], point[1], None], self.scrub_travel_speed)
+        if self.probe_settle_time:
+            reactor.pause(reactor.monotonic() + self.probe_settle_time)
+        movepos = list(toolhead.get_position())
+        movepos[2] = target_z
+        try:
+            with self.driver.firm_press(hold_ratio):
+                return self.probing_move(
+                    movepos, params["probe_speed"], start_z, gcmd)
+        finally:
+            if (not self.printer.is_shutdown()
+                    and toolhead.get_position()[2] < start_z):
+                self._scrub_move([None, None, start_z], params["lift_speed"])
+
+    def _scrub_ends(self, gcmd, start, end, ref_z):
+        z_start = self._scrub_tap(gcmd, start, ref_z)
+        z_end = self._scrub_tap(gcmd, end, z_start)
+        scrub.check_ends(z_start, z_end)
+        return z_start, z_end
+
+    def _scrub_round_trip(self, gcmd, start, end, z_start, z_centre, z_end,
+                          depth):
+        params = self.param_helper.get_probe_params(gcmd)
+        lift_speed = params["lift_speed"]
+        clear_z = scrub.clear_z(
+            z_start, z_centre, z_end, params["sample_retract_dist"])
+        path = scrub.round_trip(start, end, z_start, z_centre, z_end, depth)
+        self._scrub_move([None, None, clear_z], lift_speed)
+        self._scrub_move([path[0][0], path[0][1], None],
+                         self.scrub_travel_speed)
+        self._scrub_move([None, None, path[0][2]], lift_speed)
+        for x, y, z in path[1:]:
+            self._scrub_move([x, y, z], self.scrub_speed)
+        self._scrub_move([None, None, clear_z], lift_speed)
+
+    def _scrub_lift(self):
+        toolhead = self.printer.lookup_object("toolhead")
+        lift_z = min(self.scrub_start_z, self.scrub_z_max)
+        if toolhead.get_position()[2] < lift_z:
+            self._scrub_move([None, None, lift_z], _SCRUB_CLEAR_Z_SPEED)
+
+    def cmd_PRTOUCH_SCRUB(self, gcmd):
+        """Detect a flexible strip tab, then scrub along the strip until clean.
+
+        Taps are single taps (no multi-tap selection). A failure after the
+        checks below is reported and leaves the nozzle lifted, like the K2
+        Plus firmware, so a print start carries on to its Z home.
+        """
+        toolhead = self.printer.lookup_object("toolhead")
+        reactor = self.printer.get_reactor()
+        eventtime = reactor.monotonic()
+        homed = toolhead.get_status(eventtime)["homed_axes"]
+        if not all(axis in homed for axis in "xyz"):
+            raise gcmd.error("PRTOUCH_SCRUB needs X, Y and Z homed")
+        min_temp = gcmd.get_float(
+            "MIN_TEMP", self.scrub_min_temp, minval=0., maxval=300.)
+        heater = self.printer.lookup_object("extruder").get_heater()
+        temp, _target = heater.get_temp(eventtime)
+        if temp < min_temp:
+            raise gcmd.error(
+                "PRTOUCH_SCRUB needs the nozzle at %.0fC or more (it is "
+                "%.1fC). Heat it first, or use NOZZLE_CLEAR METHOD=detect."
+                % (min_temp, temp))
+        max_passes = gcmd.get_int(
+            "MAX_PASSES", self.scrub_max_passes, minval=1, maxval=6)
+        y = scrub.pick_y(self.scrub_y_min, self.scrub_y_max)
+        start = (self.scrub_x_start, y)
+        end = (self.scrub_x_end, y)
+        centre = (0.5 * (start[0] + end[0]), y)
+        self.last_scrub = {"state": "running", "y": round(y, 3)}
+        try:
+            self._scrub_lift()
+            # Pressure test at the line centre: three normal taps, each
+            # followed by a firmer one at the same point.
+            normal_zs = []
+            firm_zs = []
+            ref_z = None
+            for _sample in range(3):
+                normal_z = self._scrub_tap(gcmd, centre, ref_z)
+                ref_z = normal_z
+                normal_zs.append(normal_z)
+                firm_zs.append(self._scrub_tap(
+                    gcmd, centre, ref_z, self.scrub_detect_hold_ratio))
+            defl = scrub.deflection(normal_zs, firm_zs)
+            tab, depth = scrub.choose_depth(
+                defl, self.scrub_detect_deflection,
+                self.scrub_tab_depth, self.scrub_no_tab_depth)
+            gcmd.respond_info(
+                "PRTouch scrub: %s: deflection %.4f mm %s %.4f mm; "
+                "scrubbing %.3f mm deep at %.1f mm/s"
+                % ("tab detected" if tab else "no tab", defl,
+                   ">" if tab else "<=", self.scrub_detect_deflection,
+                   depth, self.scrub_speed))
+            z_centre = float(statistics.median(normal_zs))
+            z_start, z_end = self._scrub_ends(gcmd, start, end, z_centre)
+            scrub.check_centre(z_start, z_centre, z_end)
+
+            def scrub_pass(zs, zc, ze):
+                self._scrub_round_trip(gcmd, start, end, zs, zc, ze, depth)
+
+            def measure_ends():
+                return self._scrub_ends(gcmd, start, end, z_centre)
+
+            passes, shortened, z_start, z_centre, z_end = scrub.run_passes(
+                scrub_pass, measure_ends, z_start, z_centre, z_end,
+                max_passes, self.scrub_shorten_done)
+            clean = shortened < self.scrub_shorten_done
+            self.last_scrub = {
+                "state": "done", "y": round(y, 3), "tab": tab,
+                "deflection": defl, "depth": depth, "passes": passes,
+                "shorten": round(shortened, 6), "clean": clean,
+            }
+            gcmd.respond_info(
+                "PRTouch scrub tab=%s deflection=%.4f depth=%.3f passes=%d "
+                "shorten=%.4f" % (tab, defl, depth, passes, shortened))
+            if not clean:
+                gcmd.respond_info(
+                    "PRTouch scrub: the strip contact was still dropping "
+                    "after %d passes; check the nozzle" % (passes,))
+        except (self.printer.command_error, scrub.ScrubError) as e:
+            self.last_scrub = {
+                "state": "stopped", "y": round(y, 3), "error": str(e)}
+            homed = toolhead.get_status(reactor.monotonic())["homed_axes"]
+            if self.printer.is_shutdown() or not all(
+                    axis in homed for axis in "xyz"):
+                raise
+            gcmd.respond_info("PRTouch scrub stopped: %s" % (e,))
+        finally:
+            try:
+                if not self.printer.is_shutdown():
+                    self._scrub_lift()
+            except Exception:
+                logging.exception("PRTouch scrub: cleanup lift")
 
 
 def load_config(config):
