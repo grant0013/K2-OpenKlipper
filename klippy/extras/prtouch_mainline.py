@@ -252,6 +252,12 @@ class PRTouchMainlineProbe:
     # ---- tap selection, contact plane, no-trigger retry ----------------
 
     def get_probe_tap_settings(self, gcmd):
+        # Klipper's G28 Z homes through run_probe (HOME_ATTEMPT_NUM is set)
+        # with the start position forced to a fake height, so lifting back
+        # to it between taps is out of range. Homing taps stay single: G28
+        # does its own two passes and PRTOUCH_HOME_Z has its own tap settings.
+        if gcmd.get('HOME_ATTEMPT_NUM', None) is not None:
+            return 1, self.probe_tap_tolerance, 1, 0
         samples = gcmd.get_int(
             "TAP_SAMPLES", self.probe_tap_samples, minval=1, maxval=9
         )
