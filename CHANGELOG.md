@@ -1,6 +1,63 @@
 # Changelog
 
-## Unreleased (since v0.2.0-alpha.1)
+## Unreleased
+
+### Ported from Jacob10383's K2 Plus firmware
+
+Logic adapted (GPLv3, with credit in each file) from
+[Jacob10383/k2-plus-custom-firmware](https://github.com/Jacob10383/k2-plus-custom-firmware).
+
+- Motor fault detection fixed: a faulted controller answers with a status
+  byte of 02, which the watch used to read as no answer, so it never tripped.
+  Replies are now parsed and decoded (logic adapted from Jacob10383's K2 Plus
+  firmware): only an error code pauses or cancels, and the message names it
+  (for example "excessive position tracking error"). Warnings such as low
+  supply voltage or a hot controller MCU are reported and the print carries
+  on. Print start reads, clears and re-reads the motor faults.
+- `[k2_motor_bus]` checks replies (CRC, sender address, function echo) so a
+  late CFS reply or noise is not taken as a motor reply, and retries motor
+  reads once (`reply_check`). `MOTOR_STALL_MODE` reports a missing echo
+  (`stall_mode_check: abort` stops the homing instead). New diagnostics:
+  `MOTOR_FAULTS`, `MOTOR_CLEAR_FAULTS`, `MOTOR_TEMPS`, `MOTOR_E_ADDR`, a
+  calibration check at wake, optional `homing_fault_check` and
+  `temp_poll_interval`.
+- PRTouch: fail-closed arming (the MCU's acknowledgement is checked, a probe
+  is refused when the trigger line already reads contact, and a line that
+  does not release is reported), the 64-sample pressure buffer is logged when
+  a probe never triggers, and mesh taps that trigger far above the bed (for
+  example on a plastic blob) are re-probed once, then stop the mesh. Optional,
+  off by default: multi-tap selection (keep the tightest taps of a window) for
+  the Z home and mesh points, a temperature-scaled hot-nozzle correction
+  (`variable_hot_z_rate`), scrub-until-clean before the Z tap, one retry after
+  a missed probe.
+- CFS: a same-filament runout refill purges 40 mm instead of the full colour
+  purge (`runout_purge_length`), box BUSY replies are retried, a final load
+  nudge that barely moves (0x0E) counts as success when the nozzle sensor sees
+  filament, every status code has a plain-English message, slot-event replies
+  are no longer read as temperature and humidity, tool changes accept the slot
+  feeding the print when the box reports none (checked against the hub
+  sensor), and the load sees filament arrive within 0.1 s. Optional, off by
+  default: a PTFE-freeing toolhead sweep before stall retries, purge lengths
+  from the file's flush matrix, clog detection from the measuring wheel.
+  `CFS_RFID_READ` reads a slot's RFID record. `CFS_STATUS` no longer wipes the
+  feeding slot.
+
+### Pressure advance
+
+- `PA_CAL_STATIC SLOT=x`: pressure advance from nozzle force with the nozzle
+  standing still over the chute (the way Bambu's force-sensor printers do it),
+  using Dmitry Butyugin's `pa_tester` (GPLv3, from his Klipper branch) with the
+  K2 strain gauge as its load cell. About 90 s and 0.2 m of filament; repeatable
+  to 0.001-0.005 on our printer (PLA 0.038, PETG about 0.06).
+
+### Other
+
+- `OKL_UPDATE_CHECK` always shows the update dialog (a Mainsail opened after
+  the timed check never saw it).
+- External host guide: the two-file config layout, delete the shipped ARM C
+  helper on a PC, and how to update a host.
+
+## v0.3.0-alpha.1 (2026-10-27)
 
 ### Updates and settings
 
@@ -85,20 +142,6 @@
   tachometer reads zero, cancels on an X/Y motor controller fault, and pauses on
   an extruder controller fault (clog or jam). Stock firmware did this in
   master-server and motor_control, which the open stack does not run.
-- Motor fault detection fixed: a faulted controller answers with a status
-  byte of 02, which the watch used to read as no answer, so it never tripped.
-  Replies are now parsed and decoded (logic adapted from Jacob10383's K2 Plus
-  firmware): only an error code pauses or cancels, and the message names it
-  (for example "excessive position tracking error"). Warnings such as low
-  supply voltage or a hot controller MCU are reported and the print carries
-  on. Print start reads, clears and re-reads the motor faults.
-- `[k2_motor_bus]` checks replies (CRC, sender address, function echo) so a
-  late CFS reply or noise is not taken as a motor reply, and retries motor
-  reads once (`reply_check`). `MOTOR_STALL_MODE` reports a missing echo
-  (`stall_mode_check: abort` stops the homing instead). New diagnostics:
-  `MOTOR_FAULTS`, `MOTOR_CLEAR_FAULTS`, `MOTOR_TEMPS`, `MOTOR_E_ADDR`, a
-  calibration check at wake, optional `homing_fault_check` and
-  `temp_poll_interval`.
 - Hotend `max_temp` back to the stock 350.
 - `PAUSE` lifts the nozzle 2 mm and parks it off the part. A job left paused
   for 30 minutes turns the hotend off but keeps the bed and homing, so it can

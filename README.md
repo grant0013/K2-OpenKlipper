@@ -182,6 +182,16 @@ Built by [Hark Tech](https://harktech.co.uk) (Grant Harkness), a UK 3D
 printing and electronics repair workshop, on top of Klipper (Kevin O'Connor
 and contributors), Moonraker and Mainsail.
 
+With thanks to:
+
+- [Jacob10383](https://github.com/Jacob10383/k2-plus-custom-firmware) (K2
+  Plus custom firmware, GPLv3): motor reply decoding and fault handling,
+  PRTouch tap selection and probe safety, and CFS status codes, runout purge
+  and path tracking are adapted from his code. Each file that uses it says so.
+- Dmitry Butyugin (Klipper): `pa_tester`, the load-cell pressure advance
+  calibration behind `PA_CAL_STATIC`.
+- CNC Kitchen (Stefan Hermann): the PATuner method behind `PA_CAL_RUN`.
+
 *Keywords: Creality K2, K2 Combo, K2 Pro, K2 Plus, mainline Klipper, open
 source firmware, root, PRTouch, strain gauge probe, CFS, Creality Filament
 System, multi-material, closed-loop servo, pressure advance calibration, input
