@@ -1,0 +1,6 @@
+# K2 open-stack host link: the K2 board presents three USB serial ports
+# (Linux gadget serial 0525:a4a6) that relay its internal UARTs.
+# if00 = main MCU (ttyS2), if01 = nozzle MCU (ttyS3), if02 = motor/CFS bus (ttyS5).
+ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="0525", ATTR{idProduct}=="a4a6", RUN+="/usr/sbin/modprobe usbserial", RUN+="/bin/sh -c 'echo 0525 a4a6 > /sys/bus/usb-serial/drivers/generic/new_id || true'"
+# When the main-MCU port appears (K2 rebooted or replugged), reconnect the K2 Klipper.
+ACTION=="add", SUBSYSTEM=="tty", ENV{ID_VENDOR_ID}=="0525", ENV{ID_MODEL_ID}=="a4a6", ENV{ID_USB_INTERFACE_NUM}=="00", TAG+="systemd", ENV{SYSTEMD_WANTS}+="k2-reconnect.service"

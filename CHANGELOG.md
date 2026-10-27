@@ -2,6 +2,48 @@
 
 ## Unreleased (since v0.2.0-alpha.1)
 
+### Klipper on a separate PC (external host)
+
+- Klipper and Moonraker can run on any Linux PC, connected to the K2's
+  mini-USB port. The K2 board turns into a three-port USB serial gadget and
+  relays its main MCU, nozzle MCU and motor/CFS bus (`host/`,
+  [docs/EXTERNAL-HOST.md](docs/EXTERNAL-HOST.md)). klippy went from about 108%
+  CPU on the K2 to a median 5% of one core on a Celeron host; the first
+  7.5-hour print had zero "Timer too close" and zero invalid bytes.
+- Automatic reconnect when the K2 reboots or the cable is replugged.
+- The K2's internal camera works on the host with a USB-A lead
+  (`k2-camera.service`, ustreamer MJPEG, 15 fps).
+
+### Print safety
+
+- `[hark_safety]`: pauses when the hotend or part fan is commanded on but its
+  tachometer reads zero, cancels on an X/Y motor controller fault, and pauses on
+  an extruder controller fault (clog or jam). Stock firmware did this in
+  master-server and motor_control, which the open stack does not run.
+- Hotend `max_temp` back to the stock 350.
+- `PAUSE` lifts the nozzle 2 mm and parks it off the part. A job left paused
+  for 30 minutes turns the hotend off but keeps the bed and homing, so it can
+  still resume.
+
+### First layer and print start
+
+- First-layer height correction `hot_z_comp` (0.04 mm): Z is probed with the
+  nozzle at 140C but printed hotter. Stock PRTouch corrects this
+  (`temp_non_linaer_c` 0.045); the open driver did not, and edge-to-edge first
+  layers lifted.
+- Faster start: the bed waits only while it is still heating (no M190 settle
+  or cool-down wait), and mesh taps run at 3 mm/s. Tap speeds of 0.75, 3 and
+  5 mm/s measured the same bed shape.
+- Cold starts get an extra 90 s soak, because the plate edges warm after the
+  centre.
+
+### AI failure detection (`tools/ai-detect/`)
+
+- Obico's failure model on every 10th second, with a local vision-language
+  model (Qwen3-VL 4B on llama.cpp, CPU only) as a second opinion: it confirms or
+  drops Obico warnings and takes its own look every 3 minutes. Runs on the
+  host PC, alerts only by default.
+
 ### Colour changes
 
 - Cleaner cuts: cut position X-8.0 at acceleration 5000; the CFS rewind now

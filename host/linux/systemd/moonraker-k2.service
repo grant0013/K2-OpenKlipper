@@ -1,0 +1,18 @@
+[Unit]
+Description=Moonraker for the Creality K2 (external host)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=USER
+SupplementaryGroups=moonraker-admin
+RemainAfterExit=yes
+WorkingDirectory=/home/USER/moonraker
+EnvironmentFile=/home/USER/printer_data_k2/systemd/moonraker.env
+ExecStart=/home/USER/moonraker-env/bin/python $MOONRAKER_ARGS
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

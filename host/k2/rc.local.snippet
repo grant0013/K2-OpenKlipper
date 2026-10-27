@@ -1,0 +1,5 @@
+# Add to /etc/rc.local on the K2 (before "exit 0"). Starts the host link
+# 30 s after boot when /mnt/UDISK/.system/boot-hostlink exists, so removing
+# that flag file (and restoring boot-mainline) puts the K2 back on its own
+# Klipper.
+[ -f /mnt/UDISK/.system/boot-hostlink ] && (sleep 30; sh /mnt/UDISK/k2-hostlink/start.sh > /tmp/hostlink-boot.log 2>&1) &

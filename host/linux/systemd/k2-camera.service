@@ -1,0 +1,18 @@
+[Unit]
+Description=K2 chamber camera MJPEG stream (ustreamer, 127.0.0.1:8080 -> Mainsail /webcam/)
+After=network.target
+
+[Service]
+User=USER
+SupplementaryGroups=video
+# 50 Hz anti-flicker (use 2 for 60 Hz mains)
+ExecStartPre=-/usr/bin/v4l2-ctl -d /dev/v4l/by-id/usb-Ingenic_Semiconductor_Co._Ltd_Ingenic_HD_Web_Camera_Ucamera001-video-index0 -c power_line_frequency=1
+# MJPEG passthrough, no re-encode. No --slowdown: Mainsail's adaptive mode and
+# the AI watcher take snapshots, which do not count as stream clients, so a
+# slowed-down capture serves stale frames at about 2 fps.
+ExecStart=/usr/bin/ustreamer --device=/dev/v4l/by-id/usb-Ingenic_Semiconductor_Co._Ltd_Ingenic_HD_Web_Camera_Ucamera001-video-index0 --format=MJPEG --encoder=HW --resolution=1280x720 --desired-fps=15 --host=127.0.0.1 --port=8080 --drop-same-frames=30 --device-timeout=4
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

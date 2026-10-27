@@ -1,0 +1,18 @@
+[Unit]
+Description=Klipper for the Creality K2 (external host over USB relay)
+After=network-online.target moonraker-k2.service
+Wants=udev.target
+
+[Service]
+Type=simple
+User=USER
+RemainAfterExit=yes
+WorkingDirectory=/home/USER/k2/K2-OpenKlipper
+EnvironmentFile=/home/USER/printer_data_k2/systemd/klipper.env
+ExecStart=/home/USER/k2/klippy-env/bin/python $KLIPPER_ARGS
+Nice=-10
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

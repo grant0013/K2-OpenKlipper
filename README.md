@@ -36,6 +36,9 @@ needed, and the stock firmware stays installed for a one-command rollback.
 | Touchscreen | Hark Screen: themeable landscape UI, CFS slots, load/purge, PA calibration, Wi-Fi ([screen and camera](docs/SCREEN-AND-CAMERA.md)) |
 | Camera | Chamber camera as a plain MJPEG stream in Mainsail (and usable by AI failure detection) |
 | Klipper extras | Ideas from Kalico as add-on modules: `RELOAD_GCODE_MACROS`, `PID_PROFILE` per CFS slot material, `BED_MESH_CHECK` |
+| Klipper on a separate PC | Optional: Klipper and Moonraker on any Linux PC over one USB cable; the K2 board only relays its serial ports ([external host](docs/EXTERNAL-HOST.md)) |
+| Print safety | `[hark_safety]`: pauses on a dead hotend or part fan, cancels on an X/Y motor fault, pauses on an extruder fault (clog or jam) |
+| AI failure detection | Optional, on the host PC: Obico model every 10 s plus a local vision model (Qwen3-VL) as a second opinion ([ai-detect](tools/ai-detect/)) |
 | Web UI | [Mainsail Hark K2 edition](https://github.com/grant0013/mainsail) (CFS panel, control centre, appearance presets) on port 4409, Moonraker on 7126 |
 
 ## What is different from stock
@@ -114,8 +117,11 @@ The full explanation is in `config/ORCA-K2-PROFILE.cfg`.
 - `config/mainline_stage2.cfg` - the full working printer configuration and
   macros (start sequence, CFS, nozzle cleaning, purge line, PA calibration)
 - `harkscreen/` - touchscreen app; `harkcam/` - camera streamer
+- `host/` - running Klipper on a separate Linux PC: the K2-side USB relay
+  and boot script, host udev rule, systemd units, nginx site and config overrides
 - `tools/` - deployment helper, PA plotting and simulation, motor parameter
-  scan and A/B test tools, boot-animation generator
+  scan and A/B test tools, boot-animation generator, `ai-detect/` print-failure
+  watcher
 - `system/` - Mainsail (Hark K2 edition build, source in
   [grant0013/mainsail](https://github.com/grant0013/mainsail)), Moonraker
   service and compatibility patches
@@ -125,6 +131,7 @@ The full explanation is in `config/ORCA-K2-PROFILE.cfg`.
   [PA calibration](docs/PA-CALIBRATION.md),
   [start sequence](docs/START-SEQUENCE.md),
   [screen and camera](docs/SCREEN-AND-CAMERA.md),
+  [external host](docs/EXTERNAL-HOST.md),
   [project status](docs/PROJECT-STATUS.md)
 
 ## Help wanted

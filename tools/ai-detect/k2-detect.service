@@ -1,0 +1,20 @@
+[Unit]
+Description=Creality K2 print-failure watcher (Obico fast check + local vision model second opinion, optional auto-pause)
+After=network-online.target k2-vlm.service moonraker-k2.service
+
+[Service]
+ExecStart=/opt/k2-detect/watch.py
+DynamicUser=yes
+StateDirectory=k2-detect
+EnvironmentFile=-/etc/default/k2-detect
+# Only needed when K2_ALERT_SSH is set
+LoadCredential=alert_key:/etc/k2-detect/alert_key
+Environment=OMP_NUM_THREADS=2
+# Off the K2 Klipper's core (0) and Moonraker's (1)
+CPUAffinity=2-7 10-15
+Nice=15
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target

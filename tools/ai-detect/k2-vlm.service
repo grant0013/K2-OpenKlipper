@@ -1,0 +1,18 @@
+[Unit]
+Description=Local vision model for K2 failure checks (Qwen3-VL on llama.cpp, 127.0.0.1:8090)
+After=network.target
+
+[Service]
+User=USER
+ExecStart=/opt/vlm/llama.cpp/build/bin/llama-server -m /opt/vlm/models/model.gguf --mmproj /opt/vlm/models/mmproj.gguf --host 127.0.0.1 --port 8090 -t 12 -tb 12 -c 4096 -np 1 --no-webui --image-max-tokens 1024
+# Cores 2-7 only (CPUs 2-7, 10-15): core 0 is the K2 Klipper, core 1 Moonraker
+CPUAffinity=2-7 10-15
+Nice=19
+IOSchedulingClass=idle
+MemoryHigh=10G
+MemoryMax=12G
+Restart=always
+RestartSec=20
+
+[Install]
+WantedBy=multi-user.target

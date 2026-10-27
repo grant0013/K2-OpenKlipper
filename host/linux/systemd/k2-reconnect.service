@@ -1,0 +1,8 @@
+[Unit]
+Description=Reconnect the K2 Klipper after the K2 USB link reappears
+After=moonraker-k2.service klipper-k2.service
+
+[Service]
+Type=oneshot
+User=USER
+ExecStart=/home/USER/k2/reconnect.sh
