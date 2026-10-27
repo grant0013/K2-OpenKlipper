@@ -29,6 +29,28 @@ measurement and no ooze on the measured bed.
 8. Reheat over the chute and run the third 90 mm flush block
    (`_CREALITY_FLUSH`), then Creality's own prime line along the front edge
    (`_CREALITY_PRIME_LINE`, Y-1, X105-160).
+9. **First-layer Z offset** `0 - hot_z_comp` (0.04 mm lower), applied
+   after the prime line.
+
+### Opt-in variables (default off, test before switching on)
+
+Set them in `printer-overrides.cfg` under `[gcode_macro START_PRINT]`.
+
+- `variable_scrub_until_clean: 1` runs step 7 as
+  `NOZZLE_CLEAR UNTIL_CLEAN=1`: scrub, probe the strip again at X85, and
+  repeat (up to 3 passes) until the strip contact drops by less than
+  0.01 mm. Debris under the tip reads as a higher contact, so a contact that
+  stops dropping means the tip is clean. Then it taps Z again with the clean
+  nozzle before the mesh. Adapted from the K2 Plus firmware's
+  `PRTOUCH_SCRUB`; its flexible-tab force detection is not ported.
+- `variable_hot_z_rate` (mm/°C, 0 = off) with `variable_hot_z_ref_temp`
+  (default 220): the offset becomes
+  `hot_z_comp - hot_z_rate * (EXTRUDER_TEMP - hot_z_ref_temp)`. The K2 Plus
+  firmware ships 0.00083 mm/°C and models the nozzle growing toward the bed
+  as it heats, so hotter prints get the nozzle slightly higher (30 °C hotter
+  = 0.025 mm). Our tap is always at 140 °C, so only the print temperature
+  varies. Set `hot_z_ref_temp` to the print temperature `hot_z_comp` was
+  tuned at. A total above 0.3 mm stops the print.
 
 Without `TOOL` (Creality Print / stock Orca files), the CFS load is deferred
 to the first `T` command and an adaptive heat soak runs instead:

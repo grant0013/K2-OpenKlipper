@@ -181,8 +181,10 @@ class StepCapture:
             self.mcu, "get_query_slot"
         ) else None
 
-        self.proto.start_capture(self.oid, acq_tick)
+        ack = self.proto.start_capture(self.oid, acq_tick)
         self._capture_active = True
+        # The MCU's ack_prtouch reply, for callers that check err.
+        return ack
 
     def stop_capture(self):
         if not self._capture_active:

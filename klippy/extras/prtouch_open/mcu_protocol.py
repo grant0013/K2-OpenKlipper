@@ -192,6 +192,8 @@ class PresCommands(_CommandSet):
         - ned_tftr / ned_hftr / ned_lftr : trigger-filter coefficients
         - min_hold / max_hold / add_hold : contact-detection thresholds
         - lmt_dead : dead-band limit
+
+        Returns the MCU's ack_prtouch reply (err=0 means accepted).
         """
         return self.start.send([
             oid, cfg_regs, acq_tick,

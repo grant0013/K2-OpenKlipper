@@ -160,13 +160,16 @@ class PressureSampler:
             # responsibility for now (deferred — see TODO below).
             acq_tick = int(self.mcu.seconds_to_clock(0.00078125))
 
+        acks = []
         for ch in self.channels:
-            self.proto.start_sampling(
+            acks.append(self.proto.start_sampling(
                 ch.oid, cfg_regs, acq_tick,
                 ned_tftr, ned_hftr, ned_lftr,
                 min_hold, max_hold, add_hold, lmt_dead,
-            )
+            ))
         self._streaming = True
+        # One ack_prtouch reply per channel, for callers that check err.
+        return acks
 
     def stop_streaming(self, sta_swap=0):
         if not self._streaming:
