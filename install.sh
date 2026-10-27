@@ -24,6 +24,36 @@ CHECK=0
 [ "${1:-}" = "--check" ] && CHECK=1
 
 say() { echo "==> $*"; }
+
+# Remove master-server, upgrade-server and Monitor from APP_LIST in Creality's
+# /etc/init.d/app (in place; the original is backed up). --check only tests
+# that the file has the expected APP_LIST. Prints: ok, already, or an error.
+appinit_edit() {
+    python3 - "$1" "${2:-}" <<'PY'
+import re, sys
+path, mode = sys.argv[1], sys.argv[2]
+DROP = ("$BIN_PATH/$MASTER_SERVER", "$BIN_PATH/$UPGRADE_SERVER", "$BIN_PATH/$MONITOR")
+try:
+    text = open(path).read()
+except OSError as e:
+    print("cannot read %s: %s" % (path, e)); sys.exit(1)
+m = re.search(r'^APP_LIST="(.*?)"', text, re.S | re.M)
+if not m or "$BIN_PATH/$APP_SERVER" not in m.group(1):
+    print("unexpected APP_LIST in %s" % path); sys.exit(1)
+body = m.group(1)
+if not any(d in body for d in DROP):
+    print("already"); sys.exit(0)
+if mode == "--check":
+    print("ok"); sys.exit(0)
+new = body
+for d in DROP:
+    new = new.replace(" " + d, "").replace(d + " ", "").replace(d, "")
+new = re.sub(r"[ \t]+\\\n", " \\\n", new)
+text = text[:m.start(1)] + new + text[m.end(1):]
+open(path, "w").write(text)
+print("ok")
+PY
+}
 die() { echo "STOPPED: $*" >&2; exit 1; }
 
 # ---------------------------------------------------------------- checks
@@ -119,6 +149,12 @@ PY
 )
 if [ "$EXTRUDER" = dxc2 ]; then PULL=20; else PULL=10; fi
 echo "    extruder: $EXTRUDER   cutter depth X$CUT_X   post-cut pulls 3 x ${PULL} mm + 10 mm${STOCK_CUT:+   (Creality calibration $STOCK_CUT)}"
+
+APPINIT=$(appinit_edit /etc/init.d/app --check)
+case "$APPINIT" in
+    ok|already) ;;
+    *) die "$APPINIT (this firmware's /etc/init.d/app is not the one the installer knows)" ;;
+esac
 
 if [ -f "$FLAGS/boot-hostlink" ]; then
     die "this K2 is set up for an external host PC (boot-hostlink). Remove that setup first"
@@ -228,8 +264,11 @@ mv /etc/nginx/nginx.conf.okl-new /etc/nginx/nginx.conf
 
 # Creality's master-server and Monitor would fight Klipper for the printer, and
 # upgrade-server would let an OTA wipe this install.
-cp "$BUILD/system/app.init.mainline" /etc/init.d/app
-chmod 755 /etc/init.d/app
+RESULT=$(appinit_edit /etc/init.d/app)
+case "$RESULT" in
+    ok|already) echo "    /etc/init.d/app: master-server, Monitor and upgrade-server removed from APP_LIST" ;;
+    *) die "editing /etc/init.d/app failed: $RESULT (backup in $BACKUP)" ;;
+esac
 
 # Start the open stack 30 s after every boot while the flag file exists.
 HOOK="[ -f $FLAGS/boot-mainline ] && (sleep 30; sh $BUILD/switch-to-mainline.sh mainline_stage2.cfg > /tmp/mainline-boot.log 2>&1) &"

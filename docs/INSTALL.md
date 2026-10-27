@@ -21,7 +21,9 @@ first, and one command puts the printer back to stock.
 | About 15 minutes | and no print running |
 
 It is your printer and your risk. The open stack is not made or supported by
-Creality. While it is installed, Creality's own updates are switched off (an
+Creality, and **modifying the printer's software may void Creality's
+warranty**: check your warranty terms before installing. Uninstalling returns
+the software to stock. While it is installed, Creality's own updates are switched off (an
 update wiped an earlier install), so undo it first if you want a Creality
 update.
 
@@ -165,7 +167,7 @@ stock; run the install again afterwards.
 | `/mnt/UDISK/k2-mainline-20260729-v62` | The open stack (Klipper, K2 modules, configs, scripts) |
 | `/mnt/UDISK/printer_data_mainline` | Its settings and logs (shares the stock G-code folder) |
 | `/mnt/UDISK/mainsail-mainline`, `harkscreen`, `harkcam` | Web interface, touchscreen app, camera stream |
-| `/etc/init.d/app` | Creality's app services without master-server, Monitor and upgrade-server (they would fight Klipper for the printer, and allow an OTA) |
+| `/etc/init.d/app` | Edited in place: master-server, Monitor and upgrade-server are removed from its start list (they would fight Klipper for the printer, and allow an OTA). Nothing else in Creality's file changes |
 | `/etc/rc.local` | One line: start the open stack 30 s after boot while `/mnt/UDISK/.system/boot-mainline` exists |
 | `/etc/nginx/nginx.conf` | Adds Mainsail on port 4409. Creality's Fluidd page on 4408 stays but talks to the stock Moonraker, which is switched off: use Mainsail |
 | Moonraker | A second instance on port 7126; the stock one on 7125 is switched off |

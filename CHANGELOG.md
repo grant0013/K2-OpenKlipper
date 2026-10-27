@@ -14,6 +14,10 @@
   config now defaults to the stock extruder.
 - Waits for Klipper after install and clears a main board left shut down by
   stock Klipper.
+- Edits the printer's own `/etc/init.d/app` in place (removes master-server,
+  Monitor and upgrade-server from its start list) instead of shipping a
+  modified copy of Creality's script; `system/app.init.mainline` is gone.
+- Warranty note in the install guide.
 
 ### Start sequence
 

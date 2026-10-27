@@ -159,15 +159,19 @@ private data.
 
 ## Legal and what is not in this repository
 
-No Creality binaries are included or redistributed: no `.so` wrappers, no
-firmware images and no decompiled code. Protocol knowledge comes from
-observing the printer, Creality's published configuration and GPL sources,
-and interoperability testing. The Klipper-derived code is GNU GPLv3 (see
+No Creality code is included or redistributed: no `.so` wrappers, no
+firmware images, no decompiled code and no Creality scripts (the installer
+edits the printer's own files in place, after backing them up). Protocol
+knowledge comes from observing the printer and its traffic, studying how
+Creality's software on the printer behaves, Creality's published
+configuration and GPL sources, and interoperability testing, as UK law
+(CDPA 1988 s.50B and s.50BA) allows for interoperability. The Klipper-derived code is GNU GPLv3 (see
 `COPYING`); bundled third-party components keep their own licences (see
 `THIRD_PARTY.md`).
 
-Not affiliated with or endorsed by Creality. Modifying printer firmware can
-damage hardware and void warranty. You use this at your own risk.
+Not affiliated with or endorsed by Creality. Modifying printer software may
+void Creality's warranty and can damage hardware. You use this at your own
+risk.
 
 ## Credits
 
