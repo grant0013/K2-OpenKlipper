@@ -175,7 +175,7 @@ touch "$FLAGS/boot-mainline"
 # ---------------------------------------------------------------- start
 say "Starting"
 killall -9 master-server Monitor upgrade-server 2>/dev/null || true
-/etc/init.d/moonraker stop 2>/dev/null || true
+/etc/init.d/moonraker stop >/dev/null 2>&1 || true
 /etc/init.d/moonraker disable 2>/dev/null || true
 /etc/init.d/moonraker-mainline enable
 /etc/init.d/moonraker-mainline restart
@@ -190,5 +190,5 @@ cat <<EOF
     Mainsail:   http://${IP:-<printer-ip>}:4409/
     Backup:     $BACKUP
     Undo:       sh $BUILD/uninstall.sh
-    Next:       docs/INSTALL.md, "After installing" (first print checks)
+    Next:       set up OrcaSlicer and do a first print (docs/INSTALL.md, steps 6 and 7)
 EOF

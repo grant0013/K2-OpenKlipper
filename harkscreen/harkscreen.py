@@ -500,8 +500,12 @@ class Screen:
         self.dirty = True
 
     def soft_logo(self, im):
-        """Fade a square logo's edges so it sits on any background."""
+        """Fade a square logo's edges so it sits on any background. A logo
+        that already has a transparent background is used as it is."""
         im = im.convert("RGBA")
+        lo, _ = im.split()[3].getextrema()
+        if lo < 16:
+            return im
         size = im.size
         mask = Image.new("L", size, 0)
         inset = min(size) * 0.03

@@ -36,8 +36,8 @@ esac
 say "Stopping the open stack"
 rm -f "$FLAGS/boot-mainline"
 [ -x "$BUILD/switch-to-stock.sh" ] && sh "$BUILD/switch-to-stock.sh" || true
-/etc/init.d/moonraker-mainline stop 2>/dev/null || true
-/etc/init.d/moonraker-mainline disable 2>/dev/null || true
+/etc/init.d/moonraker-mainline stop >/dev/null 2>&1 || true
+/etc/init.d/moonraker-mainline disable >/dev/null 2>&1 || true
 
 say "Restoring stock files from $BACKUP"
 cp "$BACKUP/app.init" /etc/init.d/app
@@ -49,11 +49,11 @@ cp "$BACKUP/nginx.conf" /etc/nginx/nginx.conf
 grep -v -e "boot-mainline" -e "K2 OpenKlipper boot hook" /etc/rc.local > /tmp/rc.local.okl || true
 cat /tmp/rc.local.okl > /etc/rc.local
 if [ -f "$BACKUP/stock-moonraker-was-enabled" ]; then
-    /etc/init.d/moonraker enable 2>/dev/null || true
-    /etc/init.d/moonraker start 2>/dev/null || true
+    /etc/init.d/moonraker enable >/dev/null 2>&1 || true
+    /etc/init.d/moonraker start >/dev/null 2>&1 || true
 fi
-/etc/init.d/nginx reload 2>/dev/null || true
-/etc/init.d/app restart 2>/dev/null || true
+/etc/init.d/nginx reload >/dev/null 2>&1 || true
+/etc/init.d/app restart >/dev/null 2>&1 || true
 
 if [ "$PURGE" = 1 ]; then
     say "Deleting the open-stack files and settings"
