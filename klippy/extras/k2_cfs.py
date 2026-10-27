@@ -1935,12 +1935,30 @@ class K2CFS:
         }
         self.print_start_transaction = True
         try:
+            hub = None
+            if nozzle_loaded and active_mask not in mask_to_slot:
+                # Feeding a new spool while another is in the nozzle can
+                # leave that slot selected too (seen 10-27: mask 0x05 with C
+                # in the nozzle). The hub sensor tells which slot's filament
+                # is in the shared path; rewind the others home.
+                hub = self._hub_mask()
+                if hub in mask_to_slot and active_mask & hub:
+                    stray = active_mask & ~hub
+                    gcmd.respond_info(
+                        "CFS selects mask 0x%02x but slot %s is in the path;"
+                        " rewinding the others (mask 0x%02x)"
+                        % (active_mask, mask_to_slot[hub], stray))
+                    self._finish_unload(stray, report_error=False)
+                    active_mask = self._run_query('MEASURING').get(
+                        'active_mask', 0)
             if nozzle_loaded:
                 active_slot = mask_to_slot.get(active_mask)
                 if active_slot is None:
                     raise gcmd.error(
                         "Nozzle has filament but CFS active mask is 0x%02x"
-                        % active_mask)
+                        " (hub 0x%02x; more than one slot selected). Pull"
+                        " back the slot you fed last by hand, then retry"
+                        % (active_mask, hub or 0))
                 if active_mask != mask:
                     self._move_to_cut_start()
                     unload_gcmd = self.gcode.create_gcode_command(
