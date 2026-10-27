@@ -42,7 +42,20 @@ Set them in `printer-overrides.cfg` under `[gcode_macro START_PRINT]`.
   0.01 mm. Debris under the tip reads as a higher contact, so a contact that
   stops dropping means the tip is clean. Then it taps Z again with the clean
   nozzle before the mesh. Adapted from the K2 Plus firmware's
-  `PRTOUCH_SCRUB`; its flexible-tab force detection is not ported.
+  `PRTOUCH_SCRUB`, without its flexible-tab force detection.
+- `variable_scrub_method: 'detect'` (default `'fixed'`, today's sequence)
+  moves the scrub BEFORE the Z tap, like the K2 Plus: after the cool-wipe
+  (and the cold-start soak) the head goes to the bed centre, then
+  `NOZZLE_CLEAR METHOD=detect HOT=140 COOL=140` runs the full
+  `PRTOUCH_SCRUB` (firm-press tab detection, slope-following scrub on
+  X155-165, repeated until the strip contact stops dropping; see
+  [PRTOUCH.md](PRTOUCH.md)). Step 6 then taps Z with the scrubbed nozzle and
+  step 7 goes straight to the mesh, so no second Z tap is needed.
+  `scrub_until_clean` is ignored in this mode. The scrub taps use the Z from
+  `KZ_ALIGN_BOTTOM` (within about 0.06 mm of the tap); depths are relative
+  to the contacts measured on the strip. If the scrub stops (a missed tap or
+  a strip that does not look like one line), it says so and the print
+  carries on to the Z tap.
 - `variable_hot_z_rate` (mm/°C, 0 = off) with `variable_hot_z_ref_temp`
   (default 220): the offset becomes
   `hot_z_comp - hot_z_rate * (EXTRUDER_TEMP - hot_z_ref_temp)`. The K2 Plus

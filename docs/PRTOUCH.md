@@ -72,6 +72,56 @@ Off by default (change first-layer results or motion, so test first):
   5 mm Z home tap). Off because a miss means the nozzle already pressed to
   -0.6 without a trigger, and a retry presses again.
 
+### Strip-detecting scrub (`PRTOUCH_SCRUB`, opt-in)
+
+Ported from the K2 Plus firmware's `PRTOUCH_SCRUB`. Nothing runs it unless
+`NOZZLE_CLEAR METHOD=detect` or `START_PRINT` `variable_scrub_method:
+'detect'` asks for it. Needs X, Y and Z homed and the nozzle at
+`scrub_min_temp` (130 C, or `MIN_TEMP=`) or hotter; `NOZZLE_CLEAR` heats
+first.
+
+1. Pick a random Y in `scrub_y_min`-`scrub_y_max` and lift to
+   `scrub_start_z` (5 mm).
+2. At the line centre, tap three times at the normal pressure thresholds and
+   three times with the MCU `min_hold` and `max_hold` multiplied by
+   `scrub_detect_hold_ratio` (2.5), a firmer press. `add_hold` is sent
+   unchanged, as in the K2 Plus firmware. With our `pres_tri_hold: 4000,
+   10000, 500` the firm taps arm at 10000, 25000, 500. Scaled values are
+   clamped to the `min_hold` (100-50000) and `max_hold` (100-100000) config
+   ranges, and the normal values are restored after every tap, also on an
+   error.
+3. The deflection is the median of |normal - firm| over the three pairs. Above
+   `scrub_detect_deflection` (0.035 mm) the strip gives way like a flexible
+   tab and the scrub presses `scrub_tab_depth` (0.15 mm) below the measured
+   contact; otherwise `scrub_no_tab_depth` (0.05 mm).
+4. Tap both line ends (`scrub_x_start` 155, `scrub_x_end` 165). Ends more than
+   0.5 mm apart, or a centre more than 0.5 mm from the ends, stop the scrub.
+5. Run start -> centre -> end -> centre -> start at `scrub_speed` (10 mm/s),
+   each point at its measured contact minus the depth, so the moves follow
+   the strip's slope. Tap both ends again.
+6. Repeat up to `scrub_max_passes` (3) until the average end contact drops by
+   less than `scrub_shorten_done` (0.01 mm): debris under the tip reads as a
+   higher contact, so a contact that stops dropping means a clean tip.
+7. Lift to `scrub_start_z` and report
+   `tab=... deflection=... depth=... passes=... shorten=...`. The result is in
+   `printer.probe.last_scrub` (`state` none/running/done/stopped, `tab`,
+   `deflection`, `depth`, `passes`, `shorten`, `clean`, `y`, `error`).
+
+Every tap is a single tap (no multi-tap selection) through the same bounded
+search as the other probes: the first starts at `scrub_start_z` and stops at
+`probe_minimum_z` (-0.6); later ones start `sample_retract_dist` (2 mm) above
+the contact already measured and search at most `home_followup_guard`
+(0.5 mm) below it. A probe failure or a refused line is reported as
+"scrub stopped" and the nozzle lifts, like the K2 Plus firmware, so a print
+start carries on to its Z tap; it only raises if the printer shut down or an
+axis lost its home. A full run is about 10-14 taps, roughly a minute.
+
+The line defaults are the strip coordinates the stock-style `NOZZLE_CLEAR`
+already scrubs: X155-165 around stock `prth_clr_pose` X160 (the smooth right
+tab) and its Y264.5-266.5 zigzag around stock Y265.5. The K2 Plus values
+(X173-223, Y353-356) are for its bigger bed. Untested on the K2: the
+deflection threshold and depths are the K2 Plus values.
+
 ### Dead time (`pres_ded_tkms` -> `lmt_dead`)
 
 We send `lmt_dead=128`. The K2 Plus firmware reads the option as
