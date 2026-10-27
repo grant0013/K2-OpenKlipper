@@ -143,8 +143,11 @@ class HarkUpdate:
                 self.gcode.respond_info(
                     "K2 OpenKlipper %s is up to date."
                     % self.status['installed'])
+        # The timed check offers each release once; asking by hand always
+        # shows the dialog (a Mainsail opened after the timed check missed it)
         if (self.notify and self.status['update_available']
-                and self.notified != self.status['latest']
+                and (report is not None
+                     or self.notified != self.status['latest'])
                 and not self._busy()):
             self.notified = self.status['latest']
             self._offer()
