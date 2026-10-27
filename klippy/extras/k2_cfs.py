@@ -254,7 +254,8 @@ class K2CFS:
         self.cutter_cal_max_x = config.getfloat(
             'cutter_cal_max_x', -5.5, maxval=0.)
         self.bus = None
-        self.status = {'online': None, 'feed_enabled': None}
+        self.status = {'online': None, 'feed_enabled': None,
+                       'feed_slot': None, 'last_loaded_slot': None}
         buttons = self.printer.load_object(config, 'buttons')
         buttons.register_buttons(
             [self.cutter_switch_pin], self._handle_cutter_switch)
@@ -714,6 +715,9 @@ class K2CFS:
             'active_slot': slot,
             'box_mode_code': box_mode.get('box_mode_code'),
             'box_mode': box_mode.get('box_mode'),
+            # The slot feeding the print. Kept when the box deselects a slot
+            # that ran out, so the runout refill knows what to match.
+            'feed_slot': slot,
         })
         gcmd.respond_info(
             "CFS feed armed for slot %s\n%s"
@@ -1162,6 +1166,7 @@ class K2CFS:
             'box_mode_code': self.BOX_MODE_IDLE,
             'box_mode': 'idle',
             'last_unloaded_slot': slot,
+            'feed_slot': None,
         })
         gcmd.respond_info(
             "CFS slot %s unload complete; nozzle sensor is clear" % slot)
@@ -1519,6 +1524,7 @@ class K2CFS:
             'box_mode_code': box_mode.get('box_mode_code'),
             'box_mode': box_mode.get('box_mode'),
             'last_loaded_slot': slot,
+            'feed_slot': slot,
         })
         gcmd.respond_info(
             "CFS slot %s load complete; nozzle sensor is triggered" % slot)
@@ -1830,6 +1836,8 @@ class K2CFS:
         slot = gcmd.get('SLOT').upper()
         if slot not in self.SLOT_MASKS:
             raise gcmd.error("SLOT must be one of A, B, C, D")
+        if gcmd.get_int('CONFIRM', 0, minval=0, maxval=1) != 1:
+            raise gcmd.error("CFS_RUNOUT_REFILL requires CONFIRM=1")
         print_stats = self.printer.lookup_object('print_stats', None)
         state = print_stats.get_status(0.).get('state', '') \
             if print_stats is not None else ''
@@ -1863,6 +1871,13 @@ class K2CFS:
             self.cmd_CFS_LOAD(load_gcmd)
             self.cmd_CFS_PURGE(load_gcmd)
             self.gcode.run_script_from_command("NOZZLE_WIPE CONFIRM=1")
+            # The purge ends with a retract; push it back so the first
+            # millimetres after RESUME are not thin (a visible line)
+            if self.purge_retract_length:
+                self.gcode.run_script_from_command(
+                    "M83\nG1 E%.3f F%.3f\nM400"
+                    % (self.purge_retract_length,
+                       self.purge_retract_speed * 60.))
         except Exception as e:
             self._best_effort_stop(mask)
             self.status.update({
