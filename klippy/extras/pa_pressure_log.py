@@ -15,6 +15,11 @@
 # same timeline as the extruder moves pulled from motion_report, so the
 # analysis can line them up exactly.
 #
+# The gauge also acts as a load cell for [pa_tester] (force_sensor:
+# pa_pressure_log): add_client() streams it and hands each window's samples
+# to the client as {'data': [(print_time, raw), ...]} until the client
+# returns False, the same interface as Klipper's load_cell.
+#
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import json, logging, os, subprocess, sys, time
 from .prtouch_open import zip as _zip
@@ -38,6 +43,8 @@ class PAPressureLog:
         self.prtouch = self.sampler = self.mcu = self.dtrapq = None
         self.timer = None
         self.src = 0
+        self.clients = []
+        self.client_mode = False
         self.analysing = False
         self.last_result = {}
         self.reset()
@@ -88,6 +95,7 @@ class PAPressureLog:
         unfilled slots come back as zero ticks."""
         oid = self.prtouch.pres_oid
         c64 = self.mcu.clock32_to_clock64
+        first = len(self.samples)
         idx = 0
         while idx < BUF_LEN:
             resp = self.sampler.proto.read.send(
@@ -106,6 +114,49 @@ class PAPressureLog:
                          v))
             idx += n
         self.windows += 1
+        if self.client_mode:
+            self._feed_clients(self.samples[first:])
+            del self.samples[:]
+
+    # --- load cell interface for [pa_tester] ---------------------------
+    def get_load_cell(self):
+        return self
+
+    def add_client(self, callback):
+        if self.timer is not None and not self.client_mode:
+            raise self.printer.command_error(
+                "The pressure log is running (PA_LOG_STOP first)")
+        if self.sampler is None:
+            raise self.printer.command_error(
+                "The nozzle strain gauge needs prtouch_mainline")
+        self.clients.append(callback)
+        if self.timer is None:
+            self.reset()
+            self.src = 0
+            self.client_mode = True
+            self.started_at = self.reactor.monotonic()
+            self.timer = self.reactor.register_timer(
+                self._poll, self.reactor.NOW)
+
+    def _feed_clients(self, samples):
+        msg = {'data': samples}
+        keep = []
+        for callback in self.clients:
+            try:
+                if callback(msg):
+                    keep.append(callback)
+            except Exception:
+                logging.exception("pa_pressure_log: client failed")
+        self.clients = keep
+        if not keep:
+            # Last client done: finish this window and stop streaming
+            self.stop_requested = True
+
+    def _finish_client_mode(self):
+        timer, self.timer = self.timer, None
+        self.client_mode = False
+        self.reactor.register_callback(
+            lambda et: self.reactor.unregister_timer(timer))
 
     def _poll(self, eventtime):
         s = self.sampler
@@ -118,6 +169,8 @@ class PAPressureLog:
                 self.streaming = False
             if self.stop_requested:
                 self.finished = True
+                if self.client_mode:
+                    self._finish_client_mode()
                 return self.reactor.NEVER
             if getattr(self.prtouch, '_probe_active', False):
                 # A probe owns the sampler; skip this window.
@@ -126,7 +179,7 @@ class PAPressureLog:
             s.start_streaming(min_hold=cfg.min_hold, max_hold=cfg.max_hold,
                               add_hold=cfg.add_hold)
             self.streaming = True
-            if eventtime - self.started_at > 1.:
+            if not self.client_mode and eventtime - self.started_at > 1.:
                 self._pull_moves()
         except Exception:
             logging.exception("pa_pressure_log: poll failed")

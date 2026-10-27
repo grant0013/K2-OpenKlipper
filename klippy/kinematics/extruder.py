@@ -142,15 +142,16 @@ class PrinterExtruder:
         self.printer = config.get_printer()
         self.name = config.get_name()
         self.last_position = 0.
+        self.enable_pa_for_extrude_only_moves = False
         # Setup hotend heater
         pheaters = self.printer.load_object(config, 'heaters')
         gcode_id = 'T%d' % (extruder_num,)
         self.heater = pheaters.setup_heater(config, gcode_id)
         # Setup kinematic checks
         self.nozzle_diameter = config.getfloat('nozzle_diameter', above=0.)
-        filament_diameter = config.getfloat(
+        self.filament_diameter = config.getfloat(
             'filament_diameter', minval=self.nozzle_diameter)
-        self.filament_area = math.pi * (filament_diameter * .5)**2
+        self.filament_area = math.pi * (self.filament_diameter * .5)**2
         def_max_cross_section = 4. * self.nozzle_diameter**2
         def_max_extrude_ratio = def_max_cross_section / self.filament_area
         max_cross_section = config.getfloat(
@@ -192,6 +193,7 @@ class PrinterExtruder:
     def get_status(self, eventtime):
         sts = self.heater.get_status(eventtime)
         sts['can_extrude'] = self.heater.can_extrude
+        sts['filament_diameter'] = self.filament_diameter
         if self.extruder_stepper is not None:
             sts.update(self.extruder_stepper.get_status(eventtime))
         return sts
@@ -201,6 +203,14 @@ class PrinterExtruder:
         return self.heater
     def get_trapq(self):
         return self.trapq
+    def set_enable_pa_for_extrude_only_moves(self, enable):
+        was_enabled = self.enable_pa_for_extrude_only_moves
+        self.enable_pa_for_extrude_only_moves = enable
+        return was_enabled
+    def set_extrude_only_accel_limit(self, limit):
+        prev_limit = self.max_e_accel
+        self.max_e_accel = limit
+        return prev_limit
     def get_axis_gcode_id(self):
         return 'E'
     def stats(self, eventtime):
@@ -244,7 +254,8 @@ class PrinterExtruder:
         start_v = move.start_v * axis_r
         cruise_v = move.cruise_v * axis_r
         can_pressure_advance = False
-        if axis_r > 0. and (move.axes_d[0] or move.axes_d[1]):
+        if axis_r > 0. and (move.axes_d[0] or move.axes_d[1]
+                            or self.enable_pa_for_extrude_only_moves):
             can_pressure_advance = True
         # Queue movement (x is extruder movement, y is pressure advance flag)
         self.trapq_append(self.trapq, print_time,
