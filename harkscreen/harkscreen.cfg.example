@@ -1,25 +1,27 @@
-# Hark Screen - the K2 touchscreen.
+# Hark Screen - the K2 touchscreen. Default look: Klipper's logo and colours.
 # Edit and save: the screen picks up changes within a second, no restart.
+# How to make it your own: docs/SCREEN-CUSTOMISE.md. Another example theme:
+# harkscreen/themes/hark-tech.cfg
 
 [brand]
 # Shown in the header
-name: Hark Tech
+name: K2 OpenKlipper
 # PNG in this folder (or a full path). Transparent PNGs work best.
-logo: harkscreen_logo.png
+logo: klipper-logo.png
 # Show the logo large on the Status page when nothing is printing
 idle_logo: yes
 
 [theme]
-# Colours as #RRGGBB
-background: #05070d
-panel: #0c1422
-panel_edge: #16314f
-accent: #1ab2ff
-text: #e8f4ff
-muted: #7f93ad
+# Colours as #RRGGBB (Klipper slate and red)
+background: #12171d
+panel: #1b232c
+panel_edge: #3c4b5a
+accent: #d9434a
+text: #eef2f6
+muted: #8a97a6
 ok: #2ecc71
 warn: #f5a623
-error: #ff4d4f
+error: #ff6b6b
 # Any TTF/OTF font file, and a size multiplier
 font: /etc/sysConfig/defData/SourceHanSansCN-Normal.otf
 font_scale: 1.0

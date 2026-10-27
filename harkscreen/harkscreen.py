@@ -25,12 +25,12 @@ W, H = 800, 480
 HEADER_H, NAV_W = 64, 120
 
 DEFAULTS = {
-    "brand": {"name": "Hark Tech", "logo": "harkscreen_logo.png",
+    "brand": {"name": "K2 OpenKlipper", "logo": "klipper-logo.png",
               "idle_logo": "yes"},
-    "theme": {"background": "#05070d", "panel": "#0c1422",
-              "panel_edge": "#16314f", "accent": "#1ab2ff",
-              "text": "#e8f4ff", "muted": "#7f93ad", "ok": "#2ecc71",
-              "warn": "#f5a623", "error": "#ff4d4f",
+    "theme": {"background": "#12171d", "panel": "#1b232c",
+              "panel_edge": "#3c4b5a", "accent": "#d9434a",
+              "text": "#eef2f6", "muted": "#8a97a6", "ok": "#2ecc71",
+              "warn": "#f5a623", "error": "#ff6b6b",
               "font": "/etc/sysConfig/defData/SourceHanSansCN-Normal.otf",
               "font_scale": "1.0"},
     "screen": {"moonraker": "http://127.0.0.1:7126", "refresh": "1.0",
@@ -74,10 +74,18 @@ class Config:
         cp = configparser.ConfigParser()
         cp.read_dict(DEFAULTS)
         try:
-            cp.read(self.path)
             self.mtime = os.path.getmtime(self.path)
+            cp.read(self.path)
         except OSError:
             self.mtime = None
+        except configparser.Error as e:
+            # A broken edit (e.g. a line with no "key: value") keeps the last
+            # good settings, or the defaults, rather than stopping the screen.
+            print("harkscreen.cfg not loaded:", e, flush=True)
+            if getattr(self, "cp", None) is not None:
+                return
+            cp = configparser.ConfigParser()
+            cp.read_dict(DEFAULTS)
         self.cp = cp
 
     def changed(self):
@@ -90,10 +98,16 @@ class Config:
         return self.cp.get(section, key)
 
     def flag(self, section, key):
-        return self.cp.getboolean(section, key)
+        try:
+            return self.cp.getboolean(section, key)
+        except ValueError:
+            return DEFAULTS[section][key] == "yes"
 
     def num(self, section, key):
-        return self.cp.getfloat(section, key)
+        try:
+            return self.cp.getfloat(section, key)
+        except ValueError:
+            return float(DEFAULTS[section][key])
 
 
 class Wifi:

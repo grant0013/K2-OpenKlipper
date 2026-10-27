@@ -18,10 +18,14 @@ the framebuffer and talks to Moonraker.
 - Light on the K2's 2-core CPU: redraws only on change, partial blits for
   animations, pinned to CPU0 at nice 10. About 6% CPU when idle.
 
-Install: copy `harkscreen/` to `/mnt/UDISK/harkscreen/`, put
-`harkscreen.cfg` (from the `.example`) and a logo PNG in the Klipper config
-folder (`harkscreen_logo.png` is the Hark Tech one; swap in your own), and the
-switch script starts it (`start.sh`). `switch-to-stock.sh` stops it.
+`install.sh` sets it up: it copies `harkscreen/` to `/mnt/UDISK/harkscreen/`
+and puts `harkscreen.cfg` (from the `.example`) and `klipper-logo.png` in the
+Klipper config folder. The switch script starts it (`start.sh`);
+`switch-to-stock.sh` stops it.
+
+The default look is Klipper's logo and colours. To change the name, logo,
+colours, font or pages, see **[customising the screen](SCREEN-CUSTOMISE.md)**.
+`harkscreen/themes/hark-tech.cfg` is a second example theme.
 
 `tools/bootanim/make_bootanim.py` builds a custom boot animation for
 `/usr/res/boot-play`. Back up the stock one first.

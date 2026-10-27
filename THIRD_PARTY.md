@@ -10,6 +10,11 @@ The `klippy/` host tree is based on Klipper commit
 Klipper is licensed under GNU GPLv3. See `COPYING` and
 <https://www.klipper3d.org/>.
 
+`harkscreen/klipper-logo.png` is the Klipper logo from the Klipper
+repository (`docs/img/klipper-logo.png`), with its grey recoloured light grey
+so it shows on a dark screen. It identifies the Klipper software the screen
+runs on; this project is not affiliated with the Klipper project.
+
 `klippy/chelper/c_helper.so` was cross-built from the included Klipper C
 sources for the K2 platform. It is not intended to be a proprietary binary.
 

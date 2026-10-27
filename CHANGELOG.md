@@ -14,6 +14,15 @@
 - The K2's internal camera works on the host with a USB-A lead
   (`k2-camera.service`, ustreamer MJPEG, 15 fps).
 
+### Touchscreen
+
+- Generic default look: the Klipper logo and Klipper's colours, header
+  "K2 OpenKlipper". The Hark Tech look moved to `harkscreen/themes/hark-tech.cfg`.
+- [docs/SCREEN-CUSTOMISE.md](docs/SCREEN-CUSTOMISE.md): your own name, logo,
+  colours, font and pages, edited in Mainsail and applied live.
+- A mistyped number or a broken line in `harkscreen.cfg` no longer stops the
+  screen: it falls back to the default or keeps the last good settings.
+
 ### Print safety
 
 - `[hark_safety]`: pauses when the hotend or part fan is commanded on but its

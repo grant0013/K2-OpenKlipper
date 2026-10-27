@@ -140,7 +140,12 @@ cp "$BUILD/system/moonraker-compat/.version" /usr/share/moonraker/.version
 
 # Touchscreen and camera
 cp -a "$BUILD/harkscreen" /mnt/UDISK/harkscreen
-[ -f "$PDATA/config/harkscreen.cfg" ] || cp "$BUILD/harkscreen/harkscreen.cfg.example" "$PDATA/config/harkscreen.cfg"
+# Default look: Klipper logo and colours. An existing harkscreen.cfg (your own
+# theme) is kept. See docs/SCREEN-CUSTOMISE.md.
+if [ ! -f "$PDATA/config/harkscreen.cfg" ]; then
+    cp "$BUILD/harkscreen/harkscreen.cfg.example" "$PDATA/config/harkscreen.cfg"
+    cp "$BUILD/harkscreen/klipper-logo.png" "$PDATA/config/klipper-logo.png"
+fi
 cp -a "$BUILD/harkcam" /mnt/UDISK/harkcam
 chmod 755 /mnt/UDISK/harkscreen/start.sh /mnt/UDISK/harkcam/start.sh
 

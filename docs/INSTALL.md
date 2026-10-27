@@ -127,7 +127,9 @@ reasons for each line are in [config/ORCA-K2-PROFILE.cfg](../config/ORCA-K2-PROF
    first-layer correction is `variable_hot_z_comp` in the `START_PRINT` macro
    (Mainsail > Machine > `k2-mainline-20260729-v62.cfg`; 0.04 mm on our printer;
    bigger = nozzle lower).
-4. Optional, per filament slot: pressure advance measured by the nozzle strain
+4. Optional: make the touchscreen your own (name, logo, colours):
+   [customising the screen](SCREEN-CUSTOMISE.md).
+5. Optional, per filament slot: pressure advance measured by the nozzle strain
    gauge, `PA_CAL_RUN SLOT=A` (see [PA calibration](PA-CALIBRATION.md)), and
    input shaping with `SHAPER_CALIBRATE`.
 
