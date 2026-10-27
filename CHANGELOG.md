@@ -85,6 +85,20 @@
   tachometer reads zero, cancels on an X/Y motor controller fault, and pauses on
   an extruder controller fault (clog or jam). Stock firmware did this in
   master-server and motor_control, which the open stack does not run.
+- Motor fault detection fixed: a faulted controller answers with a status
+  byte of 02, which the watch used to read as no answer, so it never tripped.
+  Replies are now parsed and decoded (logic adapted from Jacob10383's K2 Plus
+  firmware): only an error code pauses or cancels, and the message names it
+  (for example "excessive position tracking error"). Warnings such as low
+  supply voltage or a hot controller MCU are reported and the print carries
+  on. Print start reads, clears and re-reads the motor faults.
+- `[k2_motor_bus]` checks replies (CRC, sender address, function echo) so a
+  late CFS reply or noise is not taken as a motor reply, and retries motor
+  reads once (`reply_check`). `MOTOR_STALL_MODE` reports a missing echo
+  (`stall_mode_check: abort` stops the homing instead). New diagnostics:
+  `MOTOR_FAULTS`, `MOTOR_CLEAR_FAULTS`, `MOTOR_TEMPS`, `MOTOR_E_ADDR`, a
+  calibration check at wake, optional `homing_fault_check` and
+  `temp_poll_interval`.
 - Hotend `max_temp` back to the stock 350.
 - `PAUSE` lifts the nozzle 2 mm and parks it off the part. A job left paused
   for 30 minutes turns the hotend off but keeps the bed and homing, so it can
