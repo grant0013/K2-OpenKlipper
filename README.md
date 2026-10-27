@@ -65,17 +65,19 @@ Earlier snapshots described the test machine as a K2 Plus; it is an F021 K2.
 
 ## Install and rollback
 
-This is not yet a one-click install. You need root SSH on the K2 and
-some Linux experience. The stack installs next to the stock firmware:
+**Step-by-step guide: [docs/INSTALL.md](docs/INSTALL.md)** (root access on the
+touchscreen, one SSH session, about 15 minutes). In short, on the K2 as root:
 
 ```sh
-sh /mnt/UDISK/k2-mainline-20260729-v62/switch-to-mainline.sh mainline_stage2.cfg   # open stack
-sh /mnt/UDISK/k2-mainline-20260729-v62/switch-to-stock.sh                          # back to stock
+python3 -c "import urllib.request as u; open('/tmp/install.sh','wb').write(u.urlopen('https://raw.githubusercontent.com/grant0013/K2-OpenKlipper/main/install.sh').read())" && sh /tmp/install.sh --check
+sh /tmp/install.sh                                        # install (backs up first)
+sh /mnt/UDISK/k2-mainline-20260729-v62/uninstall.sh      # back to stock
 ```
 
-See [OPEN-STACK.md](OPEN-STACK.md) for the architecture, deployment and
-rollback, and [CONTRIBUTING.md](CONTRIBUTING.md) before testing on your own
-printer. Never switch builds while a job is printing or paused.
+It installs next to the stock firmware and backs up every system file it
+changes. Never install, switch or uninstall while a job is printing or paused.
+See [OPEN-STACK.md](OPEN-STACK.md) for the architecture and
+[CONTRIBUTING.md](CONTRIBUTING.md) before testing on your own printer.
 
 ## Warnings learned the hard way
 

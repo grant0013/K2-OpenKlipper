@@ -19,8 +19,10 @@ MONITOR=Monitor
 # Klipper socket and can inject pause/cancel/gcode commands; Monitor explicitly
 # respawns it. Keep the passive UI/media/network processes, but do not launch
 # either closed-loop controller.
+# upgrade-server is not started, so a Creality OTA cannot wipe the open stack
+# (one did on fw 1.1.7.0). Run uninstall.sh before updating Creality firmware.
 APP_LIST="$BIN_PATH/$AUDIO_SERVER $BIN_PATH/$WIFI_SERVER \
-          $BIN_PATH/$APP_SERVER $BIN_PATH/$DISPLAY_SERVER $BIN_PATH/$UPGRADE_SERVER \
+          $BIN_PATH/$APP_SERVER $BIN_PATH/$DISPLAY_SERVER \
           $BIN_PATH/$WEB_SERVER"
 
 USER_DATA_DIR=/mnt/UDISK
@@ -63,7 +65,7 @@ start_apps() {
 
 stop_apps() {
     # Clean up controllers that may still be running from the stock APP_LIST.
-    killall -9 $MASTER_SERVER $MONITOR 2>/dev/null
+    killall -9 $MASTER_SERVER $MONITOR $UPGRADE_SERVER 2>/dev/null
     for app in $APP_LIST
     do
         killall -9 $app
