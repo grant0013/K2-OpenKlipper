@@ -47,7 +47,7 @@ Optionally, Klipper can run on a separate PC over one USB cable
 | Klipper extras | Ideas from Kalico as add-on modules: `RELOAD_GCODE_MACROS`, `PID_PROFILE` per CFS slot material, `BED_MESH_CHECK` |
 | Klipper on a separate PC | Optional: Klipper and Moonraker on any Linux PC over one USB cable; the K2 board only relays its serial ports ([external host](docs/EXTERNAL-HOST.md)) |
 | Print safety | `[hark_safety]`: pauses on a dead hotend or part fan, cancels on an X/Y motor fault, pauses on an extruder fault (clog or jam) |
-| Runout refill | When a reel runs out, another CFS slot with the same material and colour takes over and the print carries on (else it pauses), like stock |
+| Runout refill | When a reel runs out, another CFS slot with the same material and colour takes over and the print carries on (else it pauses), like stock. A warning names the next slot as soon as the reel's end passes the CFS |
 | Chamber fan | The exhaust fan vents the chamber above 35C while printing, like stock; the slicer's chamber target (M141/M191) raises it |
 | Updates | Tested releases from GitHub: an Update button in Mainsail and on the touchscreen; your settings live in `printer-overrides.cfg` and are kept |
 | AI failure detection | Optional, on the host PC: Obico model every 10 s plus a local vision model (Qwen3-VL) as a second opinion ([ai-detect](tools/ai-detect/)) |

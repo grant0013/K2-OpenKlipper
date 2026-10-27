@@ -30,8 +30,9 @@ earlier notes calling it a K2 Plus were wrong.
   firmware.
 - Klipper and Moonraker self-update are disabled: updates are built and
   deployed deliberately (see `OPEN-STACK.md`).
-- Power-loss resume, runout recovery and multi-box CFS still need structured
-  testing.
+- Runout refill was tested with real runouts on 2026-10-27 (slot A to slot C,
+  1 min 38 s pause). Power-loss resume and multi-box CFS still need
+  structured testing.
 - The bottom-switch reference takes about 50 s per print; its speeds are
   conservative.
 
