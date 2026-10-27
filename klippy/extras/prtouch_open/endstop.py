@@ -13,6 +13,11 @@
 #   home_start                     prtouch.py:152-154  (always True — v1/v2 deferred to probe_by_step)
 #   add_stepper / get_steppers     prtouch.py:156-160
 #
+# Portions adapted from Jacob10383's K2 Plus custom firmware
+# (https://github.com/Jacob10383/k2-plus-custom-firmware, extras/prtouch.py),
+# GPLv3: fail-closed arming (ack err check, trigger line asserted/released
+# checks, disarm on motors off) and the no-trigger pressure-buffer dump.
+#
 # Note: the upstream `home_start` returns True immediately because v1/v2
 # prtouch implements its own probe motion via `probe_by_step` rather than
 # Klipper's standard endstop polling. For our v3-targeted reimplementation
@@ -43,6 +48,10 @@ from . import cfg as cfg_mod
 from . import pres as pres_mod
 from . import step as step_mod
 from . import motion as motion_mod
+from . import zip as zip_mod
+
+# The nozzle MCU's pressure buffer holds 64 samples (docs/PRTOUCH.md).
+_PRES_BUF_LEN = 64
 
 
 def _contact_hysteresis_hold(filtered_abs, entry_threshold,
@@ -190,6 +199,10 @@ class PRTouchEndstopWrapper:
         )
         self.step_mcu = self._mcu_endstop.get_mcu()
         self._probe_active = False
+        # Outcome of the last probe move, read by the bounded no-trigger
+        # retry in prtouch_mainline.py.
+        self.last_no_trigger = False
+        self.last_cleanup_ok = False
 
         # ---- PressureSampler + OID + callbacks (early registration) ------
         self.sampler = pres_mod.PressureSampler(self.pres_mcu, self.cfg)
@@ -295,6 +308,10 @@ class PRTouchEndstopWrapper:
         printer.register_event_handler(
             'homing:homing_move_end', self._handle_homing_move_end,
         )
+        printer.register_event_handler('klippy:shutdown', self._handle_shutdown)
+        printer.register_event_handler(
+            'stepper_enable:motor_off', self._handle_motor_off,
+        )
 
     def _handle_mcu_identify(self):
         # OID allocation + register_config_callback already happened in
@@ -347,21 +364,58 @@ class PRTouchEndstopWrapper:
         # ---- ProbeMotion (composes sampler + step) ----
         self.motion = motion_mod.ProbeMotion(self)
 
-    def _handle_ack_prtouch(self, params):
-        """Generic ack_prtouch handler — logs only on error.
+    def _check_ack(self, label, ack):
+        """Fail closed when the MCU acks a start command with an error.
 
-        ack_prtouch is the MCU's confirmation that a config/start/stop
-        command was processed. We don't currently wait for it (we use
-        fire-and-forget for config and lifecycle commands), but if the
-        MCU reports an error we want to know.
+        The pres/step start commands are query commands, so send() already
+        waits for the matching ack_prtouch (and raises on timeout). The err
+        field was never looked at: an MCU that refused to start would still
+        let the probing move run with nothing to stop it.
         """
-        if params.get('err', 0) != 0:
-            logging.warning(
-                "K2-PRTouch: MCU ack err=%d expar0=%u expar1=%u",
-                params.get('err'),
-                params.get('expar0'),
-                params.get('expar1'),
-            )
+        if not self.cfg.pres_arm_checks or not isinstance(ack, dict):
+            return
+        err = ack.get('err', 0)
+        if err:
+            raise self.obj.printer.command_error(
+                "K2-PRTouch: %s refused by the MCU (ack err=%s expar0=%s "
+                "expar1=%s); not probing"
+                % (label, err, ack.get('expar0'), ack.get('expar1')))
+
+    def _swap_triggered(self):
+        """Read PC7 now (True = the pressure MCU is signalling contact)."""
+        mcu = self.step_mcu
+        if mcu.is_fileoutput():
+            return False
+        reactor = self.obj.printer.get_reactor()
+        print_time = mcu.estimated_print_time(reactor.monotonic())
+        return bool(self._mcu_endstop.query_endstop(print_time))
+
+    def _wait_swap_release(self):
+        reactor = self.obj.printer.get_reactor()
+        deadline = reactor.monotonic() + self.cfg.pres_release_timeout
+        while self._swap_triggered():
+            now = reactor.monotonic()
+            if now >= deadline:
+                return False
+            reactor.pause(min(deadline, now + 0.005))
+        return True
+
+    def _handle_shutdown(self):
+        # The MCUs are shut down; nothing can be sent. Forget the session so
+        # a restart does not refuse its first probe as "already active".
+        self._probe_active = False
+        self.sampler._streaming = False
+        self.step._capture_active = False
+
+    def _handle_motor_off(self, print_time=None):
+        if not self._probe_active:
+            return
+        logging.warning("K2-PRTouch: motors off during a probe; disarming")
+        try:
+            self.probe_finish(None)
+        except Exception:
+            logging.exception("K2-PRTouch: disarm on motors off failed")
+            self._probe_active = False
 
     def _handle_async_pres(self, params):
         """Capture every resault_prtouch_pres pushed by the MCU.
@@ -450,11 +504,14 @@ class PRTouchEndstopWrapper:
         if self._probe_active:
             raise self.obj.printer.command_error(
                 "K2-PRTouch pressure session already active")
+        self.last_no_trigger = False
+        self.last_cleanup_ok = False
         # Arm step capture first so no pressure edge can precede its timestamp
         # history. Both MCUs use the stock 0.78125ms acquisition period.
-        self.step.start_capture()
+        step_ack = self.step.start_capture()
         try:
-            self.sampler.start_streaming(
+            self._check_ack('start_prtouch_step', step_ack)
+            pres_acks = self.sampler.start_streaming(
                 cfg_regs=self.cfg.cfg_regs,
                 ned_tftr=self.cfg.pres_ned_tftr,
                 ned_hftr=self.cfg.pres_ned_hftr,
@@ -464,8 +521,13 @@ class PRTouchEndstopWrapper:
                 add_hold=self.cfg.add_hold,
                 lmt_dead=self.cfg.pres_dead_samples,
             )
+            for ack in pres_acks or ():
+                self._check_ack('start_prtouch_pres', ack)
         except Exception:
-            self.step.stop_capture()
+            try:
+                self.sampler.stop_streaming(sta_swap=1)
+            finally:
+                self.step.stop_capture()
             raise
         self._probe_active = True
         # The MCU deliberately suppresses triggering for the first
@@ -482,6 +544,14 @@ class PRTouchEndstopWrapper:
             self.cfg.max_hold, self.cfg.add_hold,
             self.cfg.pres_dead_samples, warmup,
         )
+        # A line that already reads "contact" would stop the move at once and
+        # report the start height as the bed. Refuse instead.
+        if self.cfg.pres_arm_checks and self._swap_triggered():
+            self.probe_finish(None)
+            raise self.obj.printer.command_error(
+                "K2-PRTouch: contact line PA15->PC7 is already triggered "
+                "after arming, before any movement; refusing to probe. Lift "
+                "the nozzle clear of the bed, clean it, and retry.")
 
     def probe_finish(self, hmove):
         if not self._probe_active:
@@ -492,6 +562,23 @@ class PRTouchEndstopWrapper:
         finally:
             self.step.stop_capture()
             self._probe_active = False
+        self.last_cleanup_ok = True
+        # The next probe refuses to start on a stuck line anyway, so a line
+        # that does not release is reported rather than failing a probe that
+        # has already measured.
+        if not self.cfg.pres_arm_checks:
+            return
+        try:
+            released = self._wait_swap_release()
+        except Exception:
+            logging.exception("K2-PRTouch: PC7 release query failed")
+            released = False
+        if not released:
+            self.last_cleanup_ok = False
+            msg = ("K2-PRTouch: contact line PC7 did not release within "
+                   "%.3fs after the probe" % (self.cfg.pres_release_timeout,))
+            logging.warning(msg)
+            self.obj.gcode.respond_info(msg)
 
     def home_start(
         self, print_time, sample_time, sample_count, rest_time, triggered=True
@@ -507,11 +594,63 @@ class PRTouchEndstopWrapper:
 
     def home_wait(self, home_end_time):
         try:
-            return self._mcu_endstop.home_wait(home_end_time)
+            result = self._mcu_endstop.home_wait(home_end_time)
+            if result == 0. and self._probe_active:
+                # The move ran to its end without a contact edge.
+                self.last_no_trigger = True
+                if self.cfg.probe_fail_dump:
+                    self._dump_pressure_buffer()
+            return result
         finally:
             # HomingMove emits its end event later, but clean up immediately
             # after the trigger result so PC7 cannot remain asserted.
             self.probe_finish(None)
+
+    def _dump_pressure_buffer(self):
+        """Log the MCU's 64-sample pressure window after a missed contact.
+
+        Read while still streaming: stopping first empties the buffer. Pages
+        decode on their own (prtouch_open.zip). Never raises.
+        """
+        try:
+            if self.step_mcu.is_fileoutput() or self.sampler.proto is None:
+                return
+            oid = self.pres_oid
+            idx = 0
+            meta = None
+            ticks = []
+            values = []
+            for _page in range(16):
+                if idx >= _PRES_BUF_LEN:
+                    break
+                resp = self.sampler.proto.read.send(
+                    [oid, 0, 0, idx, _PRES_BUF_LEN - idx])
+                if meta is None:
+                    meta = resp
+                n = resp.get('len', 0) if isinstance(resp, dict) else 0
+                if not n:
+                    break
+                _, vals = zip_mod.unzip_data(resp.get('datas', b''), True)
+                _, tks = zip_mod.unzip_data(resp.get('ticks', b''), False)
+                values.extend(vals)
+                ticks.extend(tks)
+                idx += n
+            meta = meta if isinstance(meta, dict) else {}
+            if values:
+                summary = ("samples=%d first=%d last=%d min=%d max=%d "
+                           "range=%d"
+                           % (len(values), values[0], values[-1],
+                              min(values), max(values),
+                              max(values) - min(values)))
+            else:
+                summary = "samples=0"
+            msg = ("K2-PRTouch no-trigger pressure buffer: tri_chxs=%s "
+                   "buf_len=%s %s (full window in klippy.log)"
+                   % (meta.get('tri_chxs'), meta.get('buf_len'), summary))
+            logging.info("%s\n  pressure=%s\n  ticks=%s", msg, values, ticks)
+            self.obj.gcode.respond_info(msg)
+        except Exception:
+            logging.exception("K2-PRTouch: pressure buffer dump failed")
 
     def query_endstop(self, print_time):
         return self._mcu_endstop.query_endstop(print_time)

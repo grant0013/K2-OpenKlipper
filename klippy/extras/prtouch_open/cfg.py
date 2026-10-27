@@ -9,6 +9,9 @@
 # Specifically: PRTouchCFG class, lines 14-61. Field-by-field equivalence
 # is maintained so existing K2 printer.cfg `[prtouch_v3] ...` sections work
 # unchanged.
+# Portions adapted from Jacob10383's K2 Plus custom firmware
+# (https://github.com/Jacob10383/k2-plus-custom-firmware, extras/prtouch.py),
+# GPLv3: the arming-check and failure-dump options.
 """Config schema for the prtouch_v3 / prtouch_open module.
 
 Reads from the `[prtouch_v3]` section in printer.cfg, matching what Creality's
@@ -103,9 +106,25 @@ class PrtouchConfig:
         self.pres_ned_tftr = int(self.pres_tri_fter[0])
         self.pres_ned_hftr = int(self.pres_tri_fter[1])
         self.pres_ned_lftr = int(round(self.pres_tri_fter[2] * 1000.0))
+        # Sent to the MCU as lmt_dead unchanged (128). The K2 Plus firmware
+        # treats the name as milliseconds and sends 128 / 0.78125 = 164
+        # samples. Which unit the MCU uses is unconfirmed, so this keeps the
+        # value that has been probing on the K2 (docs/PRTOUCH.md).
         self.pres_dead_samples = int(round(config.getfloat(
             'pres_ded_tkms', default=128.0, minval=0.0, maxval=2000.0,
         )))
+
+        # Fail-closed arming (adapted from the K2 Plus firmware): refuse a
+        # probe when either MCU acks start with an error or when PC7 already
+        # reads triggered after arming, and check PC7 releases afterwards.
+        # These only refuse probes that could not have measured the bed.
+        self.pres_arm_checks = config.getboolean('pres_arm_checks', default=True)
+        self.pres_release_timeout = config.getfloat(
+            'pres_release_timeout', default=0.25, minval=0.01, maxval=2.0,
+        )
+        # After a probe that never triggered, log the MCU's 64-sample
+        # pressure buffer for diagnosis. Read-only.
+        self.probe_fail_dump = config.getboolean('probe_fail_dump', default=True)
 
         self.g28_sta0_min_hold = config.getint(
             'g28_sta0_min_hold', default=self.min_hold * 2,
