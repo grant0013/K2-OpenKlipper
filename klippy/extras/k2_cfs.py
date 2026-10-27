@@ -459,6 +459,8 @@ class K2CFS:
                 'position_max', x_max, note_valid=False)
         except Exception:
             pass
+        self.stall_retry_z_lift = config.getfloat(
+            'stall_retry_z_lift', 10., minval=0., maxval=50.)
         self.stall_retry_moves = _parse_moves(
             config.get('stall_retry_moves', 'Y255, X220, Y40, X40'),
             x_max, self.purge_safe_y, config.error)
@@ -1789,7 +1791,12 @@ class K2CFS:
             return False
         gcmd.respond_info(message)
         rate = self.purge_speed * 60.
-        lines = ["G90", "G1 Y%.3f F%.3f" % (self.purge_safe_y, rate)]
+        # Mid-print the head sits only just above the part, so lift clear of
+        # it before crossing the bed and come back down at the chute
+        z_max = toolhead.get_status(0.).get('axis_maximum', [0., 0., 0.])[2]
+        z_lift = min(position[2] + self.stall_retry_z_lift, z_max)
+        lines = ["G90", "G1 Z%.3f F600" % z_lift,
+                 "G1 Y%.3f F%.3f" % (self.purge_safe_y, rate)]
         for move in self.stall_retry_moves:
             lines.append("G1 %s F%.3f" % (" ".join(
                 "%s%.3f" % (axis, move[axis]) for axis in sorted(move)), rate))
@@ -1799,6 +1806,7 @@ class K2CFS:
             "G1 Y%.3f F%.3f" % (self.purge_y, rate),
             "G1 X%.3f Y%.3f F%.3f" % (self.purge_gate_x, self.purge_y, rate),
             "G1 X%.3f Y%.3f F%.3f" % (self.purge_x, self.purge_y, rate),
+            "G1 Z%.3f F600" % position[2],
             "M400",
         ])
         self.gcode.run_script_from_command(
