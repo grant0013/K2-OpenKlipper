@@ -643,6 +643,18 @@
   "name": "param_elec_angle_calibration_standar_deg",
   "class": "locked"
  },
+ "9": {
+  "name": "param_elec_offset",
+  "class": "cfg",
+  "note": "factory calibration: read only, never write",
+  "source": "Jacob10383 K2 Plus firmware motor_map.json"
+ },
+ "25": {
+  "name": "param_elec_offset_err_deg",
+  "class": "cfg",
+  "note": "factory calibration: read only, never write",
+  "source": "Jacob10383 K2 Plus firmware motor_map.json"
+ },
  "11": {
   "name": "param_emergency_pin_mode",
   "class": "locked"
@@ -686,6 +698,12 @@
  "21": {
   "name": "param_motion_dir",
   "class": "cfg"
+ },
+ "10": {
+  "name": "param_phase_order_invert",
+  "class": "cfg",
+  "note": "factory calibration: read only, never write",
+  "source": "Jacob10383 K2 Plus firmware motor_map.json"
  },
  "4": {
   "name": "param_pwm_period_s",
@@ -766,6 +784,12 @@
  "186": {
   "name": "protection_param_prt_cmd_mutation_turn",
   "class": "locked"
+ },
+ "227": {
+  "name": "protection_param_prt_continuous_clear_time_s",
+  "class": "cfg",
+  "note": "stock 0.5",
+  "source": "Jacob10383 K2 Plus firmware motor_map.json"
  },
  "180": {
   "name": "protection_param_prt_continuous_cur_A",

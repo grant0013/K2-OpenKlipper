@@ -10,17 +10,25 @@
 #     cancels the print on a fault (stall, tracking error, overcurrent ...),
 #   - polls the extruder controller's status and pauses on a fault: an
 #     extruder that cannot follow (clog, jam) trips its tracking protection.
+# Only an error code in the reply trips an action, named in the message.
+# Warning codes (supply voltage low, controller MCU hot, comms) are reported
+# once and the print carries on. A missing or invalid reply never trips.
 #
 #   SAFETY_STATUS [QUERY=1]     report the watch state (QUERY polls the motors)
 #   SAFETY_TEST TYPE=FAN|XY|E   run that fault's action as if it happened
+#
+# Reply parsing and fault decoding (in k2_motor_proto.py): portions adapted
+# from Jacob10383's K2 Plus custom firmware
+# (https://github.com/Jacob10383/k2-plus-custom-firmware,
+# extras/motor_control.py), GPLv3.
 #
 # Copyright (C) 2026  Hark Tech
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import logging
 
-STATUS = (0x00, 0x0c, 0x0b)
-CLEAR_ERRORS = (0x00, 0x0c, 0x05)
+from . import k2_motor_proto as proto
+
 ACTIONS = {'cancel': 'cancel', 'pause': 'pause', 'log': 'log'}
 
 
@@ -48,6 +56,7 @@ class HarkSafety:
         self.fan_on_since = {}
         self.fan_zero_since = {}
         self.motor_bad = {}
+        self.motor_warned = {}
         self.last = {'fans': {}, 'motors': {}, 'event': None}
         self.gcode.register_command('SAFETY_STATUS', self.cmd_SAFETY_STATUS,
                                     desc="Report the print safety watch")
@@ -74,7 +83,7 @@ class HarkSafety:
                 self.watch_from = eventtime + self.start_grace
                 self.tripped = False
                 self.fan_on_since.clear(); self.fan_zero_since.clear()
-                self.motor_bad.clear()
+                self.motor_bad.clear(); self.motor_warned.clear()
             self.was_printing = printing
             if printing and not self.tripped and eventtime >= self.watch_from:
                 self._check_fans(eventtime)
@@ -116,65 +125,108 @@ class HarkSafety:
                 return
 
     def _status(self, name):
+        """Decoded protection status, or None when the motor gives no valid
+        reply (no answer, bad CRC, someone else's frame)."""
         try:
             if name == 'e':
                 if self.bus.e_send is None:
                     return None
-                frame, resp = self.bus.e_xfer(self.e_addr, STATUS)
-            else:
-                frame, resp = self.bus.xfer(self.xy_addrs[name], STATUS)
+                return self.bus.query_protection('e', self.e_addr)
+            return self.bus.query_protection(name, self.xy_addrs[name])
         except Exception as e:
             logging.info("hark_safety: %s status query failed: %s", name, e)
             return None
-        if not resp:
-            return None
-        resp = bytes(resp)
-        i = resp.find(bytes(STATUS[:2]))
-        if i < 0:
-            return None
-        return resp[i + 2:i + 10]
+
+    def _note_status(self, name, detail):
+        if detail is None:
+            self.last['motors'][name] = None
+            return
+        self.last['motors'][name] = {
+            'status': detail['status'], 'raw': detail['raw'],
+            'errors': list(detail['errors']),
+            'warnings': list(detail['warnings']),
+            'summary': proto.describe_protection(detail)}
 
     def _check_motors(self, eventtime):
         if self.bus is None:
             return
         for name in ('x', 'y', 'e'):
-            data = self._status(name)
-            self.last['motors'][name] = data.hex(' ') if data else None
-            if data is None:
+            detail = self._status(name)
+            self._note_status(name, detail)
+            if detail is None:
                 continue        # no answer: never trip on a missed reply
-            if any(data):
+            if detail['has_error']:
                 bad = self.motor_bad.get(name, 0) + 1
                 self.motor_bad[name] = bad
                 logging.info("hark_safety: %s motor status %s (%d)",
-                             name, data.hex(' '), bad)
+                             name, detail['raw'], bad)
                 if bad >= self.motor_fail_count:
+                    what = ", ".join(detail['errors'])
                     if name == 'e':
                         self._trip(self.e_action,
-                                   "the extruder motor reports a fault (%s): "
+                                   "the extruder motor reports %s (%s): "
                                    "likely a clog or jam"
-                                   % data.hex(' '))
+                                   % (what, detail['raw']))
                     else:
                         self._trip(self.xy_action,
-                                   "the %s motor reports a fault (%s): stall, "
+                                   "the %s motor reports %s (%s): stall, "
                                    "collision or driver error"
-                                   % (name.upper(), data.hex(' ')))
+                                   % (name.upper(), what, detail['raw']))
                     return
-            else:
-                self.motor_bad[name] = 0
+                continue
+            self.motor_bad[name] = 0
+            self._warn_motor(name, detail)
+
+    def _warn_motor(self, name, detail):
+        # Warnings (low supply voltage, controller MCU hot, comms) do not
+        # stop the print: say so once when they appear or change. A status
+        # latch with no error or warning code (a stall flag left by stall
+        # homing, say) only goes to the log.
+        flags = tuple(detail['warnings'])
+        if not flags and detail['status']:
+            flags = (proto.describe_protection(detail),)
+        if flags == self.motor_warned.get(name, ()):
+            return
+        self.motor_warned[name] = flags
+        if not flags:
+            return
+        label = 'extruder' if name == 'e' else name.upper()
+        if not detail['warnings']:
+            logging.info("hark_safety: %s motor %s (%s)", label, flags[0],
+                         detail['raw'])
+            return
+        msg = ("Safety watch warning: %s motor reports %s (%s); the print "
+               "carries on"
+               % (label, ", ".join(flags), detail['raw']))
+        logging.warning("hark_safety: %s", msg)
+        self.gcode.respond_info(msg)
 
     def _clear_motor_errors(self):
+        # Read, clear, read again (as Jacob10383's firmware does before
+        # homing) instead of a blind clear. Every motor is still cleared, as
+        # before. An error that survives the clear is reported here; the
+        # watch trips on it once start_grace has passed.
         if self.bus is None:
             return
-        for name, addr in self.xy_addrs.items():
-            try:
-                self.bus.xfer(addr, CLEAR_ERRORS, timeout=.05)
-            except Exception:
-                pass
+        names = ['x', 'y']
+        if self.bus.e_send is not None:
+            names.append('e')
+        addrs = dict(self.xy_addrs, e=self.e_addr)
         try:
-            if self.bus.e_send is not None:
-                self.bus.e_xfer(self.e_addr, CLEAR_ERRORS)
+            before, after, persistent = self.bus.recover_faults(
+                names, always_clear=True, addrs=addrs)
         except Exception:
-            pass
+            logging.exception("hark_safety: motor fault clear failed")
+            return
+        logging.info("hark_safety: print start motor faults before %s, "
+                     "after %s", self.bus.describe_faults(before),
+                     self.bus.describe_faults(after))
+        if persistent:
+            msg = ("motor error still latched after a clear at print "
+                   "start: %s" % (self.bus.describe_faults(persistent),))
+            self.last['event'] = msg
+            logging.warning("hark_safety: %s", msg)
+            self.gcode.respond_raw("!! Safety watch: %s" % (msg,))
 
     # --- actions -------------------------------------------------------
     def _trip(self, action, why):
@@ -200,11 +252,14 @@ class HarkSafety:
     def cmd_SAFETY_STATUS(self, gcmd):
         if gcmd.get_int('QUERY', 0, minval=0, maxval=1) and self.bus:
             for name in ('x', 'y', 'e'):
-                data = self._status(name)
-                self.last['motors'][name] = data.hex(' ') if data else None
+                self._note_status(name, self._status(name))
+        motors = ", ".join(
+            "%s %s" % (name.upper(), "no reply" if m is None
+                       else "%s [%s]" % (m['summary'], m['raw']))
+            for name, m in sorted(self.last['motors'].items())) or "not read"
         gcmd.respond_info(
             "Safety watch: fans %s, motors %s, actions fan=%s xy=%s e=%s, "
-            "last event %s" % (self.last['fans'], self.last['motors'],
+            "last event %s" % (self.last['fans'], motors,
                                self.fan_action, self.xy_action, self.e_action,
                                self.last['event']))
 
