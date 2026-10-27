@@ -182,11 +182,54 @@ touch "$FLAGS/boot-mainline"
 say "Starting"
 killall -9 master-server Monitor upgrade-server 2>/dev/null || true
 /etc/init.d/moonraker stop >/dev/null 2>&1 || true
-/etc/init.d/moonraker disable 2>/dev/null || true
-/etc/init.d/moonraker-mainline enable
-/etc/init.d/moonraker-mainline restart
-/etc/init.d/nginx reload
+/etc/init.d/moonraker disable >/dev/null 2>&1 || true
+/etc/init.d/moonraker-mainline enable >/dev/null 2>&1
+/etc/init.d/moonraker-mainline restart >/dev/null 2>&1
+/etc/init.d/nginx reload >/dev/null 2>&1
 sh "$BUILD/switch-to-mainline.sh" mainline_stage2.cfg
+
+# Wait for Klipper. If stock Klipper left the main board shut down (it had
+# only just restarted), Klipper reports "MCU ... shutdown": a firmware
+# restart clears it.
+say "Waiting for Klipper and the motors"
+READY=$(python3 - <<'PY'
+import json, time, urllib.request
+M = "http://127.0.0.1:7126"
+def get(path):
+    return json.load(urllib.request.urlopen(M + path, timeout=5))["result"]
+restarts = 0
+deadline = time.time() + 240
+while time.time() < deadline:
+    try:
+        state = get("/printer/info")["state"]
+    except Exception:
+        time.sleep(3)
+        continue
+    if state == "ready":
+        try:
+            if get("/printer/objects/query?k2_motor_bus")["status"]["k2_motor_bus"]["motors_ready"]:
+                print("ready")
+                break
+        except Exception:
+            pass
+    elif state in ("error", "shutdown") and restarts < 3:
+        restarts += 1
+        try:
+            urllib.request.urlopen(urllib.request.Request(
+                M + "/printer/firmware_restart", data=b"", method="POST"), timeout=10)
+        except Exception:
+            pass
+        time.sleep(15)
+        continue
+    time.sleep(3)
+else:
+    print("not-ready")
+PY
+)
+if [ "$READY" != ready ]; then
+    echo "    Klipper is not ready yet. Power the printer off and on, then open"
+    echo "    Mainsail; if it still shows an error, see Troubleshooting in docs/INSTALL.md."
+fi
 
 IP=$(ip -4 addr show wlan0 2>/dev/null | awk '/inet /{sub("/.*","",$2); print $2; exit}')
 [ -n "$IP" ] || IP=$(ip -4 addr show eth0 2>/dev/null | awk '/inet /{sub("/.*","",$2); print $2; exit}')
