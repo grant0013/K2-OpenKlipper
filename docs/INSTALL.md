@@ -63,7 +63,11 @@ python3 -c "import urllib.request as u; open('/tmp/install.sh','wb').write(u.url
 ```
 
 It prints your model, Creality firmware version, free space and print state,
-and ends with `Checks passed. Nothing was changed`. If it says `STOPPED:`, the
+then asks **which extruder is fitted**: `1` for the stock Creality extruder,
+`2` for a Phaetus DXC2. The DXC2 needs longer pulls after each filament cut
+(Phaetus' K2 instructions) and a deeper cut, so the answer sets those two
+values. For the stock extruder it uses your printer's own Creality cutter
+calibration. It ends with `Checks passed. Nothing was changed`. If it says `STOPPED:`, the
 line after it says why (for example a print is running, or less than 200 MB is
 free: delete old G-code files or timelapses on the printer).
 
@@ -72,6 +76,8 @@ free: delete old G-code files or timelapses on the printer).
 ```sh
 sh /tmp/install.sh
 ```
+
+It asks the extruder question again (answer the same).
 
 It downloads the open stack (about 5 MB), backs up the files it changes to
 `/mnt/UDISK/openklipper-backups/<date>`, installs, and starts it. It takes a minute or two. The touchscreen switches to Hark Screen, and the last lines show the
@@ -169,6 +175,11 @@ is flashed: the printer's control boards keep Creality's firmware, and motor
 settings are only ever written to RAM, so a power cycle restores them.
 
 ## Troubleshooting
+
+- **Colour-change cuts are incomplete** (the CFS reports it cannot pull the
+  filament back, or a strand stays in the extruder): the cutter does not go in
+  far enough. In Mainsail, make `cutter_cut_x` in the printer config 0.2 to
+  0.4 more negative (allowed range -10 to -5), save, and restart.
 
 - **Mainsail says Klipper is not ready, or homing fails after a restart:**
   power the printer off and on. Klipper restarts without a power cycle can leave

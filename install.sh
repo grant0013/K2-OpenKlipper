@@ -9,7 +9,8 @@
 #   sh install.sh --check    only check the printer, change nothing
 #
 # Environment: OKL_REF=<tag or branch> (default below), OKL_FORCE=1 to install
-# on a model other than the K2 / K2 Combo (F021), at your own risk.
+# on a model other than the K2 / K2 Combo (F021), at your own risk,
+# OKL_EXTRUDER=stock|dxc2 to answer the extruder question in advance.
 set -eu
 
 REPO=grant0013/K2-OpenKlipper
@@ -68,6 +69,56 @@ echo "    print state: $STATE"
 case "$STATE" in
     printing|paused) die "a print is $STATE. Finish or cancel it first" ;;
 esac
+
+# Extruder: the stock Creality one, or a Phaetus DXC2 (it needs longer
+# post-cut pulls, per Phaetus' K2 instructions, and a deeper cut).
+EXTRUDER=${OKL_EXTRUDER:-}
+if [ -z "$EXTRUDER" ]; then
+    ANSWER=""
+    if [ -t 0 ] || (: < /dev/tty) 2>/dev/null; then
+        echo ""
+        echo "    Which extruder is fitted to this printer?"
+        echo "      1) Stock Creality extruder (as shipped)"
+        echo "      2) Phaetus DXC2 upgrade"
+        printf "    Enter 1 or 2 [1]: "
+        if [ -t 0 ]; then
+            read ANSWER || ANSWER=1
+        else
+            read ANSWER < /dev/tty || ANSWER=1
+        fi
+    else
+        echo "    No terminal to ask on: assuming the stock extruder (set OKL_EXTRUDER=dxc2 for a DXC2)"
+    fi
+    case "$ANSWER" in
+        2) EXTRUDER=dxc2 ;;
+        *) EXTRUDER=stock ;;
+    esac
+fi
+case "$EXTRUDER" in
+    stock|dxc2) ;;
+    *) die "OKL_EXTRUDER must be stock or dxc2" ;;
+esac
+# The printer's own Creality cutter calibration, if the stock config has one
+STOCK_CUT=$(grep -h "^#\*# cut_pos_x" /mnt/UDISK/printer_data/config/printer.cfg 2>/dev/null | tail -1 | awk '{print $NF}')
+CUT_X=$(python3 - "$EXTRUDER" "${STOCK_CUT:-}" <<'PY'
+import sys
+extruder, stock = sys.argv[1], sys.argv[2]
+try:
+    cal = float(stock)
+    if not -9.5 <= cal <= -5.5:
+        cal = None
+except ValueError:
+    cal = None
+if extruder == "dxc2":
+    # At least as deep as the -8.0 a DXC2 needed for clean cuts
+    cut = min(cal - 0.8, -8.0) if cal is not None else -8.0
+else:
+    cut = cal if cal is not None else -7.2
+print("%.2f" % max(-10.0, min(-5.0, cut)))
+PY
+)
+if [ "$EXTRUDER" = dxc2 ]; then PULL=20; else PULL=10; fi
+echo "    extruder: $EXTRUDER   cutter depth X$CUT_X   post-cut pulls 3 x ${PULL} mm + 10 mm${STOCK_CUT:+   (Creality calibration $STOCK_CUT)}"
 
 if [ -f "$FLAGS/boot-hostlink" ]; then
     die "this K2 is set up for an external host PC (boot-hostlink). Remove that setup first"
@@ -143,6 +194,18 @@ cp "$BUILD/system/moonraker-mainline.init" /etc/init.d/moonraker-mainline
 chmod 755 /etc/init.d/moonraker-mainline
 cp "$BUILD/system/moonraker-compat/update_manager.py" /usr/share/moonraker/components/update_manager/update_manager.py
 cp "$BUILD/system/moonraker-compat/.version" /usr/share/moonraker/.version
+
+# Printer configuration: seeded once (later edits in Mainsail are kept), with
+# the extruder settings chosen above.
+BUILD_CFG="$PDATA/config/$(basename "$BUILD").cfg"
+if [ ! -f "$BUILD_CFG" ]; then
+    cp "$BUILD/config/mainline_stage2.cfg" "$BUILD_CFG"
+    sed -i -e "s/^cutter_cut_x: .*/cutter_cut_x: $CUT_X/" \
+           -e "s/^unload_pull_length: .*/unload_pull_length: $PULL/" "$BUILD_CFG"
+    echo "    printer config: extruder $EXTRUDER (cutter_cut_x $CUT_X, unload_pull_length $PULL)"
+else
+    echo "    printer config: keeping your existing $(basename "$BUILD_CFG") (extruder settings unchanged)"
+fi
 
 # Touchscreen and camera
 cp -a "$BUILD/harkscreen" /mnt/UDISK/harkscreen

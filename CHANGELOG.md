@@ -2,6 +2,24 @@
 
 ## Unreleased (since v0.2.0-alpha.1)
 
+### Installer
+
+- `install.sh` / `uninstall.sh`: one-command install next to the stock
+  firmware with full backups, and one command back to stock
+  ([docs/INSTALL.md](docs/INSTALL.md)). Tested end to end on a stock K2
+  (install about a minute, reboot, test print, uninstall, clean reinstalls).
+- Asks whether the stock extruder or a Phaetus DXC2 is fitted and sets the
+  post-cut pull length (10 or 20 mm) and cutter depth (the printer's own
+  Creality calibration for stock; at least -8.0 for the DXC2). The shipped
+  config now defaults to the stock extruder.
+- Waits for Klipper after install and clears a main board left shut down by
+  stock Klipper.
+
+### Start sequence
+
+- The cool-wipe no longer parks at the far-right return point between its
+  four wipes (`NOZZLE_WIPE PARK=0`); the head stays over the chute.
+
 ### Klipper on a separate PC (external host)
 
 - Klipper and Moonraker can run on any Linux PC, connected to the K2's
