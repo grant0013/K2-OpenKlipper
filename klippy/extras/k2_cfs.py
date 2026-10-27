@@ -824,7 +824,10 @@ class K2CFS:
             % (self.purge_return_x, self.purge_safe_y))
 
     def cmd_NOZZLE_WIPE(self, gcmd):
-        self._require_safe_motion(gcmd, "NOZZLE_WIPE")
+        position = self._require_safe_motion(gcmd, "NOZZLE_WIPE")
+        # PARK=0 ends the wipe over the chute instead of parking at the
+        # return point, for back-to-back wipes (START_PRINT's cool-wipe).
+        park = gcmd.get_int('PARK', 1, minval=0, maxval=1)
         travel_rate = self.purge_speed * 60.
         entry_script = "\n".join((
             "G90",
@@ -837,6 +840,13 @@ class K2CFS:
             % (self.purge_x, self.purge_y, travel_rate),
             "M400",
         ))
+        # Already at the chute (the last wipe ended there): wipe in place
+        # rather than driving out to the safe line and back in.
+        tol = self.purge_position_tolerance
+        if (position is not None
+                and abs(position[0] - self.purge_x) <= tol
+                and abs(position[1] - self.purge_y) <= tol):
+            entry_script = "G90\nM400"
         toolhead = self.printer.lookup_object('toolhead')
         prior_accel = toolhead.get_status(0.).get('max_accel')
         if prior_accel is None:
@@ -852,7 +862,7 @@ class K2CFS:
                 "SET_VELOCITY_LIMIT ACCEL=%.3f" % self.clean_accel)
             self.gcode.run_script_from_command(entry_script)
             self.gcode.run_script_from_command(
-                self._purge_wipe_script(True))
+                self._purge_wipe_script(bool(park)))
         except Exception as exc:
             raise gcmd.error("K2 nozzle wipe failed: %s" % exc)
         finally:
@@ -862,9 +872,12 @@ class K2CFS:
             if saved:
                 self.gcode.run_script_from_command(
                     "RESTORE_GCODE_STATE NAME=NOZZLE_WIPE")
-        gcmd.respond_info(
-            "K2 nozzle wipe complete; parked at X%.3f Y%.3f"
-            % (self.purge_return_x, self.purge_safe_y))
+        if park:
+            gcmd.respond_info(
+                "K2 nozzle wipe complete; parked at X%.3f Y%.3f"
+                % (self.purge_return_x, self.purge_safe_y))
+        else:
+            gcmd.respond_info("K2 nozzle wipe complete; left at the chute")
 
     def _require_position(self, gcmd, position, expected_x, expected_y,
                           description):
