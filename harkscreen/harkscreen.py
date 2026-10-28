@@ -455,7 +455,9 @@ class Screen:
         self.anims = []              # overlay animations on the current base
         self.flash = None            # (rect, start) of a pressed button
         self.transition = None       # page slide in progress
-        self.asleep = False
+        # Unknown at start (an earlier copy may have switched the panel off):
+        # main()'s set_sleep(False) then really switches it on
+        self.asleep = True
         self.base = None             # last full landscape frame (no overlays)
         self.shown = None            # digest of the frame on the panel
         self.last_key = None         # view_key of the drawn base
