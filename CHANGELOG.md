@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **CFS lights stay white:** the driver now talks to the CFS every 2 s
+  (`env_poll_interval`, was 10 s). With the longer gap the CFS showed red
+  flashing (not connected) in quiet stretches such as the print start's mesh,
+  until the next feed.
 - **Chamber fan by material:** without a slicer `M141`, the print start
   takes the chamber target from the loaded filament
   (`[gcode_macro _CHAMBER_FAN] variable_material_targets`, default PLA/TPU

@@ -530,8 +530,11 @@ class K2CFS:
         # Background environment poll (temperature/humidity + selected slot).
         # Stock master-server polls the same query every ~4 s; we poll less
         # often and stay quiet while an actuation sequence is in progress.
+        # The CFS shows red (not connected) when the host is quiet for a
+        # while: at 10 s it went red in the quiet stretches of a print start,
+        # at 2 s it stays white (10-28)
         self.env_poll_interval = config.getfloat(
-            'env_poll_interval', 10., minval=0.)
+            'env_poll_interval', 2., minval=0.)
         # Poll interval while printing (0 = env_poll_interval)
         self.print_poll_interval = config.getfloat(
             'print_poll_interval', 0., minval=0.)
