@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.4.2-alpha.1 (2026-10-28)
 
 - **CFS lights stay white:** the driver now talks to the CFS every 2 s
   (`env_poll_interval`, was 10 s). With the longer gap the CFS showed red
@@ -10,6 +10,8 @@
   takes the chamber target from the loaded filament
   (`[gcode_macro _CHAMBER_FAN] variable_material_targets`, default PLA/TPU
   35C, PETG 40C, ABS/ASA/PC/PA 50C); the exhaust fan vents 2C above it.
+- Hark Screen switches the panel on at start (a restart could leave it dark
+  if the previous copy had put it to sleep).
 - **End-of-print vent** (opt-in): `variable_end_vent: 180` runs the exhaust
   fan at full for that many seconds after a print or cancel, to clear fumes
   and cool the chamber. The next print start stops it.

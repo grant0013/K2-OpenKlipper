@@ -24,7 +24,7 @@ Optionally, Klipper can run on a separate PC over one USB cable
 <img src="docs/img/screen/klipper-cfs.png" alt="Touchscreen CFS page: four slots with material, temperature and pressure advance" width="49%">
 </p>
 
-> **Status: alpha (v0.4.1-alpha.1).** It is in daily use on one K2 (F021,
+> **Status: alpha (v0.4.2-alpha.1).** It is in daily use on one K2 (F021,
 > K2 / K2 Combo) and has completed full prints, CFS loads and multi-slot jobs.
 > It is still experimental printer firmware: supervise prints, keep the
 > rollback path, and read [Project status](docs/PROJECT-STATUS.md) first.
