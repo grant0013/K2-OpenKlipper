@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.4.1-alpha.1 (2026-10-28)
 
 - **Automatic pressure advance when a slot loads** (opt-in):
   `[gcode_macro _PA_AUTO] variable_on_load: 1` measures it with the nozzle
