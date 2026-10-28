@@ -41,19 +41,20 @@ def spacing(w, h):
 class Path:
     """Relative-E G-code with retract + z-hop on longer travels."""
 
-    def __init__(self, retract=1.0, retract_speed=40.):
+    def __init__(self, retract=1.0, retract_speed=40., hop=0.4):
         self.out, self.pos, self.z = [], None, 0.
-        self.retract, self.retract_speed = retract, retract_speed
+        self.retract, self.retract_speed, self.hop = retract, retract_speed, hop
 
     def emit(self, line):
         self.out.append(line)
 
-    def travel(self, x, y, retract=None, hop=0.4, speed=300.):
+    def travel(self, x, y, retract=None, hop=None, speed=300.):
         if self.pos and math.hypot(x - self.pos[0], y - self.pos[1]) < 0.01:
             return
         far = self.pos is None or math.hypot(x - self.pos[0],
                                              y - self.pos[1]) > 2.
         r = self.retract if retract is None else retract
+        hop = self.hop if hop is None else hop
         if far and r > 0:
             self.emit("G1 E-%.3f F%d" % (r, self.retract_speed * 60))
         if far and hop:
@@ -178,8 +179,11 @@ def flow_pads(slot, rec, base, step):
 
 def retraction_test(slot, rec, start, step, count=7):
     """Pairs of 5 mm pillars 20 mm apart, 12 mm tall. The travel between the
-    two pillars of a pair retracts by that pair's length (no z-hop), so the
-    pair that strings least has the best retraction. Labelled x10."""
+    two pillars of a pair (front to back) retracts by that pair's length, so
+    the pair that strings least has the best retraction. Labelled x10.
+    Pairs are printed in a zig-zag, so the move to the next pair runs along
+    a row, never front to back, and uses the largest retraction; no z-hop
+    anywhere (a hop drew PETG strings between the rear pillars, 10-28)."""
     w, size, gap_y, pitch, height, walls = 0.42, 5., 20., 13., 12., 2
     temp = int(rec.get('nozzle_temp') or 220)
     bed = int(rec.get('bed_temp') or 55)
@@ -195,7 +199,7 @@ def retraction_test(slot, rec, start, step, count=7):
         x = x_first + i * pitch
         objects.append(("rt_%02d" % round(r * 10),
                         (x - 2, y_a - 9, x + size + 2, y_b + size)))
-    g = Path(max(lengths) + 0.5, speed)
+    g = Path(max(lengths) + 0.5, speed, hop=0)
     g.out = start_lines(
         slot, temp, bed,
         ["; K2 OpenKlipper retraction test: slot %s, %s mm at %.0f mm/s"
@@ -211,17 +215,23 @@ def retraction_test(slot, rec, start, step, count=7):
         g.emit("SET_VELOCITY_LIMIT ACCEL=%d" % (2000 if first else 5000))
         g.emit("G1 Z%.3f F600" % g.z)
         v = 25 if first else 60
-        for i, r in enumerate(lengths):
+        # Odd layers run right to left (and flip each pair), so a layer
+        # starts on the pillar the last one ended on
+        back = layer % 2 == 1
+        order = list(enumerate(lengths))
+        for i, r in (reversed(order) if back else order):
             x = x_first + i * pitch
             name = objects[i][0]
             g.emit("EXCLUDE_OBJECT_START NAME=%s" % name)
             if first:
                 g.label(x - 0.5, y_a - 8., "%d" % round(r * 10), e)
-            # Between pairs: the largest retraction and a hop, so only the
-            # test travel inside each pair can string
-            square(g, x, y_a, size, w, walls, e, v, v, layer % 2 == 0)
-            g.travel(x + w, y_b + w, retract=r, hop=0, speed=150)
-            square(g, x, y_b, size, w, walls, e, v, v, layer % 2 == 0)
+            # Front then back on even pairs, back then front on odd ones:
+            # the test travel is front to back, the move to the next pair
+            # stays in one row
+            first_y, second_y = (y_a, y_b) if (i % 2 == 0) != back else (y_b, y_a)
+            square(g, x, first_y, size, w, walls, e, v, v, layer % 2 == 0)
+            g.travel(x + w, second_y + w, retract=r, speed=150)
+            square(g, x, second_y, size, w, walls, e, v, v, layer % 2 == 0)
             g.emit("EXCLUDE_OBJECT_END NAME=%s" % name)
     g.emit("G1 E-%.2f F2400" % g.retract)
     g.emit("G1 Z%.3f F600" % (height + 5))
