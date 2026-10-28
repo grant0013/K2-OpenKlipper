@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **Calibrate PA on the touchscreen and in Mainsail runs the stationary
+  test** (`PA_CAL_STATIC SLOT=x SAVE=1`, with the per-material scale) instead
+  of the older moving one, and the touchscreen shows its result (saved value,
+  measured value and scale). With auto PA on load, "load then calibrate" no
+  longer measures twice.
+
 ## v0.4.2-alpha.1 (2026-10-28)
 
 - **CFS lights stay white:** the driver now talks to the CFS every 2 s

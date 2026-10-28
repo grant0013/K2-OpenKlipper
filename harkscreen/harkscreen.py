@@ -62,6 +62,8 @@ OBJECTS = {
     "idle_timeout": ["state"],
     "pa_pressure_log": ["last"],
     "hark_calib": ["pending"],
+    "gcode_macro _PA_STATIC_SAVE": ["last"],
+    "gcode_macro _PA_AUTO": ["on_load"],
     "hark_update": ["installed", "latest", "update_available", "updating"],
 }
 
@@ -468,6 +470,9 @@ class Screen:
                 self.pa_ack = float(f.read().strip() or 0)
         except Exception:
             self.pa_ack = 0.
+        # Stationary PA results (PA_CAL_STATIC): set to the first stamp seen,
+        # so only results after this screen started pop up
+        self.pa_static_ack = None
         self.dirty = True
         self.ip = "?"
         self.eta = Eta()
@@ -755,7 +760,22 @@ class Screen:
                                time.time() - self.running[1] <= 4)
 
     def pa_result(self, st):
-        """A PA calibration result not yet dismissed with OK, or None."""
+        """A PA calibration result not yet dismissed with OK, or None:
+        the stationary test's (PA_CAL_STATIC), else the moving test's."""
+        static = (st.get("gcode_macro _PA_STATIC_SAVE") or {}).get(
+            "last") or {}
+        stamp = static.get("stamp")
+        if self.pa_static_ack is None and "gcode_macro _PA_STATIC_SAVE" in st:
+            self.pa_static_ack = stamp or 0.
+        if stamp and stamp != self.pa_static_ack:
+            return {"static": True, "slot": static.get("slot"),
+                    "saved": bool(static.get("saved")),
+                    "reliable": bool(static.get("saved")),
+                    "fitted": static.get("pa"),
+                    "measured": static.get("measured"),
+                    "scale": static.get("scale"),
+                    "material": static.get("material"),
+                    "reason": static.get("reason"), "stamp": stamp}
         last = (st.get("pa_pressure_log") or {}).get("last") or {}
         stamp = last.get("stamp")
         if stamp and stamp != self.pa_ack:
@@ -907,7 +927,19 @@ class Screen:
         else:
             head = "Not saved: result not reliable"
         self.text(d, (W // 2, 168), head, "s", col, anchor="mm")
-        if good:
+        if res.get("static"):
+            if saved and res.get("scale") and res.get("scale") != 1:
+                notes = ["Measured %.4f x %.2f for %s" % (
+                    res.get("measured") or 0, res.get("scale"),
+                    res.get("material") or "this filament")]
+            elif saved:
+                notes = ["Measured with the nozzle still over the chute"]
+            elif res.get("reason") == "implausible":
+                notes = ["%.3f is outside the expected range" % (
+                    res.get("fitted") or 0), "the slot keeps its value"]
+            else:
+                notes = ["No result from the gauge", "the slot keeps its value"]
+        elif good:
             notes = ["Fit R² %.3f · signal %.0f" % (res.get("r2") or 0,
                                                     res.get("snr") or 0)]
             if not saved and not res.get("save_requested"):
@@ -921,7 +953,8 @@ class Screen:
                 y += 30
         self.buttons = []
         self.button(d, (W // 2 - 110, 320, W // 2 + 110, 390), "OK",
-                    ("pa_ok", res.get("stamp")), "accent", True, "m")
+                    ("pa_static_ok" if res.get("static") else "pa_ok",
+                     res.get("stamp")), "accent", True, "m")
 
     def draw_slot_menu(self, st):
         dim = Image.new("RGB", (W, H), (0, 0, 0))
@@ -959,8 +992,8 @@ class Screen:
                                 % temp, "UNLOAD_FILAMENT"), "warn"))
                 actions.append(("Calibrate PA", ("confirm",
                                 "Calibrate PA for this spool?\n"
-                                "About 5 min, heats to %d°" % temp,
-                                "PA_CAL_RUN SLOT=E AUTO=1"), "accent"))
+                                "About 3 min, heats to %d°" % temp,
+                                "PA_CAL_STATIC SLOT=E SAVE=1"), "accent"))
             else:
                 actions.append(("Load", ("confirm",
                                 "Push the filament in at the back until it"
@@ -975,8 +1008,9 @@ class Screen:
                             "CFS_UNLOAD_ACTIVE"), "warn"))
             actions.append(("Calibrate PA", ("confirm",
                             "Calibrate PA for slot %s?\n"
-                            "About 5 min, heats to %d°" % (slot, temp),
-                            "PA_CAL_RUN SLOT=%s AUTO=1" % slot), "accent"))
+                            "About 3 min, heats to %d°" % (slot, temp),
+                            "PA_CAL_STATIC SLOT=%s SAVE=1" % slot),
+                            "accent"))
         elif rec.get("loaded"):
             q = ("Load slot %s and purge out %s?\nHeats to %d°"
                  % (slot, active, temp)) if active else \
@@ -984,11 +1018,14 @@ class Screen:
             actions.append(("Load & purge", ("confirm", q,
                             "CFS_LOAD_SLOT SLOT=%s" % slot), "accent"))
             # A new reel in any slot: load it, then calibrate it
+            # With auto PA on load the load measures it already
+            auto = (st.get("gcode_macro _PA_AUTO") or {}).get("on_load")
             actions.append(("Calibrate PA", ("confirm",
                             "Load slot %s, then calibrate PA?\n"
-                            "About 7 min, heats to %d°" % (slot, temp),
-                            "CFS_LOAD_SLOT SLOT=%s COOL=0\nPA_CAL_RUN SLOT=%s AUTO=1"
-                            % (slot, slot)), "accent"))
+                            "About 5 min, heats to %d°" % (slot, temp),
+                            ("CFS_LOAD_SLOT SLOT=%s" % slot) if auto else
+                            "CFS_LOAD_SLOT SLOT=%s COOL=0\nPA_CAL_STATIC SLOT=%s"
+                            " SAVE=1" % (slot, slot)), "accent"))
         if rec.get("loaded"):
             # Printed tests: the printer prints them and asks for the best
             what = "the external spool" if slot == "E" else "slot %s" % slot
@@ -1840,6 +1877,8 @@ class Screen:
                 mr.gcode(action[1])
             elif kind == "confirm":
                 self.confirm = (action[1], action[2])
+            elif kind == "pa_static_ok":
+                self.pa_static_ack = action[1]
             elif kind == "pa_ok":
                 self.pa_ack = action[1] or 0.
                 try:
@@ -1931,7 +1970,7 @@ class Screen:
                 else:
                     if script in label:
                         self.running = (label[script], time.time())
-                    elif "PA_CAL_RUN" in script:
+                    elif "PA_CAL_RUN" in script or "PA_CAL_STATIC" in script:
                         self.running = ("Calibrating PA", time.time())
                     elif script.startswith("CFS_LOAD_SLOT"):
                         self.running = ("Loading slot " + script[-1],
@@ -1947,7 +1986,8 @@ class Screen:
                     elif script.startswith("CALIBRATE_"):
                         self.running = ("Starting test print", time.time())
                     if script.startswith(("CFS_LOAD_SLOT", "CFS_UNLOAD",
-                                          "PA_CAL_RUN", "LOAD_FILAMENT",
+                                          "PA_CAL_RUN", "PA_CAL_STATIC",
+                                          "LOAD_FILAMENT",
                                           "UNLOAD_FILAMENT", "CALIBRATE_")):
                         self.slot_menu = None
                     mr.gcode(script)
