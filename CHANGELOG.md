@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Chamber fan by material:** without a slicer `M141`, the print start
+  takes the chamber target from the loaded filament
+  (`[gcode_macro _CHAMBER_FAN] variable_material_targets`, default PLA/TPU
+  35C, PETG 40C, ABS/ASA/PC/PA 50C); the exhaust fan vents 2C above it.
+- **End-of-print vent** (opt-in): `variable_end_vent: 180` runs the exhaust
+  fan at full for that many seconds after a print or cancel, to clear fumes
+  and cool the chamber. The next print start stops it.
 - **Printed flow and retraction tests from the screen or Mainsail**
   (`[hark_calib]`): Flow test and Retraction test in the slot menu (screen)
   and slot dialog (Mainsail), or `CALIBRATE_FLOW SLOT=x` /
