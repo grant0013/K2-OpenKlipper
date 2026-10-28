@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+- **Automatic pressure advance when a slot loads** (opt-in):
+  `[gcode_macro _PA_AUTO] variable_on_load: 1` measures it with the nozzle
+  still over the chute after `CFS_LOAD_SLOT` / `LOAD_FILAMENT`, and
+  `variable_on_print_start: 1` when a print start loads a different slot. A
+  plausible result is saved to the slot (`PA_CAL_STATIC ... SAVE=1` does the
+  same by hand); a failed one is reported and the load carries on.
+- `RUN_SAFE RUN= FINALLY= [ON_ERROR=report]` ([hark_safe_run]): runs a macro
+  and always its cleanup. `PA_CAL_STATIC` uses it, so a failed test no longer
+  leaves the nozzle hot.
+- **First layer, after the K2 Plus firmware's method:** per-material
+  offsets, `variable_hot_z_material: {'PLA': -0.01}` in `START_PRINT`, added
+  to `hot_z_comp` (material from `START_PRINT MATERIAL=` or the loaded slot's
+  record), alongside its nozzle growth rate (`variable_hot_z_rate`, 0.00083
+  mm/C in that firmware).
+
 ## v0.4.0-alpha.1 (2026-10-28)
 
 ### Printers without a CFS, and any CFS found by itself

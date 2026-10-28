@@ -24,6 +24,27 @@ applied whenever that slot is selected. Re-run it for each new reel.
 Optional parameters: `TEMP`, `KS` (PA values, default `0.02` to `0.14`),
 `SLOW`/`FAST` (mm³/s, default 2 / 12), `CYCLES` (default 8), `NAME`.
 
+## Automatic, every time a slot loads
+
+`PA_CAL_STATIC SLOT=x SAVE=1` measures pressure advance with the nozzle
+standing still over the chute (about 90 s) and saves a plausible result to
+the slot's filament record: between 0.01 and 0.15, with the speeding-up and
+slowing-down steps within 0.05 of each other (`[gcode_macro _PA_STATIC_SAVE]`
+`variable_min_pa`, `variable_max_pa`, `variable_max_spread`). Anything else
+is reported and the slot keeps its value.
+
+To do that on every load, put this in `printer-overrides.cfg`:
+
+```
+[gcode_macro _PA_AUTO]
+variable_on_load: 1          # CFS_LOAD_SLOT and LOAD_FILAMENT
+variable_on_print_start: 1   # a print start that loads a different slot
+```
+
+A failed measurement is reported and the load or print start carries on. It
+does not run during a print (tool changes, runout refills). On 10-28 a load
+of slot C took 3 min 41 s with the measurement (0.0514 saved).
+
 ## What it does
 
 1. References Z on the bottom switch if needed, homes X/Y only (no Z probing,
