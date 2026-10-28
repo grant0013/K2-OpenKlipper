@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Chamber fan: `variable_prefer_material: 1` uses the material table even
+  when the slicer sends a chamber temperature (OrcaSlicer's K2 filament
+  profiles all send `M191 S35`).
 - **The touchscreen shows what the printer is doing** during a print start,
   load, tool change, runout refill or calibration: the current step
   (homing, heating, loading slot X and purging, measuring pressure advance,
