@@ -47,13 +47,14 @@ def gap_report(samples):
 
 
 def cv_segments(moves):
-    """Constant-velocity extruder moves with the velocity before them."""
+    """Constant-velocity extruder moves with the previous cruise velocity
+    (Klipper stores accel, cruise and decel as separate pieces)."""
     segs = []
-    prev_v = None
+    prev_cruise = None
     for t, mt, v, a in moves:
         if a == 0. and mt > 0.05:
-            segs.append((t, t + mt, v, prev_v))
-        prev_v = v + a * mt
+            segs.append((t, t + mt, v, prev_cruise))
+            prev_cruise = v
     return segs
 
 

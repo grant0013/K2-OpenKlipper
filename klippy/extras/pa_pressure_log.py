@@ -56,6 +56,15 @@ class PAPressureLog:
         self.capture_name = None
         self.capture_samples = []
         self.base_period = self.period
+        # The nozzle MCU freezes its buffer when the pressure jumps as if the
+        # nozzle had touched the bed, and a step up in flow looks the same:
+        # every rising pa_tester step was cut off 0.3-4.7 ms in (10-28). For
+        # load-cell (pa_tester) streaming, raise the tap thresholds out of
+        # reach. 0 = use the probe's own thresholds.
+        self.client_min_hold = config.getint('client_min_hold', 50000,
+                                             minval=0, maxval=50000)
+        self.client_max_hold = config.getint('client_max_hold', 100000,
+                                             minval=0, maxval=100000)
         self.analysing = False
         self.last_result = {}
         self.reset()
@@ -210,7 +219,11 @@ class PAPressureLog:
                 # A probe owns the sampler; skip this window.
                 return eventtime + self.period
             cfg = self.prtouch.cfg
-            s.start_streaming(min_hold=cfg.min_hold, max_hold=cfg.max_hold,
+            min_hold, max_hold = cfg.min_hold, cfg.max_hold
+            if self.client_mode:
+                min_hold = self.client_min_hold or min_hold
+                max_hold = self.client_max_hold or max_hold
+            s.start_streaming(min_hold=min_hold, max_hold=max_hold,
                               add_hold=cfg.add_hold)
             self.streaming = True
             if ((not self.client_mode or self.capture_name)

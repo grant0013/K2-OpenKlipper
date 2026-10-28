@@ -236,7 +236,7 @@ class PRTouchMainlineProbe:
         if self.scrub_x_start == self.scrub_x_end:
             raise config.error("scrub_x_start and scrub_x_end must differ")
         self.scrub_detect_hold_ratio = config.getfloat(
-            "scrub_detect_hold_ratio", 2.5, above=1., maxval=5.)
+            "scrub_detect_hold_ratio", 1.5, above=1., maxval=5.)
         self.scrub_detect_deflection = config.getfloat(
             "scrub_detect_deflection", 0.035, above=0., maxval=0.4)
         self.scrub_tab_depth = config.getfloat(
