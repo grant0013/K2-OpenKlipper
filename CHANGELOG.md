@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **The touchscreen shows what the printer is doing** during a print start,
+  load, tool change, runout refill or calibration: the current step
+  (homing, heating, loading slot X and purging, measuring pressure advance,
+  cooling and wiping, Z tap, bed mesh, purge, prime line...) with a timer,
+  the earlier steps with their times, the total set-up time and the latest
+  console line. Macros set it with `_STAGE TEXT="..."` (`printer["gcode_macro
+  _STAGE"].text` for other UIs).
 - **Calibrate PA on the touchscreen and in Mainsail runs the stationary
   test** (`PA_CAL_STATIC SLOT=x SAVE=1`, with the per-material scale) instead
   of the older moving one, and the touchscreen shows its result (saved value,

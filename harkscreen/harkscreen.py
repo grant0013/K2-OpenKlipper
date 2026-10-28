@@ -64,6 +64,7 @@ OBJECTS = {
     "hark_calib": ["pending"],
     "gcode_macro _PA_STATIC_SAVE": ["last"],
     "gcode_macro _PA_AUTO": ["on_load"],
+    "gcode_macro _STAGE": ["text"],
     "hark_update": ["installed", "latest", "update_available", "updating"],
 }
 
@@ -260,6 +261,23 @@ class Moonraker:
             h = json.load(r)["result"]["status"]["hark_cfs_slots"]
         return list(h.get("library") or []) + list(h.get("materials") or [])
 
+    def console(self, count=12):
+        """The latest console lines, newest last, without temperature
+        reports and echoed commands."""
+        with urllib.request.urlopen(
+                self.base + "/server/gcode_store?count=%d" % count,
+                timeout=3) as r:
+            items = json.load(r)["result"]["gcode_store"]
+        out = []
+        for m in items:
+            line = (m.get("message") or "").strip()
+            if (m.get("type") != "response" or not line
+                    or line.startswith(("B:", "T0:", "ok"))
+                    or "action:" in line):
+                continue
+            out.append(line.lstrip("/! ").replace("echo: ", ""))
+        return out
+
     def info(self):
         with urllib.request.urlopen(self.base + "/printer/info",
                                     timeout=3) as r:
@@ -426,6 +444,9 @@ class DataThread(threading.Thread):
                     self.screen.settings = mr.settings()
                     self.screen.filaments = mr.filaments()
                     settings_at = time.time()
+                # While the printer reports a stage, follow the console too
+                if (st.get("gcode_macro _STAGE") or {}).get("text"):
+                    self.screen.console = mr.console()
             except Exception:
                 try:
                     err = "Klipper " + mr.info().get("state", "starting")
@@ -470,6 +491,10 @@ class Screen:
                 self.pa_ack = float(f.read().strip() or 0)
         except Exception:
             self.pa_ack = 0.
+        # Print-start / load / tool-change stages (_STAGE): [text, start]
+        # entries, and the latest console lines while one runs
+        self.stage_log = []
+        self.console = []
         # Stationary PA results (PA_CAL_STATIC): set to the first stamp seen,
         # so only results after this screen started pop up
         self.pa_static_ack = None
@@ -782,6 +807,20 @@ class Screen:
             return last
         return None
 
+    def track_stage(self, st):
+        """Log each stage with the time it started; a new print start
+        (after a quiet spell) starts a fresh log. Returns the current text."""
+        cur = (st.get("gcode_macro _STAGE") or {}).get("text") or ""
+        last = self.stage_log[-1][0] if self.stage_log else ""
+        now = time.time()
+        if cur != last:
+            if cur and (not self.stage_log or (
+                    not last and now - self.stage_log[-1][1] > 60)):
+                self.stage_log = []
+            self.stage_log.append([cur, now])
+            self.stage_log = self.stage_log[-12:]
+        return cur
+
     def view_key(self, st, err):
         """What the page shows, rounded as drawn: redraw only on change."""
         def r(name, key):
@@ -809,7 +848,11 @@ class Screen:
             self.wifi.busy, self.wifi.message, self.wifi.networks,
             self.wifi_status, len(self.settings), len(self.filaments),
             self.ip, bool(self.pa_result(st)),
-            (st.get("hark_calib") or {}).get("pending")],
+            (st.get("hark_calib") or {}).get("pending"),
+            self.track_stage(st), self.console[-2:],
+            # the stage timer ticks every 2 s while a stage runs
+            int(time.time() / 2) if self.stage_log and self.stage_log[-1][0]
+            else 0],
             sort_keys=True, default=str)
 
     # --- base frame (everything static) ---------------------------------
@@ -1054,12 +1097,16 @@ class Screen:
         self.panel(d, box, self.c["accent"], True,
                    mix(self.c["background"], self.c["accent"], 0.15))
         label = self.running[0] if self.running else "Klipper"
+        stage = self.stage_log[-1][0] if self.stage_log else ""
+        if stage:
+            label = stage
         detail = ""
         ex = st.get("extruder", {})
         if ex.get("target") and ex.get("temperature", 0) < ex["target"] - 3:
             detail = "  ·  nozzle %d → %d°" % (ex["temperature"], ex["target"])
         self.text(d, (box[0] + 50, (box[1] + box[3]) // 2),
-                  "%s in progress%s" % (label, detail), "s", anchor="lm")
+                  ("%s%s" if stage else "%s in progress%s") % (label, detail),
+                  "s", anchor="lm")
         cx, cy = box[0] + 26, (box[1] + box[3]) // 2
         self.anims.append({"kind": "spin", "center": (cx, cy), "r": 11,
                            "rect": (cx - 16, cy - 16, cx + 16, cy + 16)})
@@ -1129,6 +1176,10 @@ class Screen:
             name = os.path.splitext(os.path.basename(
                 ps.get("filename", "")))[0]
             self.text(d, (lx, ly + 16), name[:30], "xs", "muted")
+            stage = self.stage_log[-1][0] if self.stage_log else ""
+            if state in ("printing", "paused") and stage:
+                self.draw_stage(d, left, st)
+                return self.draw_status_side(d, body, st, left, pad)
             prog = st.get("display_status", {}).get("progress") or \
                 st.get("virtual_sdcard", {}).get("progress", 0)
             prog = max(0., min(1., prog))
@@ -1164,6 +1215,54 @@ class Screen:
                       anchor="lm")
         elif self.cfg.flag("brand", "idle_logo"):
             self.paste_logo((left[0], left[1] - 6, left[2], left[3] + 6))
+        self.draw_status_side(d, body, st, left, pad)
+
+    def draw_stage(self, d, left, st):
+        """What the print start (or a tool change) is doing: the current
+        step with its timer, the steps before it with their times, and the
+        latest console line."""
+        lx, ly = left[0] + 18, left[1]
+        now = time.time()
+
+        def mmss(s):
+            s = max(0, int(s))
+            return "%d:%02d" % (s // 60, s % 60)
+
+        text, start = self.stage_log[-1]
+        lines = self.wrap(text, "m", left[2] - lx - 18)[:2]
+        for i, line in enumerate(lines):
+            self.text(d, (lx, ly + 44 + i * 36), line, "m", "accent")
+        self.text(d, (left[2] - 18, ly + 16), mmss(now - start), "s",
+                  anchor="ra")
+        cx, cy = left[2] - 120, ly + 26
+        self.anims.append({"kind": "spin", "center": (cx, cy), "r": 9,
+                           "rect": (cx - 14, cy - 14, cx + 14, cy + 14)})
+        # Earlier steps of this start, newest first
+        y = ly + 60 + len(lines) * 36
+        done = [(self.stage_log[i][0],
+                 self.stage_log[i + 1][1] - self.stage_log[i][1])
+                for i in range(len(self.stage_log) - 1)
+                if self.stage_log[i][0]]
+        width = left[2] - lx - 90
+        for name, secs in reversed(done[-4:]):
+            parts = self.wrap(name, "xs", width)
+            label = parts[0] + ("…" if len(parts) > 1 else "")
+            self.text(d, (lx, y), "• " + label, "xs", "muted")
+            self.text(d, (left[2] - 18, y), mmss(secs), "xs", "muted",
+                      anchor="ra")
+            y += 26
+        total = now - next((s for n, s in self.stage_log if n),
+                           self.stage_log[0][1])
+        self.text(d, (lx, left[3] - 30), "set-up %s" % mmss(total), "xs",
+                  "muted", anchor="lm")
+        if self.console:
+            parts = self.wrap(self.console[-1], "xxs", left[2] - lx - 150)
+            self.text(d, (left[2] - 18, left[3] - 30),
+                      parts[0] + ("…" if len(parts) > 1 else ""), "xxs",
+                      "muted", anchor="rm")
+
+    def draw_status_side(self, d, body, st, left, pad):
+        x0, y0, x1, y1 = body
         # Temperature gauges down the right
         tiles = [("Nozzle", "nozzle", st.get("extruder", {})),
                  ("Bed", "bed", st.get("heater_bed", {})),
