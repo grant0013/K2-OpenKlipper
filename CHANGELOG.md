@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### Printers without a CFS, and any CFS found by itself
+
+- **K2 without a CFS** (filament from the rear spool holder): new
+  `[k2_cfs] cfs_fitted: False`, which the installer sets when you answer `n`
+  to its new CFS question (default from Creality's own config; `OKL_CFS=yes|no`
+  answers it in advance). The box is not polled, feed and pre-load calls do
+  nothing, the print start primes the spool at the chute, T0 uses slot A's
+  filament record and T1-T3 stop with a message. New `LOAD_FILAMENT` and
+  `UNLOAD_FILAMENT` (Mainsail Load/Unload buttons): heat, feed and purge at
+  the chute; cut at the knife and pull back. Runout pauses with a plain
+  message. The CFS panel (Mainsail revision 2) and the touchscreen CFS page
+  are hidden. See docs/INSTALL.md, "Printers without a CFS".
+- **The CFS is found without a configured id.** The shipped config carried
+  our test printer's CFS id (`cfs_uniid`), which is what re-addresses the CFS
+  after a power-off, so another printer's CFS could go unanswered after a cold
+  start. At startup the driver now asks the CFS at its address, and if it does
+  not answer, uses the stock discover broadcast (`00 a1`, after Jacob10383's
+  AutoAddressClient) to get the id and give it back its address. `cfs_uniid`
+  is optional (the installer copies it from Creality's config); `cfs_detect`
+  turns the search off. A CFS that does not answer is reported in the console
+  with how to set `cfs_fitted: False`.
+
 ### Ported from Jacob10383's K2 Plus firmware
 
 Logic adapted (GPLv3, with credit in each file) from

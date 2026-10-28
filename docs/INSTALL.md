@@ -69,7 +69,10 @@ then asks **which extruder is fitted**: `1` for the stock Creality extruder,
 `2` for a Phaetus DXC2. The DXC2 needs longer pulls after each filament cut
 (Phaetus' K2 instructions) and a deeper cut, so the answer sets those two
 values. For the stock extruder it uses your printer's own Creality cutter
-calibration. It ends with `Checks passed. Nothing was changed`. If it says `STOPPED:`, the
+calibration. Then it asks **whether a CFS is connected**. The default comes
+from Creality's own config, which lists the CFS it has seen; answer `n` on a
+plain K2 that feeds from the rear spool holder (see
+[Printers without a CFS](#printers-without-a-cfs)). It ends with `Checks passed. Nothing was changed`. If it says `STOPPED:`, the
 line after it says why (for example a print is running, or less than 200 MB is
 free: delete old G-code files or timelapses on the printer).
 
@@ -79,7 +82,9 @@ free: delete old G-code files or timelapses on the printer).
 sh /tmp/install.sh
 ```
 
-It asks the extruder question again (answer the same).
+It asks the extruder and CFS questions again (answer the same). To answer
+them in advance, run it as `OKL_EXTRUDER=stock OKL_CFS=yes sh /tmp/install.sh`
+(`dxc2` for a DXC2, `no` for no CFS).
 
 It downloads the open stack (about 5 MB), backs up the files it changes to
 `/mnt/UDISK/openklipper-backups/<date>`, installs, and starts it. It takes a minute or two. The touchscreen switches to Hark Screen, and the last lines show the
@@ -252,3 +257,34 @@ Bug reports and results from other K2s are very welcome:
   the K2's own small computer to pass messages.
 - [AI print-failure detection](../tools/ai-detect/) on that PC: a fast
   spaghetti detector plus a local vision model as a second opinion.
+
+## Printers without a CFS
+
+A K2 without a CFS feeds one filament from the rear spool holder. The
+installer sets this up when you answer `n` to the CFS question; to change it
+later, put this in `printer-overrides.cfg` and restart:
+
+```
+[k2_cfs]
+cfs_fitted: False
+```
+
+With it:
+
+- **Load and unload** with `LOAD_FILAMENT` and `UNLOAD_FILAMENT` (Mainsail's
+  extruder panel shows them as Load/Unload buttons). Push the filament in
+  from the back until it stops at the extruder, then `LOAD_FILAMENT` heats,
+  feeds and purges it at the chute. `UNLOAD_FILAMENT` cuts it at the knife and
+  pulls it back out of the gears; then pull it out from the back. Both work
+  from a runout pause too, followed by `RESUME`.
+- **Printing**: slice for one filament (T0). The print start primes the spool
+  at the chute. A file that asks for T1-T3 stops with a message.
+- **Filament settings**: slot A's record in the CFS slot data (pressure
+  advance, retraction, temperatures) is used for the rear spool when it is set.
+  `PA_CAL_STATIC` and `PA_CAL_RUN` use slot A by default.
+- **Runout** pauses the print and says to load a new spool.
+- The CFS panel in Mainsail and the CFS page on the touchscreen are hidden.
+
+If a CFS is connected but `cfs_fitted` is still `True` and the CFS does not
+answer, the console says so at startup and CFS commands explain how to fix
+it.

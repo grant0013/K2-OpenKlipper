@@ -13,8 +13,8 @@
 #
 # Environment: OKL_REF=<tag or branch> to install something other than the
 # latest release, OKL_FORCE=1 to install on a model other than the K2 / K2
-# Combo (F021), at your own risk, OKL_EXTRUDER=stock|dxc2 to answer the
-# extruder question in advance.
+# Combo (F021), at your own risk, OKL_EXTRUDER=stock|dxc2 and OKL_CFS=yes|no
+# to answer the extruder and CFS questions in advance.
 set -eu
 
 REPO=grant0013/K2-OpenKlipper
@@ -134,6 +134,27 @@ case "$STATE" in
     printing|paused) die "a print is $STATE. Finish or cancel it first" ;;
 esac
 
+# CFS: Creality's own config keeps the CFS it addressed (SAVE_CONFIG block
+# [auto_addr] mb_addr_table_uniids, one 12-byte id per box). A K2 without a
+# CFS has none.
+CFS_UNIID=$(python3 - <<'PY'
+import re
+try:
+    text = open("/mnt/UDISK/printer_data/config/printer.cfg").read()
+except Exception:
+    text = ""
+found = ""
+m = re.search(r"mb_addr_table_uniids\s*=\s*\n((?:#\*#[ \t]+0x[^\n]*\n)+)", text)
+if m:
+    for line in m.group(1).splitlines():
+        b = re.findall(r"0x([0-9A-Fa-f]{2})", line)
+        if len(b) == 12 and any(x != "00" for x in b):
+            found = "".join(b).lower()
+            break
+print(found)
+PY
+)
+
 # Where this printer's settings come from: an existing printer-overrides.cfg is
 # kept; a v0.2 install (one edited config) is migrated; otherwise ask.
 LEGACY_CFG="$CONF/$(basename "$BUILD").cfg"
@@ -150,6 +171,8 @@ elif [ -f "$CONF/printer-overrides.cfg" ]; then
     echo "    settings: keeping printer-overrides.cfg"
 elif [ -f "$LEGACY_CFG" ]; then
     SETTINGS=migrate
+    # A v0.2 install always had a CFS: it could not print without one
+    CFS=yes
     set -- $(cfg_values "$LEGACY_CFG" k2_cfs cutter_cut_x unload_pull_length)
     CUT_X=$1; PULL=$2
     HOTZ=$(cfg_values "$LEGACY_CFG" "gcode_macro START_PRINT" variable_hot_z_comp)
@@ -186,6 +209,35 @@ else
     case "$EXTRUDER" in
         stock|dxc2) ;;
         *) die "OKL_EXTRUDER must be stock or dxc2" ;;
+    esac
+    # CFS or rear spool holder. Default from Creality's config (above).
+    CFS=${OKL_CFS:-}
+    if [ -z "$CFS" ]; then
+        if [ -n "$CFS_UNIID" ]; then DEF=y; else DEF=n; fi
+        ANSWER=""
+        if [ -t 0 ] || (: < /dev/tty) 2>/dev/null; then
+            echo ""
+            if [ "$DEF" = y ]; then
+                printf "    Is a CFS (Creality Filament System) connected? (Creality's config lists one) [Y/n]: "
+            else
+                printf "    Is a CFS (Creality Filament System) connected? (none in Creality's config) [y/N]: "
+            fi
+            if [ -t 0 ]; then
+                read ANSWER || ANSWER=""
+            else
+                read ANSWER < /dev/tty || ANSWER=""
+            fi
+        else
+            echo "    No terminal to ask on: going by Creality's config (set OKL_CFS=yes|no to choose)"
+        fi
+        case "${ANSWER:-$DEF}" in
+            y|Y|yes|Yes|YES) CFS=yes ;;
+            *) CFS=no ;;
+        esac
+    fi
+    case "$CFS" in
+        yes|no) ;;
+        *) die "OKL_CFS must be yes or no" ;;
     esac
     # The printer's own Creality cutter calibration, if the stock config has one
     STOCK_CUT=$(grep -h "^#\*# cut_pos_x" /mnt/UDISK/printer_data/config/printer.cfg 2>/dev/null | tail -1 | awk '{print $NF}')
@@ -355,7 +407,9 @@ case "$SETTINGS" in
         echo "    printer config: settings restored from $(basename "$SETTINGS_BACKUP")"
         ;;
     new|migrate)
+        if [ "$CFS" = yes ]; then FITTED=True; else FITTED=False; fi
         sed -e "s/__CUT_X__/$CUT_X/" -e "s/__PULL__/$PULL/" \
+            -e "s/__CFS_FITTED__/$FITTED/" -e "s/__CFS_UNIID__/$CFS_UNIID/" \
             "$BUILD/config/printer-overrides.cfg.example" > "$CONF/printer-overrides.cfg"
         if [ "$SETTINGS" = migrate ]; then
             if [ "${HOTZ:-"-"}" != "-" ]; then
@@ -365,7 +419,7 @@ case "$SETTINGS" in
             echo "    your old config is kept as $(basename "$LEGACY_CFG").pre-v0.3: copy any other"
             echo "    settings you changed into printer-overrides.cfg"
         fi
-        echo "    printer config: printer-overrides.cfg written (cutter_cut_x $CUT_X, unload_pull_length $PULL)"
+        echo "    printer config: printer-overrides.cfg written (cutter_cut_x $CUT_X, unload_pull_length $PULL, CFS $CFS)"
         ;;
 esac
 

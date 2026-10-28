@@ -293,6 +293,10 @@ class K2CFS:
     def __init__(self, config):
         self.printer = config.get_printer()
         self.addr = config.getint('addr', 1, minval=1, maxval=127)
+        # False on a K2 without a CFS (filament from the rear spool holder):
+        # no bus traffic to the box, feed/preload calls become no-ops, T0
+        # just prints, and commands that need the box say so.
+        self.fitted = config.getboolean('cfs_fitted', True)
         self.allow_actuation = config.getboolean('allow_actuation', False)
         self.purge_safe_y = config.getfloat('purge_safe_y', 261.)
         self.purge_entry_x = config.getfloat('purge_entry_x', 131.)
@@ -523,7 +527,9 @@ class K2CFS:
         self.cutter_cal_max_x = config.getfloat(
             'cutter_cal_max_x', -5.5, maxval=0.)
         self.bus = None
-        self.status = {'online': None, 'feed_enabled': None,
+        self.status = {'fitted': self.fitted, 'detected': None,
+                       'online': None if self.fitted else False,
+                       'feed_enabled': None,
                        'feed_slot': None, 'last_loaded_slot': None,
                        'running_out': None, 'runout_next': '',
                        'runout_warning': ''}
@@ -607,14 +613,46 @@ class K2CFS:
 
     def _handle_connect(self):
         self.bus = self.printer.lookup_object('k2_motor_bus')
+        if not self.fitted:
+            self.bus.cfs_detect = False
 
     def _handle_ready(self):
         reactor = self.printer.get_reactor()
+        if not self.fitted:
+            return
+        reactor.register_timer(self._report_detection,
+                               reactor.monotonic() + 20.)
         if self.env_poll_interval > 0.:
             reactor.register_timer(self._env_poll, reactor.monotonic() + 5.)
         # Stock idles with pre-loading on, so a spool pushed into a slot is
         # drawn in. Give k2_motor_bus time to address the CFS first.
         reactor.register_timer(self._idle_preload, reactor.monotonic() + 8.)
+
+    def _report_detection(self, eventtime):
+        # k2_motor_bus looked for the CFS at ready (after the motor wake)
+        detected = getattr(self.bus, 'cfs_detected', None)
+        self.status['detected'] = detected
+        uniid = getattr(self.bus, 'cfs_found_uniid', None)
+        if uniid:
+            self.status['uniid'] = uniid.hex()
+        if detected is False and not self.status.get('online'):
+            self.gcode.respond_info(
+                "No CFS answered at startup. If this printer has no CFS, add"
+                " cfs_fitted: False under [k2_cfs] in printer-overrides.cfg"
+                " and restart.")
+        return self.printer.get_reactor().NEVER
+
+    def _require_cfs(self, gcmd):
+        if not self.fitted:
+            raise gcmd.error(
+                "No CFS on this printer (cfs_fitted: False). Use"
+                " LOAD_FILAMENT / UNLOAD_FILAMENT for the rear spool.")
+        if (self.status.get('online') is False
+                and getattr(self.bus, 'cfs_detected', None) is False):
+            raise gcmd.error(
+                "The CFS is not answering. Check its cable and power. If this"
+                " printer has no CFS, add cfs_fitted: False under [k2_cfs] in"
+                " printer-overrides.cfg and restart.")
 
     def _idle_preload(self, eventtime):
         try:
@@ -635,6 +673,9 @@ class K2CFS:
 
     def _env_poll(self, eventtime):
         interval = self.env_poll_interval
+        if self.status.get('online') and self.status.get('detected') is False:
+            # Answered later than the startup check
+            self.status['detected'] = True
         if self.print_poll_interval and self._printing():
             interval = self.print_poll_interval
         if (self.print_start_transaction
@@ -984,6 +1025,7 @@ class K2CFS:
         return getattr(self, dec)(p)
 
     def cmd_CFS_STATUS(self, gcmd):
+        self._require_cfs(gcmd)
         out = []
         online = False
         results = {}
@@ -1027,6 +1069,7 @@ class K2CFS:
         gcmd.respond_info("CFS addr %d\n%s" % (self.addr, "\n".join(out)))
 
     def cmd_CFS_QUERY(self, gcmd):
+        self._require_cfs(gcmd)
         name = gcmd.get('CMD').upper()
         if name not in self.QUERIES:
             raise gcmd.error("Unknown query %s. Known: %s"
@@ -1232,11 +1275,19 @@ class K2CFS:
             % (slot, "\n".join(sent)))
 
     def cmd_CFS_FEED_START(self, gcmd):
+        if not self.fitted:
+            gcmd.respond_info("No CFS: the extruder feeds from the rear spool")
+            return
         slot = gcmd.get('SLOT').upper()
         self._start_feed(
             gcmd, slot, require_confirm=True, require_selected=False)
 
     def _select_tool(self, gcmd, slot):
+        if not self.fitted:
+            if slot != 'A':
+                raise gcmd.error(
+                    "No CFS on this printer: only T0 (the rear spool) exists")
+            return
         self._start_feed(
             gcmd, slot, require_confirm=False, require_selected=True)
         gcmd.respond_info(
@@ -1244,6 +1295,8 @@ class K2CFS:
             % (ord(slot) - ord('A'), slot))
 
     def cmd_CFS_FEED_STOP(self, gcmd):
+        if not self.fitted:
+            return
         self._require_actuation(gcmd)
         sent = []
         try:
@@ -1553,6 +1606,8 @@ class K2CFS:
                 % still)
 
     def cmd_CFS_PRELOAD(self, gcmd):
+        if not self.fitted:
+            return
         # Mode change only, no motion: END_PRINT calls it while the print
         # state is still printing.
         self._require_actuation(gcmd)
@@ -1568,6 +1623,7 @@ class K2CFS:
         gcmd.respond_info("CFS pre-loading %s" % ("on" if enable else "off"))
 
     def cmd_CFS_RFID_READ(self, gcmd):
+        self._require_cfs(gcmd)
         # Read-only: the box's cached RFID records (ff 02 <mask>) and
         # remaining % (ff 03 <mask>), after Jacob10383's query_rfid_records
         # and query_rfid_remaining. No forced read (ff 0d <mask> 02), which
@@ -1821,6 +1877,7 @@ class K2CFS:
         return True
 
     def cmd_CFS_CUT_UNLOAD(self, gcmd):
+        self._require_cfs(gcmd)
         self._require_actuation(gcmd)
         self._require_idle(gcmd)
         if gcmd.get_int('CONFIRM', 0, minval=0, maxval=1) != 1:
@@ -1980,6 +2037,7 @@ class K2CFS:
             return None
 
     def cmd_CFS_LOAD(self, gcmd):
+        self._require_cfs(gcmd)
         self._require_actuation(gcmd)
         self._require_idle(gcmd)
         if gcmd.get_int('CONFIRM', 0, minval=0, maxval=1) != 1:
@@ -2215,6 +2273,7 @@ class K2CFS:
         return actual_length, [actual_length / count] * count
 
     def cmd_CFS_PURGE(self, gcmd):
+        self._require_cfs(gcmd)
         self._require_actuation(gcmd)
         self._require_idle(gcmd)
         if gcmd.get_int('CONFIRM', 0, minval=0, maxval=1) != 1:
@@ -2360,6 +2419,7 @@ class K2CFS:
             self.gcode.run_script_from_command("\n".join(lines))
 
     def cmd_CFS_TOOLCHANGE(self, gcmd):
+        self._require_cfs(gcmd)
         # The work stock firmware does behind a T command mid-print: lift
         # clear of the print, cut and rewind the loaded slot, load and purge
         # the new one at the hotter of the two temperatures, wipe, and go
@@ -2525,6 +2585,7 @@ class K2CFS:
         return short, full
 
     def cmd_CFS_RUNOUT_REFILL(self, gcmd):
+        self._require_cfs(gcmd)
         # Stock BOX_CHECK_MATERIAL_REFILL: the loaded slot ran out mid-print
         # and another slot holds the same filament. Klipper has already
         # paused and parked (pause_on_runout). Push the old tail through at
@@ -2605,10 +2666,12 @@ class K2CFS:
         self.gcode.run_script_from_command("RESUME")
 
     def cmd_CFS_PRINT_START(self, gcmd):
+        self._require_cfs(gcmd)
         self._require_print_start(gcmd)
         self._load_and_purge(gcmd, "CFS_PRINT_START")
 
     def cmd_CFS_CHANGE_SLOT(self, gcmd):
+        self._require_cfs(gcmd)
         # The same cut/load/purge as a print start, from the screen while
         # idle. Asking for the slot already loaded just purges it.
         self._require_idle(gcmd)

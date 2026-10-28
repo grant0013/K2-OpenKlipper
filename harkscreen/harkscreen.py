@@ -51,7 +51,7 @@ OBJECTS = {
     "fan": ["speed"],
     "toolhead": ["homed_axes"],
     "gcode_move": ["gcode_position"],
-    "k2_cfs": ["online", "active_slot", "feed_slot", "running_out",
+    "k2_cfs": ["fitted", "online", "active_slot", "feed_slot", "running_out",
                "runout_next",
                "temperature", "humidity"],
     "hark_cfs_slots": ["slots"],
@@ -788,6 +788,11 @@ class Screen:
     # --- base frame (everything static) ---------------------------------
     def render(self, st, err):
         self.buttons, self.anims = [], []
+        # No CFS on this printer (k2_cfs cfs_fitted: False): drop its page
+        if st.get("k2_cfs", {}).get("fitted") is False and "cfs" in self.pages:
+            self.pages = [p for p in self.pages if p != "cfs"]
+            if self.page not in self.pages and self.pages:
+                self.page = self.pages[0]
         self.canvas = img = self.background()
         d = ImageDraw.Draw(img)
         # Header: logo, name, state pill
@@ -1202,7 +1207,9 @@ class Screen:
              st.get("webhooks", {}).get("state") == "ready"),
             ("Motors", "ready" if motors else "NOT ready", motors),
             ("Homed", homed or "none", homed == "xyz"),
-            ("CFS", "online" if cfs else "offline", cfs),
+            ("CFS", "not fitted", None)
+            if st.get("k2_cfs", {}).get("fitted") is False
+            else ("CFS", "online" if cfs else "offline", cfs),
             ("Address", self.ip, None),
             ("Shaper X", "%s %.1f Hz" % (sh.get("shaper_type_x", "?"),
                                          sh.get("shaper_freq_x", 0)), None),

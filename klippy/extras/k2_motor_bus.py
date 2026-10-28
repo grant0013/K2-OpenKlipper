@@ -62,9 +62,11 @@
 #   #wake_delay: 2.2
 #   #wake_pins:              - main MCU pin levels held during the wake,
 #                              e.g. PB9=0, PB10=0, PB7=1, PB8=0
+#   #cfs_detect: True        - look for the CFS at ready and give it its
+#                              address (k2_cfs sets False if cfs_fitted is)
 #   #cfs_uniid:              - CFS unique id (hex, from [auto_addr]
-#                              mb_addr_table_uniids); give it its address at
-#                              ready when it doesn't answer
+#                              mb_addr_table_uniids), tried before the
+#                              00 a1 discover; not needed
 #   #cfs_addr: 1
 #   #reply_check: strict     - strict: a reply must pass CRC, come from the
 #                              address we asked (any for a broadcast) and,
@@ -155,6 +157,11 @@ class K2MotorBus:
         self.cfs_addr = config.getint('cfs_addr', 1, minval=1, maxval=127)
         uniid = config.get('cfs_uniid', '').replace(' ', '')
         self.cfs_uniid = bytes.fromhex(uniid) if uniid else None
+        # Look for (and address) the CFS at ready. k2_cfs turns this off
+        # when cfs_fitted is False.
+        self.cfs_detect = config.getboolean('cfs_detect', True)
+        self.cfs_detected = None
+        self.cfs_found_uniid = None
         self.reply_check = config.getchoice('reply_check', CHECK_MODES,
                                             'strict')
         self.stall_mode_check = config.getchoice('stall_mode_check',
@@ -204,7 +211,7 @@ class K2MotorBus:
             self.e_mcu.add_config_cmd("config_transparent oid=%d"
                                       % (self.e_oid,))
             self.e_mcu.register_config_callback(self._build_config)
-        if self.init_motors or self.cfs_uniid or self.temp_poll_interval:
+        if self.init_motors or self.cfs_detect or self.temp_poll_interval:
             self.printer.register_event_handler("klippy:ready",
                                                 self._handle_ready)
         gcode = self.gcode = self.printer.lookup_object('gcode')
@@ -396,29 +403,61 @@ class K2MotorBus:
     def _start_up(self):
         if self.init_motors:
             self.wake_motors()
-        if self.cfs_uniid:
+        if self.cfs_detect:
             self.address_cfs()
         if self.temp_poll_interval:
             self.reactor.register_timer(
                 self._poll_temps,
                 self.reactor.monotonic() + self.temp_poll_interval)
 
+    def _cfs_reply_uniid(self, resp, cmd):
+        """The 12-byte unique id in a CFS 00 a0/a1/a2 reply
+        (00 <cmd> <type 1> <mode> <uniid>), or None."""
+        if not resp or len(resp) < 5 or not proto.check_crc(resp):
+            return None
+        p = bytes(resp[3:-1])
+        if len(p) < 16 or p[1] != cmd or p[2] != 1 or not any(p[4:16]):
+            return None
+        return p[4:16]
+
     def address_cfs(self):
-        """Give the CFS its bus address if it lost it at power-off."""
+        """Find the CFS and give it its bus address if it lost it at
+        power-off. Returns True when a CFS answers at cfs_addr.
+
+        An addressed CFS answers 00 a2 at cfs_addr. One that lost its address
+        is given it with 00 a0 <addr> <uniid> to 0xfe: first with cfs_uniid
+        when set, then with the id it reports to the 00 a1 discover broadcast
+        (stock auto_addr / Jacob10383's AutoAddressClient), so any CFS is
+        found without a configured id."""
+        self.cfs_detected = False
         try:
-            if self.xfer(self.cfs_addr, CFS_BOX_STATE)[1]:
+            resp = self.xfer(self.cfs_addr, CFS_BOX_STATE)[1]
+            if resp:
+                self.cfs_detected = True
+                self.cfs_found_uniid = self._cfs_reply_uniid(resp, 0xa2)
                 return True
             for attempt in range(2):
-                self.xfer(0xfe, (0x00, 0xa0, self.cfs_addr) +
-                          tuple(self.cfs_uniid))
+                ids = [self.cfs_uniid] if self.cfs_uniid else []
+                found = self._cfs_reply_uniid(self.xfer(
+                    0xfe, (0x00, 0xa1, 0xfe, 0xfe), timeout=1.)[1], 0xa1)
+                if found and found not in ids:
+                    ids.append(found)
+                for uniid in ids:
+                    self.xfer(0xfe, (0x00, 0xa0, self.cfs_addr) +
+                              tuple(uniid))
+                    self._pause(0.5)
+                    resp = self.xfer(self.cfs_addr, CFS_BOX_STATE)[1]
+                    if resp:
+                        self.cfs_detected = True
+                        self.cfs_found_uniid = (
+                            self._cfs_reply_uniid(resp, 0xa2) or uniid)
+                        logging.info("k2_motor_bus: CFS %s given address %d",
+                                     uniid.hex(), self.cfs_addr)
+                        return True
                 self._pause(0.5)
-                if self.xfer(self.cfs_addr, CFS_BOX_STATE)[1]:
-                    logging.info("k2_motor_bus: CFS given address %d",
-                                 self.cfs_addr)
-                    return True
         except Exception:
             logging.exception("k2_motor_bus: CFS addressing failed")
-        logging.warning("k2_motor_bus: CFS does not answer at address %d",
+        logging.warning("k2_motor_bus: no CFS answers at address %d",
                         self.cfs_addr)
         return False
 
