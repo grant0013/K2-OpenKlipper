@@ -11,6 +11,15 @@
   `Z_TILT_ADJUST` in START_PRINT, `CHUTE_POSITION_CHECK`. The installer takes
   the K2 Plus only with `OKL_K2PLUS_BETA=1` on the board layout the config
   was written for. Tester guide: docs/K2-PLUS-BETA.md.
+- **Filament sync with stock OrcaSlicer:** lane_data now carries Orca's own
+  filament id for Creality filaments (`klippy/extras/hark_orca_ids.json`,
+  built by `tools/orca/make_orca_filament_ids.py` from Orca's Creality K2
+  profiles), so OrcaSlicer 2.5.0-beta and newer pick "Hyper PLA @K2-all"
+  instead of "Generic PLA". Our own library id moves to `k2_filament`. Setup
+  in docs/INSTALL.md, "Filament sync with OrcaSlicer".
+- Fixed: after a restart Orca could see empty CFS slots. Two lane_data posts
+  raced at start-up (CFS not found yet, then found) and the older, empty one
+  could land last; one poster now always sends the newest slots.
 - hark_safety watches every motor k2_motor_bus wakes (Z and Z1 on the K2
   Plus) instead of a fixed X/Y/E list.
 - Chamber fan: `variable_prefer_material: 1` uses the material table even

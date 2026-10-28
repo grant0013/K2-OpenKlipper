@@ -46,6 +46,24 @@ SETTING_KEYS = tuple(s[0] for s in SETTINGS)
 # which would also close a prompt sent by that command. Send the next dialog
 # just after the command has finished.
 PROMPT_DELAY = 0.4
+# Creality filament name -> the filament_id of OrcaSlicer's own Creality K2
+# preset (tools/orca/make_orca_filament_ids.py). Orca 2.5.0-beta and later
+# pick the preset carrying a lane's filament_id, so a slot of Hyper PLA syncs
+# as "Hyper PLA @K2-all" instead of "Generic PLA".
+ORCA_IDS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             'hark_orca_ids.json')
+
+
+def load_orca_ids(path=ORCA_IDS_FILE):
+    try:
+        with open(path, encoding='utf-8') as f:
+            return dict(json.load(f)['ids'])
+    except Exception:
+        logging.exception("hark_cfs_slots: no OrcaSlicer filament ids (%s)",
+                          path)
+        return {}
+
+
 EMPTY = dict({'loaded': False, 'filament': '', 'type': '', 'name': '',
               'brand': '', 'color': '', 'filament_id': '',
               'source': 'empty'}, **{k: 0 for k in SETTING_KEYS})
@@ -108,6 +126,13 @@ class HarkCfsSlots:
         self.library = {}
         self.slots = {}
         self.revision = 0
+        self.orca_ids = load_orca_ids()
+        self._orca_ids_lower = dict((k.lower(), v)
+                                    for k, v in self.orca_ids.items())
+        # One poster thread; it always sends the newest lanes
+        self._lanes_pending = None
+        self._lanes_lock = threading.Lock()
+        self._lanes_thread = None
         self._load_database()
         self._load_store()
         self.printer.register_event_handler('klippy:ready',
@@ -251,33 +276,69 @@ class HarkCfsSlots:
                 'pressure_advance': rec.get('pressure_advance', 0)
                                     if loaded else 0,
                 'flow_ratio': rec.get('flow_ratio', 0) if loaded else 0,
-                'filament_id': rec.get('filament', '') if loaded else '',
+                # OrcaSlicer's id for this filament ('' = Orca matches by
+                # material); k2_filament is our own library id
+                'filament_id': self.orca_filament_id(rec) if loaded else '',
+                'k2_filament': rec.get('filament', '') if loaded else '',
             }
         return lanes
 
-    def _publish_lanes(self):
+    def orca_filament_id(self, rec):
+        """OrcaSlicer filament_id for a slot record: by its name, else by
+        the Creality profile a custom filament is based on."""
+        names = [rec.get('name', '')]
+        fil = self.library.get(rec.get('filament', ''))
+        if fil and fil.get('based_on'):
+            names.append(fil['based_on'])
+        for name in names:
+            name = (name or '').split(' @')[0].strip()
+            fid = (self.orca_ids.get(name)
+                   or self._orca_ids_lower.get(name.lower()))
+            if fid:
+                return fid
+        return ''
+
+    def _publish_lanes(self, *args):
         # Moonraker's lane_data namespace is read by OrcaSlicer's Klipper
         # agent. Post from a thread so Klipper's reactor never waits on HTTP.
-        lanes = self._lane_values()
-        url = self.moonraker_url + '/server/database/item'
+        # One thread at a time, always sending the newest lanes: two posters
+        # racing at start-up (CFS not found yet, then found) once left the
+        # older, empty lanes in Moonraker.
+        with self._lanes_lock:
+            self._lanes_pending = self._lane_values()
+            if self._lanes_thread is not None:
+                return
+            self._lanes_thread = threading.Thread(target=self._post_lanes,
+                                                  daemon=True)
+            self._lanes_thread.start()
 
-        def post():
+    def _post_lanes(self):
+        url = self.moonraker_url + '/server/database/item'
+        while True:
+            with self._lanes_lock:
+                lanes = self._lanes_pending
+                self._lanes_pending = None
+                if lanes is None:
+                    self._lanes_thread = None
+                    return
             for key, value in lanes.items():
                 body = json.dumps({'namespace': 'lane_data', 'key': key,
                                    'value': value}).encode()
                 req = urllib.request.Request(
                     url, data=body, method='POST',
                     headers={'Content-Type': 'application/json'})
-                for attempt in range(5):
+                for attempt in range(10):
                     try:
                         urllib.request.urlopen(req, timeout=3).read()
                         break
                     except Exception as e:
-                        if attempt == 4:
+                        if attempt == 9:
                             logging.info("hark_cfs_slots: lane_data %s not "
                                          "published: %s", key, e)
                         time.sleep(3)
-        threading.Thread(target=post, daemon=True).start()
+                with self._lanes_lock:
+                    if self._lanes_pending is not None:
+                        break   # newer lanes waiting: send those instead
 
     # --- helpers -------------------------------------------------------
     def _slot_param(self, gcmd):

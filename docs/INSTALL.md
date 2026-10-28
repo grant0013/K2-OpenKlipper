@@ -127,6 +127,38 @@ In OrcaSlicer, start from Creality's profile for your printer, then in
 Save the printer profile under a new name, for example "K2 OpenKlipper". The
 reasons for each line are in [config/ORCA-K2-PROFILE.cfg](../config/ORCA-K2-PROFILE.cfg).
 
+### Filament sync with OrcaSlicer
+
+Orca can read what is loaded in each CFS slot and pick the filament for you.
+On stock firmware it gets this from Creality's own service on the printer,
+which K2 OpenKlipper switches off, so set Orca up to ask Moonraker instead:
+
+1. In the same **Connection** dialog, set **Printer Agent** to **Moonraker**
+   (Orca's K2 profiles default to Creality Print). It is an advanced option:
+   switch Orca to Advanced mode if you do not see it.
+2. In the **Device** tab, make sure the K2 is the selected printer. With more
+   than one printer, Orca syncs whichever one is selected there.
+3. Set each slot's filament on the printer (Mainsail's CFS panel, or the
+   touchscreen), then press the **sync** button in the Filament section of
+   Orca's sidebar.
+
+What comes across, per slot:
+
+| | OrcaSlicer 2.5.0-beta or newer | Older versions |
+|---|---|---|
+| Material and colour | yes | yes |
+| Filament preset | Creality's own Orca preset for Creality filaments (Hyper PLA becomes "Hyper PLA @K2-all"), also for a custom filament based on one; Generic &lt;type&gt; for other brands | Generic &lt;type&gt; |
+
+Your own per-slot changes (pressure advance, flow, temperatures) stay on the
+printer: Orca uses its preset's values when it slices, and the printer applies
+the slot's pressure advance at print start. Without a CFS, the rear spool
+syncs as slot 1.
+
+If Orca shows empty slots, set the slots on the printer first. If Orca cannot
+connect after a restart of Orca, check the address in **Connection** still
+ends in `:7126` (older Orca versions dropped the port after the first
+connection).
+
 ## 7. First print
 
 1. In Mainsail, check the **CFS** panel shows your loaded slots. Set each slot's
