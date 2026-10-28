@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.4.0-alpha.1 (2026-10-28)
 
 ### Printers without a CFS, and any CFS found by itself
 
@@ -83,13 +83,20 @@ Logic adapted (GPLv3, with credit in each file) from
   `CFS_RFID_READ` reads a slot's RFID record. `CFS_STATUS` no longer wipes the
   feeding slot.
 
-### Pressure advance
+### Pressure advance and flow
 
 - `PA_CAL_STATIC SLOT=x`: pressure advance from nozzle force with the nozzle
   standing still over the chute (the way Bambu's force-sensor printers do it),
   using Dmitry Butyugin's `pa_tester` (GPLv3, from his Klipper branch) with the
-  K2 strain gauge as its load cell. About 90 s and 0.2 m of filament; repeatable
-  to 0.001-0.005 on our printer (PLA 0.038, PETG about 0.06).
+  K2 strain gauge as its load cell. The gauge samples in bursts, so step
+  lengths are varied (`segment_jitter`) and steps whose start was not sampled
+  are left out (`max_start_gap`); both the speeding-up and slowing-down steps
+  now fit. On our printer: PLA 0.048, PETG 0.065.
+- Flow tools (`tools/flow/`): a maximum-flow test that steps the flow over
+  the chute and finds where the nozzle pressure leaves its trend (PETG about
+  16 mm3/s, PLA about 22-24 mm3/s at 250/220C here), and a flow-ratio pad
+  generator (nine labelled pads around the slot's ratio; pick the smoothest
+  and save it with `CFS_SLOT_SET SLOT=x FLOW=`).
 
 ### Other
 
