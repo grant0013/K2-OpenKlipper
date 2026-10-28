@@ -4,7 +4,7 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 # K2 OpenKlipper: adds the max_fit_mse, segment_jitter and
-# min_start_coverage options for the K2's burst-sampled nozzle gauge.
+# max_start_gap options for the K2's burst-sampled nozzle gauge.
 
 import bisect, collections, importlib, logging, math, multiprocessing, traceback
 import chelper, mathutil, queuelogger
@@ -273,16 +273,12 @@ def velocity_key(v, places=4):
 
 
 def _match_samples_to_moves(moves, all_samples, move_extra_window=0.,
-                            min_start_coverage=0., start_time_span=0.04):
+                            max_start_gap=0., start_time_span=0.04):
     if not all_samples:
         return []
     all_samples.sort(key=lambda s: s[0])
     sample_times = [s[0] for s in all_samples]
     half_window = 0.5 * move_extra_window
-    sample_period = 0.
-    if min_start_coverage > 0. and len(sample_times) > 1:
-        dts = sorted(b - a for a, b in zip(sample_times, sample_times[1:]))
-        sample_period = dts[len(dts) // 2]
     results = []
     for idx, (move, window_accel) in enumerate(moves):
         start_time = move.print_time
@@ -290,14 +286,18 @@ def _match_samples_to_moves(moves, all_samples, move_extra_window=0.,
         lo = bisect.bisect_left(sample_times, start_time - half_window)
         hi = bisect.bisect_right(sample_times, end_time + half_window)
         window = all_samples[lo:hi]
-        if window and sample_period:
-            # K2 OpenKlipper: a burst-sampled sensor can miss the start of a
-            # segment, where the decay changes fastest; such a window fits
-            # badly and spoils the joint fit, so leave it out
-            first = bisect.bisect_right(sample_times, start_time + start_time_span)
-            coverage = ((first - bisect.bisect_left(sample_times, start_time))
-                        * sample_period / start_time_span)
-            if coverage < min_start_coverage:
+        if window and max_start_gap > 0.:
+            # K2 OpenKlipper: the K2 gauge samples in bursts (50 ms windows
+            # with ~50 ms gaps at slow flow, ~5 ms bursts every ~10 ms at
+            # fast flow). A segment whose start fell in a long gap is missing
+            # the fastest part of its decay, fits badly and spoils the joint
+            # fit, so leave it out: no gap longer than max_start_gap from the
+            # segment start through its first start_time_span seconds.
+            span_end = start_time + start_time_span
+            lo0 = bisect.bisect_left(sample_times, start_time)
+            hi0 = bisect.bisect_right(sample_times, span_end)
+            points = [start_time] + sample_times[lo0:hi0] + [span_end]
+            if max(b - a for a, b in zip(points, points[1:])) > max_start_gap:
                 continue
         if window:
             results.append(WindowData(
@@ -375,7 +375,7 @@ class StepResponseTest:
     PHASE1_FIT_FRACTION = 0.8  # fraction of window to use for phase 1 fit
     PHASE2_TAU_MULT = 4.       # phase 2 fit window in units of phase 1 tau
     MAX_FIT_MSE_PHASE1 = 0.001 # max normalized MSE to mark a fit as 'ok'
-    min_start_coverage = 0.    # K2 OpenKlipper: see _match_samples_to_moves
+    max_start_gap = 0.         # K2 OpenKlipper: see _match_samples_to_moves
     MAX_DRIFT_RATIO = 0.5      # max drift term value vs exponential decay
     WEIGHT_ALPHA = 10.         # relative weight of early vs. late samples
     WEIGHT_POWER = 2.          # exponent in the weighting function
@@ -717,8 +717,7 @@ class StepResponseTest:
         if not cv_moves:
             raise self.printer.command_error("No move data captured")
         windows = _match_samples_to_moves(
-                cv_moves, all_samples,
-                min_start_coverage=self.min_start_coverage)
+                cv_moves, all_samples, max_start_gap=self.max_start_gap)
         if not windows:
             raise self.printer.command_error(
                 "No force samples matched to extruder moves")
@@ -1324,10 +1323,10 @@ class PATester:
         # gauge arrives in 50 ms windows, unlike a continuous load cell)
         self.methods['step_response'].MAX_FIT_MSE_PHASE1 = config.getfloat(
             'max_fit_mse', StepResponseTest.MAX_FIT_MSE_PHASE1, above=0.)
-        # Fraction of each segment's first 40 ms that must have samples
+        # Longest sample gap allowed in a segment's first 40 ms
         # (0 = keep every window, as upstream)
-        self.methods['step_response'].min_start_coverage = config.getfloat(
-            'min_start_coverage', 0., minval=0., maxval=1.)
+        self.methods['step_response'].max_start_gap = config.getfloat(
+            'max_start_gap', 0., minval=0., maxval=0.1)
         self.default_method = config.getchoice(
             'method', list(self.methods.keys()), 'step_response')
         self.extruder_test = PACalibrationExtruderTest(config)
