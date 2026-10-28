@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- **Printed flow and retraction tests from the screen or Mainsail**
+  (`[hark_calib]`): Flow test and Retraction test in the slot menu (screen)
+  and slot dialog (Mainsail), or `CALIBRATE_FLOW SLOT=x` /
+  `CALIBRATE_RETRACTION SLOT=x`. The printer writes and prints the test
+  (nine labelled flow-ratio pads; seven labelled pillar pairs, each pair's
+  travel retracting by its own length), then asks for the best one, a
+  picker on the touchscreen and the Mainsail card plus a Mainsail prompt.
+  The pick is saved to the slot (`FLOW=` / `RETRACT=`), so OrcaSlicer and
+  the next print use it. Mainsail revision 3.
+
 ## v0.4.1-alpha.1 (2026-10-28)
 
 - **Automatic pressure advance when a slot loads** (opt-in):

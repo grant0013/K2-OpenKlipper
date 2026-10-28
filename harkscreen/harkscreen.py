@@ -61,6 +61,7 @@ OBJECTS = {
     "webhooks": ["state", "state_message"],
     "idle_timeout": ["state"],
     "pa_pressure_log": ["last"],
+    "hark_calib": ["pending"],
     "hark_update": ["installed", "latest", "update_available", "updating"],
 }
 
@@ -785,7 +786,9 @@ class Screen:
             st.get("toolhead"), st.get("webhooks", {}).get("state"),
             self.wifi.busy, self.wifi.message, self.wifi.networks,
             self.wifi_status, len(self.settings), len(self.filaments),
-            self.ip, bool(self.pa_result(st))], sort_keys=True, default=str)
+            self.ip, bool(self.pa_result(st)),
+            (st.get("hark_calib") or {}).get("pending")],
+            sort_keys=True, default=str)
 
     # --- base frame (everything static) ---------------------------------
     def render(self, st, err):
@@ -836,7 +839,49 @@ class Screen:
         res = None if err else self.pa_result(st)
         if res and not self.confirm:
             self.draw_pa_result(res)
+        pick = None if err else self.calib_pick(st)
+        if pick and not self.confirm and not res:
+            self.draw_calib_pick(pick)
         return self.canvas
+
+    def calib_pick(self, st):
+        """A finished flow or retraction test waiting for its best result."""
+        pick = (st.get("hark_calib") or {}).get("pending") or {}
+        printing = st.get("print_stats", {}).get("state") in ("printing",
+                                                              "paused")
+        return pick if pick.get("values") and not printing else None
+
+    def draw_calib_pick(self, pick):
+        """One button per tested value; the pick is saved to the slot."""
+        dim = Image.new("RGB", (W, H), (0, 0, 0))
+        self.canvas = Image.blend(self.canvas, dim, 0.65)
+        d = ImageDraw.Draw(self.canvas)
+        kind, slot = pick.get("kind"), pick.get("slot", "?")
+        box = (90, 40, W - 90, 450)
+        self.panel(d, box, self.c["accent"], True)
+        title = ("Best flow pad" if kind == "flow"
+                 else "Best retraction") + (
+            " · external spool" if slot == "E" else " · slot %s" % slot)
+        self.text(d, (W // 2, 74), title, "m", anchor="mm")
+        hint = ("Lowest number where the top lines have closed up"
+                if kind == "flow" else
+                "Shortest retraction with no strings between the pillars")
+        self.text(d, (W // 2, 112), hint, "xs", "muted", anchor="mm")
+        self.buttons = []
+        values = pick.get("values") or []
+        cols = 3
+        bw = (box[2] - box[0] - (cols + 1) * 14) // cols
+        for i, v in enumerate(values):
+            label = ("%d" % round(v * 100)) if kind == "flow" else (
+                "%.1f mm" % v)
+            bx = box[0] + 14 + (i % cols) * (bw + 14)
+            by = 140 + (i // cols) * 66
+            self.button(d, (bx, by, bx + bw, by + 56), label,
+                        ("gcode", "CALIB_SET KIND=%s SLOT=%s VALUE=%s"
+                         % (kind, slot, v)), "accent", True, "s")
+        self.button(d, (W // 2 - 130, 380, W // 2 + 130, 436),
+                    "Keep the old value", ("gcode", "CALIB_SKIP"), "muted",
+                    True, "s")
 
     def draw_pa_result(self, res):
         """Calibration outcome; stays up until OK is pressed."""
@@ -942,13 +987,26 @@ class Screen:
                             "About 7 min, heats to %d°" % (slot, temp),
                             "CFS_LOAD_SLOT SLOT=%s COOL=0\nPA_CAL_RUN SLOT=%s AUTO=1"
                             % (slot, slot)), "accent"))
+        if rec.get("loaded"):
+            # Printed tests: the printer prints them and asks for the best
+            what = "the external spool" if slot == "E" else "slot %s" % slot
+            actions.append(("Flow test", ("confirm",
+                            "Print flow pads for %s?\nAbout 20 min. Is the"
+                            " bed clear?" % what,
+                            "CALIBRATE_FLOW SLOT=%s" % slot), "accent"))
+            actions.append(("Retraction test", ("confirm",
+                            "Print a retraction test for %s?\nAbout 25 min."
+                            " Is the bed clear?" % what,
+                            "CALIBRATE_RETRACTION SLOT=%s" % slot),
+                            "accent"))
         actions.append(("Set filament", ("slot_set",), "accent"))
         actions.append(("Close", ("slot_close",), "muted"))
-        bw = (box[2] - box[0] - 3 * 16) // 2
+        cols = 3
+        bw = (box[2] - box[0] - (cols + 1) * 14) // cols
         for i, (label, action, color) in enumerate(actions):
-            bx = box[0] + 16 + (i % 2) * (bw + 16)
-            by = box[1] + 100 + (i // 2) * 92
-            self.button(d, (bx, by, bx + bw, by + 78), label, action, color,
+            bx = box[0] + 14 + (i % cols) * (bw + 14)
+            by = box[1] + 100 + (i // cols) * 84
+            self.button(d, (bx, by, bx + bw, by + 72), label, action, color,
                         True, "s")
 
     def draw_busy(self, d, body, st):
@@ -1884,9 +1942,11 @@ class Screen:
                         self.running = ("Unloading", time.time())
                     elif script.startswith("PA_CAL_RUN"):
                         self.running = ("Calibrating PA", time.time())
+                    elif script.startswith("CALIBRATE_"):
+                        self.running = ("Starting test print", time.time())
                     if script.startswith(("CFS_LOAD_SLOT", "CFS_UNLOAD",
                                           "PA_CAL_RUN", "LOAD_FILAMENT",
-                                          "UNLOAD_FILAMENT")):
+                                          "UNLOAD_FILAMENT", "CALIBRATE_")):
                         self.slot_menu = None
                     mr.gcode(script)
             return
@@ -1920,12 +1980,13 @@ def main():
         taps = touch.pop()
         sleep_after = cfg.num("screen", "sleep_after")
         if screen.asleep:
-            if taps or printing or screen.pa_result(st):
+            if (taps or printing or screen.pa_result(st)
+                    or screen.calib_pick(st)):
                 screen.set_sleep(False)
                 touch.last_activity = now
             taps = []
         elif (sleep_after > 0 and not printing and not screen.confirm
-              and not screen.pa_result(st)
+              and not screen.pa_result(st) and not screen.calib_pick(st)
               and now - touch.last_activity > sleep_after):
             screen.set_sleep(True)
         for x, y in taps:
