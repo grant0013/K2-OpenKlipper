@@ -700,6 +700,14 @@ class K2CFS:
         if state not in ('printing', 'paused'):
             try:
                 found = self.bus.address_cfs()
+                if found:
+                    # It must also answer as the running CFS, not just its
+                    # address query, or this would switch back and forth
+                    m = self._measuring()
+                    found = 'temperature' in m or 'box_state' in m
+                    if not found:
+                        logging.info("k2_cfs: CFS answers its address but"
+                                     " not status queries yet: %s", m)
             except Exception:
                 logging.exception("k2_cfs: CFS re-probe failed")
                 found = False
@@ -710,6 +718,7 @@ class K2CFS:
                 if uniid:
                     self.status['uniid'] = uniid.hex()
                 self.env_poll_failures = 0
+                self.status['online'] = True
                 self.gcode.respond_info(
                     "CFS connected: the CFS feeds the printer again")
                 try:

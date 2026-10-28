@@ -27,7 +27,10 @@
   after a power-off, so another printer's CFS could go unanswered after a cold
   start. At startup the driver now asks the CFS at its address, and if it does
   not answer, uses the stock discover broadcast (`00 a1`, after Jacob10383's
-  AutoAddressClient) to get the id and give it back its address. `cfs_uniid`
+  AutoAddressClient) to get the id and give it back its address; a CFS
+  powered up while the printer runs waits in its loader and is started with
+  the loader-to-app broadcast (`00 0b 01`), as Jacob10383's firmware does.
+  `cfs_uniid`
   is optional (the installer copies it from Creality's config); `cfs_detect`
   turns the search off.
 

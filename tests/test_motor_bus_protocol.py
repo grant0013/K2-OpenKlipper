@@ -36,20 +36,21 @@ class MotorBusProtocolTest(unittest.TestCase):
 UID = bytes.fromhex("99763b4e8411b00645353230")
 
 
-def cfs_reply(addr, cmd, uid=UID):
-    # 00 <cmd> <type 1 = CFS> <mode 0 = app> <12-byte unique id>
-    return MODULE.proto.build_frame(addr, [0x00, cmd, 0x01, 0x00] + list(uid))
+def cfs_reply(addr, cmd, uid=UID, mode=0):
+    # 00 <cmd> <type 1 = CFS> <mode: 0 app, 1 loader> <12-byte unique id>
+    return MODULE.proto.build_frame(addr, [0x00, cmd, 0x01, mode] + list(uid))
 
 
 class FakeCfsBus(MODULE.K2MotorBus):
     """address_cfs against a scripted CFS: `addressed` says whether it still
     has its address; `discoverable` whether it answers the 00 a1 broadcast."""
 
-    def __init__(self, addressed, discoverable, uniid=None):
+    def __init__(self, addressed, discoverable, uniid=None, loader=False):
         self.cfs_addr = 1
         self.cfs_uniid = uniid
         self.addressed = addressed
         self.discoverable = discoverable
+        self.loader = loader
         self.sent = []
 
     def _pause(self, delay):
@@ -59,7 +60,11 @@ class FakeCfsBus(MODULE.K2MotorBus):
         payload = tuple(payload)
         self.sent.append((addr, payload[:2]))
         if addr == self.cfs_addr and payload == (0x00, 0xa2):
-            return b'', cfs_reply(1, 0xa2) if self.addressed else b''
+            return b'', (cfs_reply(1, 0xa2, mode=int(self.loader))
+                         if self.addressed else b'')
+        if addr == 0xff and payload[:2] == (0x00, 0x0b):
+            self.loader = False
+            return b'', b''
         if addr == 0xfe and payload[:2] == (0x00, 0xa1):
             return b'', cfs_reply(0xfe, 0xa1) if self.discoverable else b''
         if addr == 0xfe and payload[:2] == (0x00, 0xa0):
@@ -105,6 +110,12 @@ class CfsAddressingTest(unittest.TestCase):
         self.assertIsNone(bus._cfs_reply_uniid(frame, 0xa1))
         self.assertEqual(bus._cfs_reply_uniid(cfs_reply(0xfe, 0xa1), 0xa1),
                          UID)
+
+    def test_cfs_in_loader_mode_is_started(self):
+        bus = FakeCfsBus(addressed=False, discoverable=True, loader=True)
+        self.assertTrue(bus.address_cfs())
+        self.assertIn((0xff, (0x00, 0x0b)), bus.sent)
+        self.assertFalse(bus.loader)
 
 
 if __name__ == "__main__":

@@ -410,6 +410,32 @@ class K2MotorBus:
                 self._poll_temps,
                 self.reactor.monotonic() + self.temp_poll_interval)
 
+    def _cfs_reply_mode(self, resp, cmd):
+        """The mode in a CFS 00 a0/a1/a2 reply: 0 app, 1 loader, or None."""
+        if self._cfs_reply_uniid(resp, cmd) is None:
+            return None
+        return bytes(resp[3:-1])[3]
+
+    def _cfs_start_app(self):
+        """A CFS powered up while the printer runs waits in its loader. The
+        loader-to-app broadcast (00 0b 01 to 0xff, Jacob10383's start_app)
+        starts its firmware; it answers about 2 s later."""
+        self.xfer(0xff, (0x00, 0x0b, 0x01), timeout=0.05)
+        self._pause(2.0)
+
+    def _cfs_answer(self):
+        """Ask the CFS at cfs_addr (00 a2), starting its firmware if it is
+        still in the loader. Returns the reply or b''."""
+        resp = self.xfer(self.cfs_addr, CFS_BOX_STATE)[1]
+        if resp and self._cfs_reply_mode(resp, 0xa2) == 1:
+            logging.info("k2_motor_bus: CFS in loader mode; starting it")
+            self._cfs_start_app()
+            resp = self.xfer(self.cfs_addr, CFS_BOX_STATE)[1]
+            if resp and self._cfs_reply_mode(resp, 0xa2) == 1:
+                logging.warning("k2_motor_bus: CFS stayed in loader mode")
+                return b''
+        return resp
+
     def _cfs_reply_uniid(self, resp, cmd):
         """The 12-byte unique id in a CFS 00 a0/a1/a2 reply
         (00 <cmd> <type 1> <mode> <uniid>), or None."""
@@ -428,10 +454,10 @@ class K2MotorBus:
         is given it with 00 a0 <addr> <uniid> to 0xfe: first with cfs_uniid
         when set, then with the id it reports to the 00 a1 discover broadcast
         (stock auto_addr / Jacob10383's AutoAddressClient), so any CFS is
-        found without a configured id."""
-        self.cfs_detected = False
+        found without a configured id. cfs_detected stays None (searching)
+        until the answer is known."""
         try:
-            resp = self.xfer(self.cfs_addr, CFS_BOX_STATE)[1]
+            resp = self._cfs_answer()
             if resp:
                 self.cfs_detected = True
                 self.cfs_found_uniid = self._cfs_reply_uniid(resp, 0xa2)
@@ -446,7 +472,7 @@ class K2MotorBus:
                     self.xfer(0xfe, (0x00, 0xa0, self.cfs_addr) +
                               tuple(uniid))
                     self._pause(0.5)
-                    resp = self.xfer(self.cfs_addr, CFS_BOX_STATE)[1]
+                    resp = self._cfs_answer()
                     if resp:
                         self.cfs_detected = True
                         self.cfs_found_uniid = (
@@ -459,6 +485,7 @@ class K2MotorBus:
             logging.exception("k2_motor_bus: CFS addressing failed")
         logging.warning("k2_motor_bus: no CFS answers at address %d",
                         self.cfs_addr)
+        self.cfs_detected = False
         return False
 
     def _pause(self, delay):
