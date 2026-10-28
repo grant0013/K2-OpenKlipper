@@ -293,10 +293,22 @@ class K2CFS:
     def __init__(self, config):
         self.printer = config.get_printer()
         self.addr = config.getint('addr', 1, minval=1, maxval=127)
-        # False on a K2 without a CFS (filament from the rear spool holder):
-        # no bus traffic to the box, feed/preload calls become no-ops, T0
-        # just prints, and commands that need the box say so.
-        self.fitted = config.getboolean('cfs_fitted', True)
+        # cfs_fitted: auto (default) works like stock: no CFS found at
+        # startup means the rear spool holder (external spool), and a CFS
+        # plugged in later is picked up while idle. True expects a CFS and
+        # reports when it does not answer; False never talks to one. Without
+        # a CFS feed/preload calls are no-ops, T0 just prints, and commands
+        # that need the box say so.
+        mode = config.get('cfs_fitted', 'auto').strip().lower()
+        modes = {'auto': 'auto', 'true': 'yes', 'yes': 'yes', '1': 'yes',
+                 'false': 'no', 'no': 'no', '0': 'no'}
+        if mode not in modes:
+            raise config.error("cfs_fitted must be auto, True or False")
+        self.fitted_mode = modes[mode]
+        self.fitted = self.fitted_mode != 'no'
+        self.reprobe_interval = config.getfloat(
+            'cfs_reprobe_interval', 60., minval=10.)
+        self.ready_time = 0.
         self.allow_actuation = config.getboolean('allow_actuation', False)
         self.purge_safe_y = config.getfloat('purge_safe_y', 261.)
         self.purge_entry_x = config.getfloat('purge_entry_x', 131.)
@@ -527,7 +539,8 @@ class K2CFS:
         self.cutter_cal_max_x = config.getfloat(
             'cutter_cal_max_x', -5.5, maxval=0.)
         self.bus = None
-        self.status = {'fitted': self.fitted, 'detected': None,
+        self.status = {'fitted': self.fitted,
+                       'fitted_setting': self.fitted_mode, 'detected': None,
                        'online': None if self.fitted else False,
                        'feed_enabled': None,
                        'feed_slot': None, 'last_loaded_slot': None,
@@ -613,15 +626,16 @@ class K2CFS:
 
     def _handle_connect(self):
         self.bus = self.printer.lookup_object('k2_motor_bus')
-        if not self.fitted:
+        if self.fitted_mode == 'no':
             self.bus.cfs_detect = False
 
     def _handle_ready(self):
         reactor = self.printer.get_reactor()
-        if not self.fitted:
+        if self.fitted_mode == 'no':
             return
+        self.ready_time = reactor.monotonic()
         reactor.register_timer(self._report_detection,
-                               reactor.monotonic() + 20.)
+                               reactor.monotonic() + 5.)
         if self.env_poll_interval > 0.:
             reactor.register_timer(self._env_poll, reactor.monotonic() + 5.)
         # Stock idles with pre-loading on, so a spool pushed into a slot is
@@ -629,32 +643,89 @@ class K2CFS:
         reactor.register_timer(self._idle_preload, reactor.monotonic() + 8.)
 
     def _report_detection(self, eventtime):
-        # k2_motor_bus looked for the CFS at ready (after the motor wake)
+        # k2_motor_bus looks for the CFS at ready, after the motor wake
+        reactor = self.printer.get_reactor()
         detected = getattr(self.bus, 'cfs_detected', None)
+        if detected is None and eventtime - self.ready_time < 60.:
+            return eventtime + 2.
         self.status['detected'] = detected
         uniid = getattr(self.bus, 'cfs_found_uniid', None)
         if uniid:
             self.status['uniid'] = uniid.hex()
-        if detected is False and not self.status.get('online'):
+        if detected or self.status.get('online'):
+            return reactor.NEVER
+        if self.fitted_mode == 'auto':
+            self._set_fitted(False)
             self.gcode.respond_info(
-                "No CFS answered at startup. If this printer has no CFS, add"
-                " cfs_fitted: False under [k2_cfs] in printer-overrides.cfg"
-                " and restart.")
-        return self.printer.get_reactor().NEVER
+                "No CFS found: printing from the rear spool holder (external"
+                " spool). A CFS connected later is picked up while the"
+                " printer is idle.")
+            reactor.register_timer(self._reprobe,
+                                   eventtime + self.reprobe_interval)
+        else:
+            self.gcode.respond_info(
+                "No CFS answered at startup. Check its cable and power. If"
+                " this printer has no CFS, set cfs_fitted: auto or False"
+                " under [k2_cfs] in printer-overrides.cfg and restart.")
+        return reactor.NEVER
+
+    def _set_fitted(self, fitted):
+        self.fitted = fitted
+        self.status['fitted'] = fitted
+        if not fitted:
+            self.status.update({'online': False, 'feed_enabled': None,
+                                'active_slot': None, 'active_mask': None})
+
+    def _reprobe(self, eventtime):
+        # cfs_fitted: auto with no CFS: look for one now and then while idle
+        # (never while printing), the way stock notices a CFS plugged in
+        if self.fitted:
+            return self.printer.get_reactor().NEVER
+        stats = self.printer.lookup_object('print_stats', None)
+        state = stats.get_status(eventtime).get('state') if stats else ''
+        if state not in ('printing', 'paused'):
+            try:
+                found = self.bus.address_cfs()
+            except Exception:
+                logging.exception("k2_cfs: CFS re-probe failed")
+                found = False
+            if found:
+                self._set_fitted(True)
+                self.status['detected'] = True
+                uniid = getattr(self.bus, 'cfs_found_uniid', None)
+                if uniid:
+                    self.status['uniid'] = uniid.hex()
+                self.env_poll_failures = 0
+                self.gcode.respond_info(
+                    "CFS connected: the CFS feeds the printer again")
+                try:
+                    self._restore_idle_preload()
+                except Exception:
+                    logging.exception("k2_cfs: pre-loading on failed")
+                return self.printer.get_reactor().NEVER
+        return eventtime + self.reprobe_interval
 
     def _require_cfs(self, gcmd):
         if not self.fitted:
             raise gcmd.error(
-                "No CFS on this printer (cfs_fitted: False). Use"
-                " LOAD_FILAMENT / UNLOAD_FILAMENT for the rear spool.")
+                "No CFS %s: the printer uses the rear spool holder. Use"
+                " LOAD_FILAMENT / UNLOAD_FILAMENT."
+                % ("found" if self.fitted_mode == 'auto'
+                   else "on this printer (cfs_fitted: False)"))
         if (self.status.get('online') is False
                 and getattr(self.bus, 'cfs_detected', None) is False):
             raise gcmd.error(
                 "The CFS is not answering. Check its cable and power. If this"
-                " printer has no CFS, add cfs_fitted: False under [k2_cfs] in"
-                " printer-overrides.cfg and restart.")
+                " printer has no CFS, set cfs_fitted: auto or False under"
+                " [k2_cfs] in printer-overrides.cfg and restart.")
 
     def _idle_preload(self, eventtime):
+        # Only once k2_motor_bus has found (and addressed) the CFS
+        detected = getattr(self.bus, 'cfs_detected', None)
+        if detected is None and eventtime - self.ready_time < 60.:
+            return eventtime + 2.
+        if not detected:
+            return self.printer.get_reactor().NEVER
         try:
             self._restore_idle_preload()
         except Exception:
@@ -673,6 +744,8 @@ class K2CFS:
 
     def _env_poll(self, eventtime):
         interval = self.env_poll_interval
+        if not self.fitted:
+            return eventtime + interval
         if self.status.get('online') and self.status.get('detected') is False:
             # Answered later than the startup check
             self.status['detected'] = True

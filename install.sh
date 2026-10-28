@@ -13,8 +13,9 @@
 #
 # Environment: OKL_REF=<tag or branch> to install something other than the
 # latest release, OKL_FORCE=1 to install on a model other than the K2 / K2
-# Combo (F021), at your own risk, OKL_EXTRUDER=stock|dxc2 and OKL_CFS=yes|no
-# to answer the extruder and CFS questions in advance.
+# Combo (F021), at your own risk, OKL_EXTRUDER=stock|dxc2 to answer the
+# extruder question in advance, OKL_CFS=yes|no to fix whether a CFS is used
+# (default: found automatically at each start).
 set -eu
 
 REPO=grant0013/K2-OpenKlipper
@@ -171,8 +172,7 @@ elif [ -f "$CONF/printer-overrides.cfg" ]; then
     echo "    settings: keeping printer-overrides.cfg"
 elif [ -f "$LEGACY_CFG" ]; then
     SETTINGS=migrate
-    # A v0.2 install always had a CFS: it could not print without one
-    CFS=yes
+    CFS=auto
     set -- $(cfg_values "$LEGACY_CFG" k2_cfs cutter_cut_x unload_pull_length)
     CUT_X=$1; PULL=$2
     HOTZ=$(cfg_values "$LEGACY_CFG" "gcode_macro START_PRINT" variable_hot_z_comp)
@@ -210,33 +210,12 @@ else
         stock|dxc2) ;;
         *) die "OKL_EXTRUDER must be stock or dxc2" ;;
     esac
-    # CFS or rear spool holder. Default from Creality's config (above).
-    CFS=${OKL_CFS:-}
-    if [ -z "$CFS" ]; then
-        if [ -n "$CFS_UNIID" ]; then DEF=y; else DEF=n; fi
-        ANSWER=""
-        if [ -t 0 ] || (: < /dev/tty) 2>/dev/null; then
-            echo ""
-            if [ "$DEF" = y ]; then
-                printf "    Is a CFS (Creality Filament System) connected? (Creality's config lists one) [Y/n]: "
-            else
-                printf "    Is a CFS (Creality Filament System) connected? (none in Creality's config) [y/N]: "
-            fi
-            if [ -t 0 ]; then
-                read ANSWER || ANSWER=""
-            else
-                read ANSWER < /dev/tty || ANSWER=""
-            fi
-        else
-            echo "    No terminal to ask on: going by Creality's config (set OKL_CFS=yes|no to choose)"
-        fi
-        case "${ANSWER:-$DEF}" in
-            y|Y|yes|Yes|YES) CFS=yes ;;
-            *) CFS=no ;;
-        esac
-    fi
-    case "$CFS" in
-        yes|no) ;;
+    # CFS: auto finds it at startup and falls back to the rear spool holder
+    # without one, like stock. OKL_CFS=yes|no fixes it either way.
+    case "${OKL_CFS:-auto}" in
+        auto) CFS=auto ;;
+        yes) CFS=yes ;;
+        no) CFS=no ;;
         *) die "OKL_CFS must be yes or no" ;;
     esac
     # The printer's own Creality cutter calibration, if the stock config has one
@@ -407,7 +386,7 @@ case "$SETTINGS" in
         echo "    printer config: settings restored from $(basename "$SETTINGS_BACKUP")"
         ;;
     new|migrate)
-        if [ "$CFS" = yes ]; then FITTED=True; else FITTED=False; fi
+        case "$CFS" in yes) FITTED=True ;; no) FITTED=False ;; *) FITTED=auto ;; esac
         sed -e "s/__CUT_X__/$CUT_X/" -e "s/__PULL__/$PULL/" \
             -e "s/__CFS_FITTED__/$FITTED/" -e "s/__CFS_UNIID__/$CFS_UNIID/" \
             "$BUILD/config/printer-overrides.cfg.example" > "$CONF/printer-overrides.cfg"

@@ -69,9 +69,8 @@ then asks **which extruder is fitted**: `1` for the stock Creality extruder,
 `2` for a Phaetus DXC2. The DXC2 needs longer pulls after each filament cut
 (Phaetus' K2 instructions) and a deeper cut, so the answer sets those two
 values. For the stock extruder it uses your printer's own Creality cutter
-calibration. Then it asks **whether a CFS is connected**. The default comes
-from Creality's own config, which lists the CFS it has seen; answer `n` on a
-plain K2 that feeds from the rear spool holder (see
+calibration. A CFS needs no question: it is found at every start, and
+without one the printer uses the rear spool holder (see
 [Printers without a CFS](#printers-without-a-cfs)). It ends with `Checks passed. Nothing was changed`. If it says `STOPPED:`, the
 line after it says why (for example a print is running, or less than 200 MB is
 free: delete old G-code files or timelapses on the printer).
@@ -82,9 +81,9 @@ free: delete old G-code files or timelapses on the printer).
 sh /tmp/install.sh
 ```
 
-It asks the extruder and CFS questions again (answer the same). To answer
-them in advance, run it as `OKL_EXTRUDER=stock OKL_CFS=yes sh /tmp/install.sh`
-(`dxc2` for a DXC2, `no` for no CFS).
+It asks the extruder question again (answer the same). To answer it in
+advance, run it as `OKL_EXTRUDER=stock sh /tmp/install.sh` (`dxc2` for a
+DXC2).
 
 It downloads the open stack (about 5 MB), backs up the files it changes to
 `/mnt/UDISK/openklipper-backups/<date>`, installs, and starts it. It takes a minute or two. The touchscreen switches to Hark Screen, and the last lines show the
@@ -260,16 +259,16 @@ Bug reports and results from other K2s are very welcome:
 
 ## Printers without a CFS
 
-A K2 without a CFS feeds one filament from the rear spool holder. The
-installer sets this up when you answer `n` to the CFS question; to change it
-later, put this in `printer-overrides.cfg` and restart:
+A K2 without a CFS feeds one filament from the rear spool holder. Nothing
+needs setting: like Creality's firmware, K2 OpenKlipper looks for the CFS at
+every start, and when none answers the console says
+`No CFS found: printing from the rear spool holder` and the printer works as
+below. A CFS connected later is picked up within a minute while the printer
+is idle. This is `cfs_fitted: auto` under `[k2_cfs]` in
+`printer-overrides.cfg`; `True` always expects a CFS (and says when it does
+not answer), `False` never uses one.
 
-```
-[k2_cfs]
-cfs_fitted: False
-```
-
-With it:
+Without a CFS:
 
 - **Load and unload** with `LOAD_FILAMENT` and `UNLOAD_FILAMENT` (Mainsail's
   extruder panel shows them as Load/Unload buttons). Push the filament in
@@ -285,6 +284,6 @@ With it:
 - **Runout** pauses the print and says to load a new spool.
 - The CFS panel in Mainsail and the CFS page on the touchscreen are hidden.
 
-If a CFS is connected but `cfs_fitted` is still `True` and the CFS does not
-answer, the console says so at startup and CFS commands explain how to fix
-it.
+With `cfs_fitted: True` and a CFS that does not answer (cable, power), the
+console says so at startup, and print starts and CFS loads stop before
+heating anything, with the same hint.

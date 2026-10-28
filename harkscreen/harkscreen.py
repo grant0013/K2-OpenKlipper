@@ -55,6 +55,7 @@ OBJECTS = {
                "runout_next",
                "temperature", "humidity"],
     "hark_cfs_slots": ["slots"],
+    "filament_switch_sensor filament_sensor": ["filament_detected"],
     "k2_motor_bus": ["motors_ready"],
     "output_pin chamber_led": ["value"],
     "webhooks": ["state", "state_message"],
@@ -494,9 +495,9 @@ class Screen:
         except OSError:
             self.logo = None
         pages = [p.strip() for p in c.get("screen", "pages").split(",")]
-        self.pages = [p for p in pages
-                      if p in ("status", "cfs", "controls", "machine",
-                               "wifi")]
+        self.pages = self.all_pages = [
+            p for p in pages
+            if p in ("status", "cfs", "controls", "machine", "wifi")]
         if self.page not in self.pages and self.pages:
             self.page = self.pages[0]
         self.tcache, self.glow_cache, self.bg = {}, {}, None
@@ -779,6 +780,7 @@ class Screen:
                    or vs.get("progress") or 0) * 100),
             round(st.get("fan", {}).get("speed", 0) * 100), round(z, 2), rem,
             st.get("k2_cfs"), st.get("hark_cfs_slots"),
+            st.get("filament_switch_sensor filament_sensor"),
             st.get("k2_motor_bus"), st.get("output_pin chamber_led"),
             st.get("toolhead"), st.get("webhooks", {}).get("state"),
             self.wifi.busy, self.wifi.message, self.wifi.networks,
@@ -788,11 +790,12 @@ class Screen:
     # --- base frame (everything static) ---------------------------------
     def render(self, st, err):
         self.buttons, self.anims = [], []
-        # No CFS on this printer (k2_cfs cfs_fitted: False): drop its page
-        if st.get("k2_cfs", {}).get("fitted") is False and "cfs" in self.pages:
-            self.pages = [p for p in self.pages if p != "cfs"]
-            if self.page not in self.pages and self.pages:
-                self.page = self.pages[0]
+        # No CFS (not found at startup, or cfs_fitted: False): no CFS page;
+        # it comes back when a CFS is connected
+        no_cfs = st.get("k2_cfs", {}).get("fitted") is False
+        self.pages = [p for p in self.all_pages if not (no_cfs and p == "cfs")]
+        if self.page not in self.pages and self.pages:
+            self.page = self.pages[0]
         self.canvas = img = self.background()
         d = ImageDraw.Draw(img)
         # Header: logo, name, state pill
@@ -1072,7 +1075,19 @@ class Screen:
         warning = cfs.get("running_out") if printing else None
         self.icon(d, "spool", sx, fy + 27, 30,
                   hex_rgb(rec.get("color"), self.c["muted"]))
-        if warning:
+        if cfs.get("fitted") is False:
+            # Rear spool holder: slot A's record describes it when set
+            rec = slots.get("A", {})
+            loaded = st.get("filament_switch_sensor filament_sensor", {}).get(
+                "filament_detected")
+            self.icon(d, "spool", sx, fy + 27, 30,
+                      hex_rgb(rec.get("color") if loaded else None,
+                              self.c["muted"]))
+            name = rec.get("name") if rec.get("loaded") else ""
+            self.text(d, (sx + 28, fy + 27), "External spool · %s" % (
+                (name or "loaded") if loaded else "no filament"),
+                "s", anchor="lm")
+        elif warning:
             # Early runout warning from the CFS entry sensor
             nxt = cfs.get("runout_next")
             self.text(d, (sx + 28, fy + 27), "Slot %s running out · %s" % (

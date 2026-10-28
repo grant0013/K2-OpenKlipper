@@ -21,9 +21,10 @@
 [k2_cfs]
 cutter_cut_x: __CUT_X__
 unload_pull_length: __PULL__
-# CFS (Creality Filament System), set by the installer. False on a K2 without
-# one: filament comes from the rear spool holder and LOAD_FILAMENT /
-# UNLOAD_FILAMENT load and unload it.
+# CFS (Creality Filament System). auto: found at each start; without one the
+# printer uses the rear spool holder (LOAD_FILAMENT / UNLOAD_FILAMENT), and a
+# CFS connected later is picked up while idle. True: always expect a CFS.
+# False: never use one.
 cfs_fitted: __CFS_FITTED__
 
 # Your CFS's id from Creality's config, if it had one. Optional: the driver

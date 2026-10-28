@@ -70,7 +70,7 @@ Optionally, Klipper can run on a separate PC over one USB cable
 | Model | Status |
 | --- | --- |
 | K2 / K2 Combo (F021) | Developed and tested here |
-| K2 without a CFS (rear spool) | Supported: the installer asks ([details](docs/INSTALL.md#printers-without-a-cfs)); tested by running our K2 with the CFS switched off |
+| K2 without a CFS (rear spool) | Supported: found automatically at each start ([details](docs/INSTALL.md#printers-without-a-cfs)); tested on our K2 with the CFS unplugged |
 | K2 Pro (F012) | Same motor tuning and boards as the K2 in Creality's config; untested |
 | K2 Plus (F008) | Different Z system (closed-loop Z) and camera; untested |
 
