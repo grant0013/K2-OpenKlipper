@@ -43,8 +43,9 @@ redistributing it. Exact build identity is in `K2-BUILD-MANIFEST`.
 ## Mainsail (Hark K2 edition)
 
 `system/mainsail/` is the build of the Hark K2 edition of Mainsail, revision 2
-(based on Mainsail v2.18.2, GPLv3). It adds the CFS panel (hidden on printers
-without a CFS), the control-centre dashboard, appearance settings and movable
-cards. Source: https://github.com/grant0013/mainsail (branch `hark-cfs-panel`,
-commit `85512fb`; revision 1 is tag `v2.18.2-hark.1`). Upstream:
+(based on Mainsail v2.18.2, GPLv3). It adds the CFS panel (an External spool
+card on printers without a CFS; load, unload and pressure-advance calibration
+from the slot dialog), the control-centre dashboard, appearance settings and
+movable cards. Source: https://github.com/grant0013/mainsail (branch
+`hark-cfs-panel`, commit `1456b9b`; revision 1 is tag `v2.18.2-hark.1`). Upstream:
 https://github.com/mainsail-crew/mainsail.

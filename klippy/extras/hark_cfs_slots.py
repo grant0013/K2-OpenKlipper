@@ -12,7 +12,11 @@
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import json, logging, os, re, threading, time, urllib.request
 
-SLOTS = ('A', 'B', 'C', 'D')
+# A-D are the CFS slots; E is the external spool on the rear holder, used
+# when the printer has no CFS (k2_cfs fitted False)
+CFS_SLOTS = ('A', 'B', 'C', 'D')
+EXTERNAL = 'E'
+SLOTS = CFS_SLOTS + (EXTERNAL,)
 TYPE_ORDER = ('PLA', 'PETG', 'ABS', 'ASA', 'TPU', 'PLA-CF', 'PETG-CF')
 COLOURS = (
     ('Black', '000000'), ('White', 'FFFFFF'), ('Grey', '808080'),
@@ -218,11 +222,22 @@ class HarkCfsSlots:
                 'library': [dict(f) for f in self.library.values()],
                 'revision': self.revision, 'materials': self.materials}
 
+    def cfs_fitted(self):
+        cfs = self.printer.lookup_object('k2_cfs', None)
+        return cfs is None or cfs.fitted
+
+    def visible_slots(self):
+        return CFS_SLOTS if self.cfs_fitted() else (EXTERNAL,)
+
     # --- OrcaSlicer sync through Moonraker ------------------------------
     def _lane_values(self):
+        # Orca's lanes follow the printer's tools: the four CFS slots, or the
+        # external spool alone as T0 without a CFS
         lanes = {}
-        for index, slot in enumerate(SLOTS):
-            rec = self.slots[slot]
+        visible = self.visible_slots()
+        for index in range(len(CFS_SLOTS)):
+            slot = visible[index] if index < len(visible) else None
+            rec = self.slots[slot] if slot else EMPTY
             loaded = rec.get('loaded')
             lanes['lane%d' % (index + 1)] = {
                 'lane': str(index),
@@ -269,8 +284,10 @@ class HarkCfsSlots:
         slot = gcmd.get('SLOT').upper()
         if slot in ('0', '1', '2', '3'):
             slot = SLOTS[int(slot)]
+        if slot in ('EXT', 'EXTERNAL'):
+            slot = EXTERNAL
         if slot not in SLOTS:
-            raise gcmd.error("SLOT must be A, B, C or D")
+            raise gcmd.error("SLOT must be A, B, C, D or E (external spool)")
         return slot
 
     def _all_filaments(self):
@@ -318,9 +335,10 @@ class HarkCfsSlots:
 
     def _describe(self, slot):
         rec = self.slots[slot]
+        label = 'External spool' if slot == EXTERNAL else slot
         if not rec.get('loaded'):
-            return "%s: empty" % slot
-        out = "%s: %s %s (%s" % (slot, _colour_name(rec['color']),
+            return "%s: empty" % label
+        out = "%s: %s %s (%s" % (label, _colour_name(rec['color']),
                                  rec['name'], rec['type'])
         if rec.get('nozzle_temp'):
             out += ", %dC" % rec['nozzle_temp']
@@ -380,7 +398,7 @@ class HarkCfsSlots:
         rec['source'] = 'manual'
         self.slots[slot] = rec
         self._save()
-        gcmd.respond_info("CFS slot updated: %s" % self._describe(slot))
+        gcmd.respond_info("Slot updated: %s" % self._describe(slot))
         if gcmd.get_int('MENU', 0):
             self.cmd_CFS_SLOTS(gcmd)
 
@@ -488,11 +506,12 @@ class HarkCfsSlots:
 
     # --- prompt dialogs (UIs without the CFS panel) ---------------------
     def cmd_CFS_SLOTS(self, gcmd):
+        visible = self.visible_slots()
         self._prompt(
-            'CFS slots',
-            [self._describe(s) for s in SLOTS],
-            [('Edit %s' % s, 'CFS_SLOT_EDIT SLOT=%s' % s, 'primary')
-             for s in SLOTS],
+            'CFS slots' if self.cfs_fitted() else 'External spool',
+            [self._describe(s) for s in visible],
+            [('Edit %s' % ('spool' if s == EXTERNAL else s),
+              'CFS_SLOT_EDIT SLOT=%s' % s, 'primary') for s in visible],
             [('Close', 'CFS_SLOTS_CLOSE', 'secondary')])
 
     def cmd_CFS_SLOTS_CLOSE(self, gcmd):

@@ -263,8 +263,7 @@ A K2 without a CFS feeds one filament from the rear spool holder. Nothing
 needs setting: like Creality's firmware, K2 OpenKlipper looks for the CFS at
 every start, and when none answers the console says
 `No CFS found: printing from the rear spool holder` and the printer works as
-below. A CFS connected later is picked up within a minute while the printer
-is idle. This is `cfs_fitted: auto` under `[k2_cfs]` in
+below. This is `cfs_fitted: auto` under `[k2_cfs]` in
 `printer-overrides.cfg`; `True` always expects a CFS (and says when it does
 not answer), `False` never uses one.
 
@@ -278,11 +277,17 @@ Without a CFS:
   from a runout pause too, followed by `RESUME`.
 - **Printing**: slice for one filament (T0). The print start primes the spool
   at the chute. A file that asks for T1-T3 stops with a message.
-- **Filament settings**: slot A's record in the CFS slot data (pressure
-  advance, retraction, temperatures) is used for the rear spool when it is set.
-  `PA_CAL_STATIC` and `PA_CAL_RUN` use slot A by default.
+- **Filament settings**: the external spool has its own record, slot `E`
+  (pressure advance, flow, retraction, temperatures), edited in the External
+  spool card in Mainsail or on the touchscreen, or with
+  `CFS_SLOT_SET SLOT=E ...`. OrcaSlicer sees it as the first filament.
+  `PA_CAL_STATIC` and `PA_CAL_RUN` use slot E by default.
 - **Runout** pauses the print and says to load a new spool.
-- The CFS panel in Mainsail and the CFS page on the touchscreen are hidden.
+- Mainsail shows an External spool card in place of the CFS card, and the
+  touchscreen an External spool page in place of the CFS page, with the same
+  filament editing, load/unload and pressure-advance calibration.
+- A CFS unplugged or plugged in while the printer is idle is noticed within
+  about 30 seconds, with no restart, as on Creality's firmware.
 
 With `cfs_fitted: True` and a CFS that does not answer (cable, power), the
 console says so at startup, and print starts and CFS loads stop before

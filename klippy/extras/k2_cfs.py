@@ -307,7 +307,8 @@ class K2CFS:
         self.fitted_mode = modes[mode]
         self.fitted = self.fitted_mode != 'no'
         self.reprobe_interval = config.getfloat(
-            'cfs_reprobe_interval', 60., minval=10.)
+            'cfs_reprobe_interval', 15., minval=5.)
+        self.reprobe_timer = None
         self.ready_time = 0.
         self.allow_actuation = config.getboolean('allow_actuation', False)
         self.purge_safe_y = config.getfloat('purge_safe_y', 261.)
@@ -655,13 +656,10 @@ class K2CFS:
         if detected or self.status.get('online'):
             return reactor.NEVER
         if self.fitted_mode == 'auto':
-            self._set_fitted(False)
-            self.gcode.respond_info(
+            self._go_external(
                 "No CFS found: printing from the rear spool holder (external"
                 " spool). A CFS connected later is picked up while the"
                 " printer is idle.")
-            reactor.register_timer(self._reprobe,
-                                   eventtime + self.reprobe_interval)
         else:
             self.gcode.respond_info(
                 "No CFS answered at startup. Check its cable and power. If"
@@ -675,11 +673,27 @@ class K2CFS:
         if not fitted:
             self.status.update({'online': False, 'feed_enabled': None,
                                 'active_slot': None, 'active_mask': None})
+        # Orca's lanes switch between the CFS slots and the external spool
+        slots = self.printer.lookup_object('hark_cfs_slots', None)
+        if slots is not None:
+            slots._publish_lanes()
+
+    def _go_external(self, msg):
+        # cfs_fitted: auto and no CFS: use the rear spool holder and keep
+        # looking for a CFS while idle, as stock does (no restart needed)
+        if self.fitted:
+            self._set_fitted(False)
+            self.gcode.respond_info(msg)
+        if self.reprobe_timer is None:
+            reactor = self.printer.get_reactor()
+            self.reprobe_timer = reactor.register_timer(
+                self._reprobe, reactor.monotonic() + self.reprobe_interval)
 
     def _reprobe(self, eventtime):
         # cfs_fitted: auto with no CFS: look for one now and then while idle
         # (never while printing), the way stock notices a CFS plugged in
         if self.fitted:
+            self.reprobe_timer = None
             return self.printer.get_reactor().NEVER
         stats = self.printer.lookup_object('print_stats', None)
         state = stats.get_status(eventtime).get('state') if stats else ''
@@ -702,6 +716,7 @@ class K2CFS:
                     self._restore_idle_preload()
                 except Exception:
                     logging.exception("k2_cfs: pre-loading on failed")
+                self.reprobe_timer = None
                 return self.printer.get_reactor().NEVER
         return eventtime + self.reprobe_interval
 
@@ -771,6 +786,19 @@ class K2CFS:
             self.env_poll_failures += 1
             if self.env_poll_failures >= 3:
                 self.status['online'] = False
+                # Unplugged while idle (cfs_fitted: auto): switch to the
+                # external spool now. Mid-print it stays a CFS fault.
+                stats = self.printer.lookup_object('print_stats', None)
+                state = stats.get_status(eventtime).get('state') \
+                    if stats else ''
+                if (self.fitted_mode == 'auto' and self.fitted
+                        and self.status.get('detected')
+                        and state not in ('printing', 'paused')):
+                    self._go_external(
+                        "CFS disconnected: printing from the rear spool"
+                        " holder (external spool) until a CFS is connected"
+                        " again.")
+                    return eventtime + interval
         self._check_running_out()
         try:
             self._check_clog(eventtime)

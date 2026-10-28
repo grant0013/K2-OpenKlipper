@@ -790,12 +790,9 @@ class Screen:
     # --- base frame (everything static) ---------------------------------
     def render(self, st, err):
         self.buttons, self.anims = [], []
-        # No CFS (not found at startup, or cfs_fitted: False): no CFS page;
-        # it comes back when a CFS is connected
-        no_cfs = st.get("k2_cfs", {}).get("fitted") is False
-        self.pages = [p for p in self.all_pages if not (no_cfs and p == "cfs")]
-        if self.page not in self.pages and self.pages:
-            self.page = self.pages[0]
+        # No CFS (not found, unplugged, or cfs_fitted: False): the CFS page
+        # becomes the External spool page until a CFS is connected
+        self.no_cfs = st.get("k2_cfs", {}).get("fitted") is False
         self.canvas = img = self.background()
         d = ImageDraw.Draw(img)
         # Header: logo, name, state pill
@@ -891,7 +888,8 @@ class Screen:
         self.panel(d, box, self.c["accent"], True)
         col = hex_rgb(rec.get("color"), self.c["muted"])
         self.icon(d, "spool", box[0] + 50, box[1] + 50, 46, col)
-        self.text(d, (box[0] + 90, box[1] + 32), "Slot %s" % slot, "m")
+        self.text(d, (box[0] + 90, box[1] + 32),
+                  "External spool" if slot == "E" else "Slot %s" % slot, "m")
         self.text(d, (box[0] + 90, box[1] + 70), "%s · %s°C" % (
             rec.get("name", "Empty"), rec.get("nozzle_temp", "-"))
             if rec.get("loaded") else "Empty", "xs", "muted")
@@ -900,7 +898,28 @@ class Screen:
                    int(slots.get(active, {}).get("nozzle_temp") or 0)
                    if active else 0, 220)
         actions = []
-        if rec.get("loaded") and active == slot:
+        if slot == "E":
+            # Rear spool holder: the same functions through LOAD_FILAMENT /
+            # UNLOAD_FILAMENT; pressure advance is saved to slot E
+            temp = max(int(rec.get("nozzle_temp") or 0), 220)
+            if st.get("filament_switch_sensor filament_sensor", {}).get(
+                    "filament_detected"):
+                actions.append(("Load & purge", ("confirm",
+                                "Load and purge the spool?\nHeats to %d°"
+                                % temp, "LOAD_FILAMENT"), "accent"))
+                actions.append(("Unload", ("confirm",
+                                "Cut and unload the spool?\nHeats to %d°"
+                                % temp, "UNLOAD_FILAMENT"), "warn"))
+                actions.append(("Calibrate PA", ("confirm",
+                                "Calibrate PA for this spool?\n"
+                                "About 5 min, heats to %d°" % temp,
+                                "PA_CAL_RUN SLOT=E AUTO=1"), "accent"))
+            else:
+                actions.append(("Load", ("confirm",
+                                "Push the filament in at the back until it"
+                                " stops, then load?\nHeats to %d°" % temp,
+                                "LOAD_FILAMENT"), "accent"))
+        elif rec.get("loaded") and active == slot:
             actions.append(("Purge", ("confirm",
                             "Purge slot %s?\nHeats to %d°" % (slot, temp),
                             "CFS_LOAD_SLOT SLOT=%s" % slot), "accent"))
@@ -1076,8 +1095,8 @@ class Screen:
         self.icon(d, "spool", sx, fy + 27, 30,
                   hex_rgb(rec.get("color"), self.c["muted"]))
         if cfs.get("fitted") is False:
-            # Rear spool holder: slot A's record describes it when set
-            rec = slots.get("A", {})
+            # Rear spool holder: slot E's record describes it when set
+            rec = slots.get("E", {})
             loaded = st.get("filament_switch_sensor filament_sensor", {}).get(
                 "filament_detected")
             self.icon(d, "spool", sx, fy + 27, 30,
@@ -1107,7 +1126,60 @@ class Screen:
         else:
             self.icon(d, "fan", fx, fy + 27, 30, self.c["muted"])
 
+    def page_external(self, d, body, st):
+        """No CFS: the rear spool holder, slot E, as one large card."""
+        x0, y0, x1, y1 = body
+        pad = 14
+        rec = st.get("hark_cfs_slots", {}).get("slots", {}).get("E", {})
+        loaded = st.get("filament_switch_sensor filament_sensor", {}).get(
+            "filament_detected")
+        idle = st.get("print_stats", {}).get("state") not in ("printing",
+                                                              "paused")
+        self.text(d, (x0 + pad, y0 + 10), "External spool", "s", "text")
+        self.text(d, (x1 - pad, y0 + 10),
+                  "filament in" if loaded else "no filament", "s",
+                  "ok" if loaded else "muted", anchor="ra")
+        box = (x0 + pad, y0 + 54, x1 - pad, y1 - 70)
+        self.panel(d, box, self.c["accent"] if loaded else None, bool(loaded))
+        if idle:
+            self.buttons.append((*box, ("edit_slot", "E", rec)))
+        sw = hex_rgb(rec.get("color"), self.c["panel_edge"])
+        r = min(70, (box[3] - box[1]) // 2 - 24)
+        sx, sy = box[0] + 30 + r, (box[1] + box[3]) // 2
+        if rec.get("loaded"):
+            d.ellipse((sx - r, sy - r, sx + r, sy + r), fill=sw,
+                      outline=self.c["panel_edge"], width=2)
+            d.ellipse((sx - r * .38, sy - r * .38, sx + r * .38,
+                       sy + r * .38), fill=self.c["panel"],
+                      outline=mix(sw, (0, 0, 0), 0.3), width=2)
+        else:
+            d.ellipse((sx - r, sy - r, sx + r, sy + r),
+                      outline=self.c["panel_edge"], width=3)
+        tx = sx + r + 28
+        if rec.get("loaded"):
+            self.text(d, (tx, sy - 52), rec.get("name", "?")[:22], "m")
+            self.text(d, (tx, sy - 6), "%s · %s°C · bed %s°C" % (
+                rec.get("type", ""), rec.get("nozzle_temp", "?"),
+                rec.get("bed_temp", "?")), "s", "muted")
+            extras = []
+            if rec.get("pressure_advance"):
+                extras.append("PA %.3f" % rec["pressure_advance"])
+            if rec.get("flow_ratio"):
+                extras.append("flow %.2f" % rec["flow_ratio"])
+            if rec.get("retract_length"):
+                extras.append("ret %.1f" % rec["retract_length"])
+            self.text(d, (tx, sy + 36), "  ".join(extras), "s", "accent")
+        else:
+            self.text(d, (tx, sy), "Filament not set", "m", "muted",
+                      anchor="lm")
+        self.text(d, ((x0 + x1) // 2, y1 - 40),
+                  "tap to set the filament, load, unload or calibrate PA"
+                  if idle else "rear spool holder", "xs", "muted",
+                  anchor="mm")
+
     def page_cfs(self, d, body, st):
+        if st.get("k2_cfs", {}).get("fitted") is False:
+            return self.page_external(d, body, st)
         x0, y0, x1, y1 = body
         pad = 14
         cfs = st.get("k2_cfs", {})
@@ -1488,8 +1560,10 @@ class Screen:
                     fill=mix(self.c["background"], self.c["panel"], 0.6))
         d.line((NAV_W - 1, HEADER_H, NAV_W - 1, H),
                fill=self.c["panel_edge"], width=2)
-        names = {"status": "Status", "cfs": "CFS", "controls": "Controls",
-                 "machine": "Machine", "wifi": "Wi-Fi"}
+        names = {"status": "Status",
+                 "cfs": "Spool" if getattr(self, "no_cfs", False) else "CFS",
+                 "controls": "Controls", "machine": "Machine",
+                 "wifi": "Wi-Fi"}
         n = len(self.pages) or 1
         bh = (H - HEADER_H) // n
         for i, p in enumerate(self.pages):
@@ -1804,10 +1878,15 @@ class Screen:
                                         time.time())
                     elif script == "CFS_UNLOAD_ACTIVE":
                         self.running = ("Unloading", time.time())
+                    elif script == "LOAD_FILAMENT":
+                        self.running = ("Loading", time.time())
+                    elif script == "UNLOAD_FILAMENT":
+                        self.running = ("Unloading", time.time())
                     elif script.startswith("PA_CAL_RUN"):
                         self.running = ("Calibrating PA", time.time())
                     if script.startswith(("CFS_LOAD_SLOT", "CFS_UNLOAD",
-                                          "PA_CAL_RUN")):
+                                          "PA_CAL_RUN", "LOAD_FILAMENT",
+                                          "UNLOAD_FILAMENT")):
                         self.slot_menu = None
                     mr.gcode(script)
             return

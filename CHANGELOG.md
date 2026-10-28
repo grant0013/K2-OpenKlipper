@@ -5,19 +5,23 @@
 ### Printers without a CFS, and any CFS found by itself
 
 - **K2 without a CFS** (filament from the rear spool holder), handled like
-  stock: new `[k2_cfs] cfs_fitted: auto` (default) looks for the CFS at every
-  start; without one the printer uses the rear spool holder, and a CFS
-  connected later is picked up within a minute while idle (`True` always
-  expects one, `False` never uses one; `OKL_CFS=yes|no` for the installer).
-  Without a CFS the box is not polled, feed and pre-load calls do nothing,
-  the print start primes the spool at the chute, T0 uses slot A's filament
-  record and T1-T3 stop with a message. With `True` and a CFS that does not
+  stock and on the fly: new `[k2_cfs] cfs_fitted: auto` (default) looks for
+  the CFS at every start, and a CFS unplugged or plugged in while the printer
+  is idle is noticed within about 30 s with no restart (`True` always expects
+  one, `False` never uses one; `OKL_CFS=yes|no` for the installer). The
+  external spool has its own filament record, slot `E` (`CFS_SLOT_SET SLOT=E
+  ...`), which OrcaSlicer sees as its first filament without a CFS. Without a
+  CFS the box is not polled, feed and pre-load calls do nothing, the print
+  start primes the spool at the chute, T0 uses slot E and T1-T3 stop with a
+  message. With `True` and a CFS that does not
   answer, print starts and CFS loads stop before homing or heating. New `LOAD_FILAMENT` and
   `UNLOAD_FILAMENT` (Mainsail Load/Unload buttons): heat, feed and purge at
   the chute; cut at the knife and pull back. Runout pauses with a plain
-  message. The CFS panel (Mainsail revision 2) and the touchscreen CFS page
-  are hidden, and the touchscreen shows "External spool". See
-  docs/INSTALL.md, "Printers without a CFS".
+  message. Mainsail (revision 2) shows an External spool card in place of the
+  CFS card and the touchscreen an External spool page in place of the CFS
+  page, with filament editing, load/unload and pressure-advance calibration;
+  Mainsail's slot dialog now also has load, unload and calibration buttons
+  for CFS slots. See docs/INSTALL.md, "Printers without a CFS".
 - **The CFS is found without a configured id.** The shipped config carried
   our test printer's CFS id (`cfs_uniid`), which is what re-addresses the CFS
   after a power-off, so another printer's CFS could go unanswered after a cold
