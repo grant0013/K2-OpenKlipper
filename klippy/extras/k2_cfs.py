@@ -371,12 +371,22 @@ class K2CFS:
         self.clean_circle_right_x = config.getfloat(
             'clean_circle_right_x', 154.)
         self.clean_y = config.getfloat('clean_y', 291.5)
+        # Defaults are Creality Print's wipe; faster is allowed (the stock
+        # wipe was never very effective)
         self.clean_speed = config.getfloat(
-            'clean_speed', 200., above=0., maxval=200.)
+            'clean_speed', 200., above=0., maxval=500.)
         self.clean_circle_speed = config.getfloat(
-            'clean_circle_speed', 166.666667, above=0., maxval=166.666667)
+            'clean_circle_speed', 166.666667, above=0., maxval=500.)
         self.clean_accel = config.getfloat(
-            'clean_accel', 5000., above=0., maxval=5000.)
+            'clean_accel', 5000., above=0., maxval=20000.)
+        # Extra full-length strokes across the silicone brush after the
+        # circles (0 = stock wipe). On the F021 the brush spans about
+        # X144-159 at the wipe line (measured 10-28).
+        self.clean_brush_strokes = config.getint(
+            'clean_brush_strokes', 0, minval=0, maxval=20)
+        self.clean_brush_left_x = config.getfloat('clean_brush_left_x', 146.)
+        self.clean_brush_right_x = config.getfloat(
+            'clean_brush_right_x', 158.)
         self.cutter_x = config.getfloat('cutter_x', 10.)
         # Runout refill: filament pushed through at the chute before the
         # new slot loads (stock runout_gcode pushes E30)
@@ -2353,6 +2363,13 @@ class K2CFS:
             % (self.clean_circle_right_x, self.clean_y, feedrate),
             "G3 I-4 J0 P1 F%.3f" % circle_rate,
         ]
+        for unused in range(self.clean_brush_strokes):
+            lines.extend([
+                "G1 X%.3f Y%.3f F%.3f"
+                % (self.clean_brush_left_x, self.clean_y, feedrate),
+                "G1 X%.3f Y%.3f F%.3f"
+                % (self.clean_brush_right_x, self.clean_y, feedrate),
+            ])
         for unused in range(3):
             lines.extend([
                 "G1 X%.3f Y%.3f F%.3f"

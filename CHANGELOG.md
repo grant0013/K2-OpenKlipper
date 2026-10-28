@@ -11,6 +11,17 @@
 - `RUN_SAFE RUN= FINALLY= [ON_ERROR=report]` ([hark_safe_run]): runs a macro
   and always its cleanup. `PA_CAL_STATIC` uses it, so a failed test no longer
   leaves the nozzle hot.
+- **Stronger nozzle wipe** (opt-in): `[k2_cfs] clean_brush_strokes` adds
+  full-length strokes across the silicone brush (`clean_brush_left_x` /
+  `clean_brush_right_x`, about X146-158 on the F021) after Creality's
+  circles, and the wipe speed and acceleration limits are lifted (e.g.
+  `clean_speed: 300`, `clean_circle_speed: 250`, `clean_accel: 10000`). It
+  took hardened filament off that the stock wipe left (10-28).
+- PA test: 2 mm pressure relief afterwards, so the tip does not weep after
+  the wipe. Auto PA can scale the stationary value to the printed one per
+  material (`[gcode_macro _PA_STATIC_SAVE] variable_scale_material`, e.g.
+  `{'PLA': 1.34, 'PETG': 1.13}` from chevron patterns,
+  `tools/pa/pa_pattern.py`).
 - **First layer, after the K2 Plus firmware's method:** per-material
   offsets, `variable_hot_z_material: {'PLA': -0.01}` in `START_PRINT`, added
   to `hot_z_comp` (material from `START_PRINT MATERIAL=` or the loaded slot's
