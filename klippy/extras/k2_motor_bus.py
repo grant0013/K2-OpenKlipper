@@ -60,6 +60,14 @@
 #   #init_motors: False      - wake the motors at klippy:ready
 #   #extruder_motor_mcu:     - MCU with the extruder motor bus (nozzle_mcu)
 #   #wake_delay: 2.2
+#   #bus_motors: x=0x81, y=0x82
+#                            - closed-loop motors on the main bus. The K2
+#                              Plus adds its two Z motors: z=0x83, z1=0x84
+#                              (addr = 0x81 + DIR + 2 * STEP, held by
+#                              wake_pins). Stall mode only goes to x and y.
+#   #extruder_addr: 0x81     - extruder controller address; a list is tried
+#                              in order at wake and the first that answers
+#                              is used (K2 Plus: 0x85, 0x81)
 #   #wake_pins:              - main MCU pin levels held during the wake,
 #                              e.g. PB9=0, PB10=0, PB7=1, PB8=0
 #   #cfs_detect: True        - look for the CFS at ready and give it its
@@ -121,6 +129,7 @@ PARAM_IDS = (0x09, 0x0a, 0x19, 0x46, 0x56, 0x57, 0x66, 0x67, 0x74, 0x76,
              0x77, 0x78, 0x79, 0xbb, 0xbc)
 BUS_MOTORS = (('x', 0x81), ('y', 0x82))
 EXTRUDER_ADDR = 0x81
+STALL_MOTORS = ('x', 'y')
 WAKE_ATTEMPTS = 3
 CFS_BOX_STATE = (0x00, 0xa2)
 CHECK_MODES = {'strict': 'strict', 'log': 'log', 'off': 'off'}
@@ -152,6 +161,13 @@ class K2MotorBus:
         self._e_lock = self.reactor.mutex()
         self.init_motors = config.getboolean('init_motors', False)
         self.wake_delay = config.getfloat('wake_delay', 2.2, minval=0.)
+        self.bus_motors = self._parse_motors(config)
+        self.stall_motors = tuple((name, addr) for name, addr
+                                  in self.bus_motors if name in STALL_MOTORS)
+        self.extruder_addrs = tuple(
+            int(a, 0) for a in config.getlist('extruder_addr',
+                                              ('0x%02x' % EXTRUDER_ADDR,)))
+        self.extruder_addr = self.extruder_addrs[0]
         self.motors = {}
         self.motors_ready = not self.init_motors
         self.cfs_addr = config.getint('cfs_addr', 1, minval=1, maxval=127)
@@ -236,6 +252,24 @@ class K2MotorBus:
                                             self._close)
 
     # --- wire helpers ---
+    @staticmethod
+    def _parse_motors(config):
+        items = config.getlist('bus_motors', None)
+        if items is None:
+            return BUS_MOTORS
+        motors = []
+        for item in items:
+            name, addr = [part.strip() for part in item.split('=')]
+            addr = int(addr, 0)
+            if addr not in proto.MOTOR_ADDRS:
+                raise config.error("bus_motors: %s address 0x%02x is outside"
+                                   " 0x81-0x8f" % (name, addr))
+            motors.append((name.lower(), addr))
+        names = [name for name, addr in motors]
+        if 'e' in names or len(set(names)) != len(names):
+            raise config.error("bus_motors: names must be unique and not e")
+        return tuple(motors)
+
     @staticmethod
     def _crc8(data):
         return proto.crc8(data)
@@ -556,20 +590,24 @@ class K2MotorBus:
             if self.e_send is not None:
                 self.e_xfer(0xff, WAKE, timeout_ms=20)
             self._pause(self.wake_delay)
-            for name, addr in BUS_MOTORS:
+            for name, addr in self.bus_motors:
                 self.motors[name] = self._start_motor(
                     name, addr, bus, (STATUS, CLEAR_ERRORS, CLEAR_ERRORS))
             if before is not None:
                 self._release_wake_pins(before)
                 before = None
-            for name, addr in BUS_MOTORS:
+            for name, addr in self.bus_motors:
                 if self.motors[name]:
                     self._read_params(name, addr)
             if self.e_send is not None:
                 ebus = lambda addr, payload: self.e_xfer(addr, payload)[1]
-                self.motors['e'] = self._start_motor(
-                    'e', EXTRUDER_ADDR, ebus,
-                    ((0x00, 0x11, 0x02), STATUS, CLEAR_ERRORS, CLEAR_ERRORS))
+                for addr in self.extruder_addrs:
+                    self.motors['e'] = self._start_motor(
+                        'e', addr, ebus, ((0x00, 0x11, 0x02), STATUS,
+                                          CLEAR_ERRORS, CLEAR_ERRORS))
+                    if self.motors['e']:
+                        self.extruder_addr = addr
+                        break
                 if self.motors['e']:
                     self._log_extruder_addr()
         except Exception:
@@ -580,10 +618,11 @@ class K2MotorBus:
 
     # --- protection, stall mode, temperature, address ---
     def motor_addr(self, name):
-        return EXTRUDER_ADDR if name == 'e' else dict(BUS_MOTORS)[name]
+        return (self.extruder_addr if name == 'e'
+                else dict(self.bus_motors)[name])
 
     def motor_names(self):
-        names = [name for name, addr in BUS_MOTORS]
+        names = [name for name, addr in self.bus_motors]
         if self.e_send is not None:
             names.append('e')
         return names
@@ -678,7 +717,7 @@ class K2MotorBus:
         one more try. Returns [(name, addr, confirmed, frame, resp)]."""
         results = []
         attempts = 1 if self.stall_mode_check == 'off' else 2
-        for name, addr in BUS_MOTORS:
+        for name, addr in self.stall_motors:
             for attempt in range(attempts):
                 frame, resp = self.xfer(addr, [0x00, proto.FUNC_STALL_MODE,
                                                mode])
@@ -734,7 +773,7 @@ class K2MotorBus:
     def read_extruder_addr(self):
         """Ask the extruder controller its address with a broadcast 00 0e 02
         (it is the only device on its bus). 0x80 means it has none latched;
-        None means no reply. Diagnostic only: we keep using EXTRUDER_ADDR."""
+        None means no reply. Diagnostic only: we keep using extruder_addr."""
         frame, raw = self.motor_request('e', HANDSHAKE, addr=0xff)
         addr = None
         if (frame is not None and frame['func'] == proto.FUNC_READ_ADDR
@@ -745,14 +784,14 @@ class K2MotorBus:
 
     def _log_extruder_addr(self):
         addr = self.read_extruder_addr()
-        if addr == EXTRUDER_ADDR:
+        if addr == self.extruder_addr:
             logging.info("k2_motor_bus: extruder controller reports address "
                          "%02x", addr)
         else:
             logging.warning("k2_motor_bus: extruder controller reports "
                             "address %s, expected %02x",
                             "(no reply)" if addr is None else "%02x" % addr,
-                            EXTRUDER_ADDR)
+                            self.extruder_addr)
 
     def get_status(self, eventtime):
         faults = dict((n, {'status': d['status'],
@@ -848,10 +887,10 @@ class K2MotorBus:
         elif addr == 0x80:
             msg = ("0x80: no address latched. Run MOTOR_INIT (it wakes the "
                    "controller with its dir and step lines low)")
-        elif addr != EXTRUDER_ADDR:
+        elif addr != self.extruder_addr:
             msg = ("0x%02x, but we talk to 0x%02x. The controller latches "
                    "0x81 + DIR + 2 * STEP at wake, so its lines were not "
-                   "both low; run MOTOR_INIT" % (addr, EXTRUDER_ADDR))
+                   "both low; run MOTOR_INIT" % (addr, self.extruder_addr))
         else:
             msg = "0x%02x (as expected)" % (addr,)
         gcmd.respond_info("Extruder motor controller address: %s" % (msg,))

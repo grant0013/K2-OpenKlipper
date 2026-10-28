@@ -7,6 +7,12 @@ without loading any Creality host module.
 
 Motion is deliberately kept behind both a config flag and CONFIRM=1. It is not
 itself wired into G28; the supervised bring-up command must be proven first.
+
+The K2 Plus has two Z motors, each with its own switch (stock z_align:
+endstop_pin_z: PA15, PA8). endstop_pin takes a list: switch N belongs to
+stepper_z (N=0) or stepper_zN, and the MCU drives each motor to its own
+switch, so the bed also comes back level. KZ_ALIGN_MEASURE finds the Z of
+the switches on a printer whose position_endstop is not known yet.
 """
 
 import logging
@@ -38,16 +44,28 @@ class K2ZAlign:
             "retract_dist", 10.0, minval=0.0)
         self.retract_speed = config.getfloat(
             "retract_speed", 10.0, above=0.0)
-        self.endstop_pin = config.get("endstop_pin", "PA15")
+        self.endstop_pins = config.getlist("endstop_pin", ("PA15",))
         self.zd_up = config.getint("zd_up", 1, minval=0, maxval=1)
         self.zes_untrig = config.getint(
             "zes_untrig", 1, minval=0, maxval=1)
 
+        # (stepper name, step pin, dir pin, switch pin) per Z motor
+        self.z_motors = []
+        for index, pin in enumerate(self.endstop_pins):
+            name = "stepper_z" if index == 0 else "stepper_z%d" % (index,)
+            if not config.has_section(name):
+                raise config.error(
+                    "k2_z_align: endstop_pin %d (%s) needs a [%s] section"
+                    % (index, pin, name))
+            section = config.getsection(name)
+            self.z_motors.append((name,
+                                  self._plain_pin(section.get("step_pin")),
+                                  self._plain_pin(section.get("dir_pin")),
+                                  self._plain_pin(pin)))
         stepper = config.getsection("stepper_z")
-        self.step_pin = self._plain_pin(stepper.get("step_pin"))
-        self.dir_pin = self._plain_pin(stepper.get("dir_pin"))
         self.rotation_distance = stepper.getfloat("rotation_distance")
         self.microsteps = stepper.getint("microsteps")
+        self.position_max = stepper.getfloat("position_max")
 
         self.oid = self.mcu.create_oid()
         self.query_cmd = None
@@ -55,6 +73,7 @@ class K2ZAlign:
         self.last_flag = None
         self.last_delta = None
         self.switch_triggered = None
+        self.switches = [None] * len(self.endstop_pins)
         self.active = False
         self.completion = None
 
@@ -63,7 +82,7 @@ class K2ZAlign:
             self._handle_z_align_status, _RESP_Z_ALIGN, self.oid)
 
         buttons = self.printer.load_object(config, "buttons")
-        buttons.register_buttons([self.endstop_pin], self._handle_switch)
+        buttons.register_buttons(self.endstop_pins, self._handle_switch)
 
         self.gcode.register_command(
             "KZ_ALIGN_STATUS", self.cmd_KZ_ALIGN_STATUS,
@@ -74,6 +93,9 @@ class K2ZAlign:
         self.gcode.register_command(
             "KZ_ALIGN_ABORT", self.cmd_KZ_ALIGN_ABORT,
             desc="Immediately stop an active K2 bottom-reference move")
+        self.gcode.register_command(
+            "KZ_ALIGN_MEASURE", self.cmd_KZ_ALIGN_MEASURE,
+            desc="Find the Z where the bottom switches trigger (Z homed)")
         self.printer.register_event_handler(
             "klippy:shutdown", self._handle_shutdown)
         self.printer.register_event_handler(
@@ -85,20 +107,23 @@ class K2ZAlign:
 
     def _build_config(self):
         self.mcu.add_config_cmd("config_z_align oid=%d" % (self.oid,))
-        self.mcu.add_config_cmd(
-            "config_z_align_add oid=%d z_indx=0 zs_pin=%s zd_pin=%s "
-            "zd_up=%d zes_pin=%s zes_untrig=%d"
-            % (self.oid, self.step_pin, self.dir_pin, self.zd_up,
-               self._plain_pin(self.endstop_pin), self.zes_untrig))
+        for index, (name, step_pin, dir_pin, pin) in enumerate(self.z_motors):
+            self.mcu.add_config_cmd(
+                "config_z_align_add oid=%d z_indx=%d zs_pin=%s zd_pin=%s "
+                "zd_up=%d zes_pin=%s zes_untrig=%d"
+                % (self.oid, index, step_pin, dir_pin, self.zd_up, pin,
+                   self.zes_untrig))
         self.query_cmd = self.mcu.lookup_command(
             "query_z_align oid=%c enable=%c quickSpeed=%u slowSpeed=%u "
             "risingDist=%u filterCnt=%c safeDist=%u")
         self.abort_cmd = self.mcu.lookup_command("z_align_force_stop oid=%c")
 
     def _handle_switch(self, eventtime, state):
-        # With zes_untrig=1, PA15 is low while the optical switch is active.
-        raw_high = bool(state & 0x01)
-        self.switch_triggered = raw_high != bool(self.zes_untrig)
+        # With zes_untrig=1, a switch pin is low while the optical switch is
+        # active. Bit N of state is endstop_pin N.
+        self.switches = [bool(state & (1 << i)) != bool(self.zes_untrig)
+                         for i in range(len(self.endstop_pins))]
+        self.switch_triggered = any(self.switches)
 
     def _handle_z_align_status(self, params):
         self.last_flag = int(params.get("flag", 0))
@@ -138,16 +163,111 @@ class K2ZAlign:
         return {
             "active": self.active,
             "endstop_triggered": self.switch_triggered,
+            "switches": list(self.switches),
             "last_flag": self.last_flag,
             "last_delta": self.last_delta,
         }
 
+    def _describe_switches(self):
+        return ", ".join(
+            "%s %s" % (pin, "unknown" if s is None
+                       else ("TRIGGERED" if s else "open"))
+            for pin, s in zip(self.endstop_pins, self.switches))
+
     def cmd_KZ_ALIGN_STATUS(self, gcmd):
-        state = "unknown" if self.switch_triggered is None else (
-            "TRIGGERED" if self.switch_triggered else "open")
         gcmd.respond_info(
             "K2 Z bottom switch: %s; active=%s; last_flag=%s; last_delta=%s"
-            % (state, self.active, self.last_flag, self.last_delta))
+            % (self._describe_switches(), self.active, self.last_flag,
+               self.last_delta))
+
+    def _step_until(self, toolhead, z, z_end, step, speed, want):
+        """Move Z down (bed away from the nozzle) in steps from z to z_end
+        until a switch in want (indexes) triggers. Returns the Z, or None."""
+        pos = toolhead.get_position()
+        while z <= z_end + 1e-9:
+            pos[2] = min(z, self.position_max)
+            toolhead.manual_move(pos, speed)
+            toolhead.wait_moves()
+            self.reactor.pause(self.reactor.monotonic() + 0.05)
+            if any(self.switches[i] for i in want):
+                return pos[2]
+            z += step
+        return None
+
+    def cmd_KZ_ALIGN_MEASURE(self, gcmd):
+        """With Z homed by the nozzle tap, lower the bed until each bottom
+        switch triggers and report where. Ordinary Klipper moves, never past
+        position_max. The result is what position_endstop should be."""
+        if gcmd.get_int("CONFIRM", 0, minval=0, maxval=1) != 1:
+            raise gcmd.error("KZ_ALIGN_MEASURE requires CONFIRM=1")
+        toolhead = self.printer.lookup_object("toolhead")
+        eventtime = self.reactor.monotonic()
+        if "z" not in toolhead.get_status(eventtime).get("homed_axes", ""):
+            raise gcmd.error("Home Z with the nozzle tap first (G28)")
+        print_stats = self.printer.lookup_object("print_stats", None)
+        if (print_stats is not None and print_stats.get_status(
+                eventtime).get("state") in ("printing", "paused")):
+            raise gcmd.error("KZ_ALIGN_MEASURE refused while printing")
+        if any(s is None for s in self.switches):
+            raise gcmd.error("Bottom switch state not known yet: %s"
+                             % (self._describe_switches(),))
+        if any(self.switches):
+            raise gcmd.error("A bottom switch already reads triggered (%s);"
+                             " raise the bed and try again"
+                             % (self._describe_switches(),))
+        start = gcmd.get_float("START", self.position_max * 0.8, above=0.,
+                               maxval=self.position_max)
+        speed = gcmd.get_float("SPEED", 10., above=0., maxval=20.)
+        toolhead.wait_moves()
+        z = max(toolhead.get_position()[2], 0.)
+        if start > z:
+            pos = toolhead.get_position()
+            pos[2] = start
+            toolhead.manual_move(pos, speed)
+            toolhead.wait_moves()
+            z = start
+        self.reactor.pause(self.reactor.monotonic() + 0.1)
+        if any(self.switches):
+            raise gcmd.error("A switch triggered before Z=%.1f (%s); run "
+                             "again with a lower START"
+                             % (start, self._describe_switches()))
+        found = {}
+        remaining = list(range(len(self.endstop_pins)))
+        while remaining:
+            coarse = self._step_until(toolhead, z + 1., self.position_max,
+                                      1., speed, remaining)
+            if coarse is None:
+                break
+            # Back off 1.5 mm, then creep in 0.05 mm steps
+            pos = toolhead.get_position()
+            pos[2] = coarse - 1.5
+            toolhead.manual_move(pos, speed)
+            toolhead.wait_moves()
+            self.reactor.pause(self.reactor.monotonic() + 0.1)
+            fine = self._step_until(toolhead, coarse - 1.5,
+                                    min(coarse + 0.5, self.position_max),
+                                    0.05, 2., remaining)
+            if fine is None:
+                fine = coarse
+            for i in remaining[:]:
+                if self.switches[i]:
+                    found[i] = fine
+                    remaining.remove(i)
+            z = fine
+        pos = toolhead.get_position()
+        pos[2] = max(z - 10., 0.)
+        toolhead.manual_move(pos, speed)
+        toolhead.wait_moves()
+        lines = ["%s triggers at Z=%.2f" % (self.endstop_pins[i], found[i])
+                 for i in sorted(found)]
+        lines += ["%s did not trigger before Z=%.1f (position_max)"
+                  % (self.endstop_pins[i], self.position_max)
+                  for i in remaining]
+        if found:
+            lines.append("Suggested [k2_z_align] position_endstop: %.2f "
+                         "(the lowest; too low is safe, too high is not)"
+                         % (min(found.values()),))
+        gcmd.respond_info("KZ_ALIGN_MEASURE:\n" + "\n".join(lines))
 
     def cmd_KZ_ALIGN_ABORT(self, gcmd):
         self._abort()
@@ -196,8 +316,9 @@ class K2ZAlign:
         # trap queue. From this point until a successful optical reference,
         # the previous logical Z coordinate must not be trusted.
         toolhead.get_kinematics().clear_homing_state("z")
-        self.gcode.run_script_from_command(
-            "SET_STEPPER_ENABLE STEPPER=stepper_z ENABLE=1")
+        for name, step_pin, dir_pin, pin in self.z_motors:
+            self.gcode.run_script_from_command(
+                "SET_STEPPER_ENABLE STEPPER=%s ENABLE=1" % (name,))
         quick, slow, rising, safe = self._timings()
         self.last_flag = 0
         self.last_delta = 0

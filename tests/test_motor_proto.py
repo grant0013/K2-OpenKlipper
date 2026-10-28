@@ -142,9 +142,17 @@ class FindReplyTest(unittest.TestCase):
 
 class FakeBus:
     e_send = None
+    ADDRS = {'x': 0x81, 'y': 0x82, 'z': 0x83, 'z1': 0x84, 'e': 0x81}
 
-    def __init__(self, replies):
+    def __init__(self, replies, names=('x', 'y')):
         self.replies = replies
+        self.names = list(names)
+
+    def motor_names(self):
+        return self.names + (['e'] if self.e_send is not None else [])
+
+    def motor_addr(self, name):
+        return self.ADDRS[name]
 
     def query_protection(self, name, addr=None):
         rx = self.replies.get(name)
@@ -169,13 +177,13 @@ class FakeGcode:
         self.scripts.append(script)
 
 
-def make_watch(replies, fail_count=2):
+def make_watch(replies, fail_count=2, names=('x', 'y')):
     w = hark_safety.HarkSafety.__new__(hark_safety.HarkSafety)
-    w.bus = FakeBus(replies)
+    w.bus = FakeBus(replies, names)
     w.gcode = FakeGcode()
     w.motor_fail_count = fail_count
     w.xy_action, w.e_action = 'cancel', 'pause'
-    w.xy_addrs, w.e_addr = {'x': 0x81, 'y': 0x82}, 0x81
+    w.e_addr = None
     w.motor_bad, w.motor_warned = {}, {}
     w.tripped = False
     w.last = {'fans': {}, 'motors': {}, 'event': None}
@@ -183,6 +191,14 @@ def make_watch(replies, fail_count=2):
 
 
 class SafetyWatchTest(unittest.TestCase):
+    def test_k2_plus_z_motor_fault_trips(self):
+        w = make_watch({'x': HEALTHY, 'y': HEALTHY, 'z': HEALTHY,
+                        'z1': FAULTED}, names=('x', 'y', 'z', 'z1'))
+        w._check_motors(0.)
+        w._check_motors(0.)
+        self.assertTrue(w.tripped)
+        self.assertIn('Z1 motor', w.gcode.raw[-1])
+
     def test_fault_trips_after_fail_count_with_name(self):
         w = make_watch({'x': FAULTED, 'y': HEALTHY})
         w._check_motors(0.)
@@ -275,7 +291,46 @@ def make_bus(per_write, reply_check='strict'):
     bus.bus_errors = {'crc': 0, 'len': 0, 'addr': 0, 'func': 0,
                       'retries': 0, 'read_failures': 0}
     bus._reject_logged = 0.
+    bus.bus_motors = k2_motor_bus.BUS_MOTORS
+    bus.stall_motors = k2_motor_bus.BUS_MOTORS
+    bus.extruder_addrs = (k2_motor_bus.EXTRUDER_ADDR,)
+    bus.extruder_addr = k2_motor_bus.EXTRUDER_ADDR
     return bus
+
+
+class FakeConfig:
+    def __init__(self, items):
+        self.items = items
+
+    def getlist(self, name, default):
+        return self.items.get(name, default)
+
+    def error(self, msg):
+        return ValueError(msg)
+
+
+class BusMotorsTest(unittest.TestCase):
+    def setUp(self):
+        import types
+        sys.modules.setdefault('mcu', types.ModuleType('mcu'))
+        from extras import k2_motor_bus
+        self.mod = k2_motor_bus
+
+    def test_default_is_k2_xy(self):
+        motors = self.mod.K2MotorBus._parse_motors(FakeConfig({}))
+        self.assertEqual(motors, (('x', 0x81), ('y', 0x82)))
+
+    def test_k2_plus_adds_z_motors(self):
+        motors = self.mod.K2MotorBus._parse_motors(FakeConfig(
+            {'bus_motors': ['x=0x81', 'y=0x82', 'z=0x83', 'Z1=0x84']}))
+        self.assertEqual(motors, (('x', 0x81), ('y', 0x82), ('z', 0x83),
+                                  ('z1', 0x84)))
+
+    def test_bad_entries_rejected(self):
+        for items in (['x=0x81', 'x=0x82'], ['e=0x81'], ['x=0x90']):
+            with self.assertRaises(ValueError):
+                self.mod.K2MotorBus._parse_motors(
+                    FakeConfig({'bus_motors': items}))
 
 
 class BusXferTest(unittest.TestCase):

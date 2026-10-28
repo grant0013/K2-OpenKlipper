@@ -13,7 +13,8 @@
 #
 # Environment: OKL_REF=<tag or branch> to install something other than the
 # latest release, OKL_FORCE=1 to install on a model other than the K2 / K2
-# Combo (F021), at your own risk, OKL_EXTRUDER=stock|dxc2 to answer the
+# Combo (F021), at your own risk, OKL_K2PLUS_BETA=1 to install the K2 Plus
+# (F008) beta config (docs/K2-PLUS-BETA.md), OKL_EXTRUDER=stock|dxc2 to answer the
 # extruder question in advance, OKL_CFS=yes|no to fix whether a CFS is used
 # (default: found automatically at each start).
 set -eu
@@ -98,9 +99,25 @@ else
     SHOW_INSTALLED=$INSTALLED
 fi
 echo "    model: ${MODEL:-unknown}   Creality firmware: $FW   installed K2 OpenKlipper: $SHOW_INSTALLED"
+STAGE_CFG=mainline_stage2.cfg
 case "$MODEL" in
     F021) ;;
-    F012|F008)
+    F008)
+        # K2 Plus: its own config, only on the board layout it was written
+        # for (stock config dir F008_CR0CN240319C13 = structure_version 0)
+        BOARD=$(get_sn_mac.sh board 2>/dev/null || true)
+        STRUCT=$(get_sn_mac.sh structure_version 2>/dev/null || true)
+        echo "    K2 Plus board: ${BOARD:-unknown}   structure_version: ${STRUCT:-unknown}"
+        case "$BOARD:$STRUCT" in
+            CR0CN240110C10:0|CR0CN240319C13:0|CR0CN240319C14:0) ;;
+            *) [ "${OKL_FORCE:-0}" = 1 ] || die "this K2 Plus layout ($BOARD, structure $STRUCT) is not the one the beta config was written for; please send the check output to the developer" ;;
+        esac
+        if [ "$MODE" != check ]; then
+            [ "${OKL_K2PLUS_BETA:-0}" = 1 ] || [ "${OKL_FORCE:-0}" = 1 ] || die "the K2 Plus config is a BETA that has not run on a real K2 Plus yet. Read docs/K2-PLUS-BETA.md, then run with OKL_K2PLUS_BETA=1"
+            echo "    WARNING: K2 Plus BETA config (untested on a real K2 Plus)"
+        fi
+        STAGE_CFG=mainline_stage2_k2plus.cfg ;;
+    F012)
         [ "${OKL_FORCE:-0}" = 1 ] || die "model $MODEL is untested (developed on the F021 K2 / K2 Combo). OKL_FORCE=1 to try anyway"
         echo "    WARNING: $MODEL is untested, continuing because OKL_FORCE=1" ;;
     *)  [ "${OKL_FORCE:-0}" = 1 ] || die "unknown model '$MODEL' (expected F021)" ;;
@@ -431,12 +448,14 @@ case "$RESULT" in
 esac
 
 # Start the open stack 30 s after every boot while the flag file exists.
-HOOK="[ -f $FLAGS/boot-mainline ] && (sleep 30; sh $BUILD/switch-to-mainline.sh mainline_stage2.cfg > /tmp/mainline-boot.log 2>&1) &"
+HOOK="[ -f $FLAGS/boot-mainline ] && (sleep 30; sh $BUILD/switch-to-mainline.sh $STAGE_CFG > /tmp/mainline-boot.log 2>&1) &"
 if ! grep -q "boot-mainline" /etc/rc.local; then
     awk -v hook="$HOOK" '/^exit 0/ && !done {print "# K2 OpenKlipper boot hook (uninstall.sh removes it)"; print hook; print ""; done=1} {print}' /etc/rc.local > /tmp/rc.local.okl
     grep -q "boot-mainline" /tmp/rc.local.okl || { echo "# K2 OpenKlipper boot hook (uninstall.sh removes it)"; echo "$HOOK"; } >> /tmp/rc.local.okl
     cat /tmp/rc.local.okl > /etc/rc.local
 fi
+# An existing hook keeps its line; make sure it starts this model's config
+sed -i "/boot-mainline/s/mainline_stage2[a-z0-9_]*\.cfg/$STAGE_CFG/" /etc/rc.local
 rm -f "$FLAGS/boot-mainline.off"
 touch "$FLAGS/boot-mainline"
 
@@ -448,7 +467,7 @@ killall -9 master-server Monitor upgrade-server 2>/dev/null || true
 /etc/init.d/moonraker-mainline enable >/dev/null 2>&1
 /etc/init.d/moonraker-mainline restart >/dev/null 2>&1
 /etc/init.d/nginx reload >/dev/null 2>&1
-sh "$BUILD/switch-to-mainline.sh" mainline_stage2.cfg
+sh "$BUILD/switch-to-mainline.sh" "$STAGE_CFG"
 
 # Wait for Klipper. If stock Klipper left the main board shut down (it had
 # only just restarted), Klipper reports "MCU ... shutdown": a firmware

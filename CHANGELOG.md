@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **K2 Plus (F008) beta config** (`k2plus-beta` branch, untested on a real
+  K2 Plus): `config/mainline_stage2_k2plus.cfg`, generated from the K2 config
+  by `tools/k2plus/make_k2plus_cfg.py` from Creality's stock K2 Plus 1.1.7.0
+  values. Two closed-loop Z motors woken on the motor bus (`bus_motors`),
+  extruder address list (`extruder_addr`), two bottom switches in
+  `k2_z_align` (`endstop_pin: PA15, PA8`) plus `KZ_ALIGN_MEASURE`,
+  `Z_TILT_ADJUST` in START_PRINT, `CHUTE_POSITION_CHECK`. The installer takes
+  the K2 Plus only with `OKL_K2PLUS_BETA=1` on the board layout the config
+  was written for. Tester guide: docs/K2-PLUS-BETA.md.
+- hark_safety watches every motor k2_motor_bus wakes (Z and Z1 on the K2
+  Plus) instead of a fixed X/Y/E list.
 - Chamber fan: `variable_prefer_material: 1` uses the material table even
   when the slicer sends a chamber temperature (OrcaSlicer's K2 filament
   profiles all send `M191 S35`).

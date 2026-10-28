@@ -46,8 +46,9 @@ class HarkSafety:
         self.fan_action = config.getchoice('fan_action', ACTIONS, 'pause')
         self.xy_action = config.getchoice('xy_action', ACTIONS, 'cancel')
         self.e_action = config.getchoice('e_action', ACTIONS, 'pause')
-        self.xy_addrs = {'x': 0x81, 'y': 0x82}
-        self.e_addr = config.getint('e_addr', 0x81)
+        # Motors and addresses come from k2_motor_bus (x, y, e on the K2;
+        # the K2 Plus adds z and z1). e_addr overrides the extruder address.
+        self.e_addr = config.getint('e_addr', None)
         self.print_stats = self.printer.load_object(config, 'print_stats')
         self.bus = self.fans = self.part_fan = self.hotend_fan = None
         self.was_printing = False
@@ -128,14 +129,17 @@ class HarkSafety:
         """Decoded protection status, or None when the motor gives no valid
         reply (no answer, bad CRC, someone else's frame)."""
         try:
-            if name == 'e':
-                if self.bus.e_send is None:
-                    return None
-                return self.bus.query_protection('e', self.e_addr)
-            return self.bus.query_protection(name, self.xy_addrs[name])
+            if name == 'e' and self.bus.e_send is None:
+                return None
+            return self.bus.query_protection(name, self._addr(name))
         except Exception as e:
             logging.info("hark_safety: %s status query failed: %s", name, e)
             return None
+
+    def _addr(self, name):
+        if name == 'e' and self.e_addr is not None:
+            return self.e_addr
+        return self.bus.motor_addr(name)
 
     def _note_status(self, name, detail):
         if detail is None:
@@ -150,7 +154,7 @@ class HarkSafety:
     def _check_motors(self, eventtime):
         if self.bus is None:
             return
-        for name in ('x', 'y', 'e'):
+        for name in self.bus.motor_names():
             detail = self._status(name)
             self._note_status(name, detail)
             if detail is None:
@@ -208,10 +212,8 @@ class HarkSafety:
         # watch trips on it once start_grace has passed.
         if self.bus is None:
             return
-        names = ['x', 'y']
-        if self.bus.e_send is not None:
-            names.append('e')
-        addrs = dict(self.xy_addrs, e=self.e_addr)
+        names = self.bus.motor_names()
+        addrs = dict((name, self._addr(name)) for name in names)
         try:
             before, after, persistent = self.bus.recover_faults(
                 names, always_clear=True, addrs=addrs)
@@ -251,7 +253,7 @@ class HarkSafety:
     # --- commands ------------------------------------------------------
     def cmd_SAFETY_STATUS(self, gcmd):
         if gcmd.get_int('QUERY', 0, minval=0, maxval=1) and self.bus:
-            for name in ('x', 'y', 'e'):
+            for name in self.bus.motor_names():
                 self._note_status(name, self._status(name))
         motors = ", ".join(
             "%s %s" % (name.upper(), "no reply" if m is None
