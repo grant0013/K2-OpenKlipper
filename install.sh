@@ -370,6 +370,19 @@ fi
 [ -e "$PDATA/gcodes" ] || ln -s /mnt/UDISK/printer_data/gcodes "$PDATA/gcodes"
 cp -a "$BUILD/system/mainsail" /mnt/UDISK/mainsail-mainline
 [ -f "$CONF/moonraker.conf" ] || cp "$BUILD/system/moonraker-mainline.conf" "$CONF/moonraker.conf"
+# Older installs pointed [update_manager mainsail] at stock Mainsail: one
+# Update click replaced the Hark build. Point it at the Hark releases.
+python3 - "$CONF/moonraker.conf" <<'PY'
+import re
+import sys
+p = sys.argv[1]
+s = open(p).read()
+t = re.sub(r"(?m)^(repo:\s*)mainsail-crew/mainsail\s*$",
+           r"\1grant0013/mainsail", s)
+if t != s:
+    open(p, "w").write(t)
+    print("    moonraker.conf: Mainsail updates now from grant0013/mainsail")
+PY
 cp "$BUILD/system/moonraker-mainline.init" /etc/init.d/moonraker-mainline
 chmod 755 /etc/init.d/moonraker-mainline
 cp "$BUILD/system/moonraker-compat/update_manager.py" /usr/share/moonraker/components/update_manager/update_manager.py
