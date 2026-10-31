@@ -74,6 +74,11 @@ class K2ZAlign:
         self.last_delta = None
         self.switch_triggered = None
         self.switches = [None] * len(self.endstop_pins)
+        # The buttons module assumes every pin starts low and only calls back
+        # on a change, so a switch already active (low) when Klipper starts,
+        # e.g. the bed parked at the bottom, never reports. Start from that
+        # same all-low state.
+        self._handle_switch(None, 0)
         self.active = False
         self.completion = None
 

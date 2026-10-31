@@ -74,7 +74,8 @@ In the Mainsail console run, and send the replies:
     KZ_ALIGN_STATUS
 
 `MOTOR_FAULTS` should list X, Y, Z, Z1 and E with no errors.
-`KZ_ALIGN_STATUS` should show PA15 and PA8 as open with the bed up.
+`KZ_ALIGN_STATUS` should show PA15 and PA8 as TRIGGERED with the bed all the
+way down, and open once the bed is raised.
 
 ## Step 3: heaters and fans (no motion)
 

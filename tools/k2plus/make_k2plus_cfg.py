@@ -326,10 +326,13 @@ timeout: 90
 # Several identical lines: replace them all, but check the count
 CHANGES_ALL = [
     ("bed centre for the Z tap (175,175)", "G1 X130 Y125 F6000", "G1 X175 Y175 F6000", 3),
-    ("lower the bed with BOTH Z motors (one alone tilts the bed)",
+    ("lower the bed with BOTH Z motors (one alone tilts the bed), but not "
+     "when a bottom switch says the bed is already at the bottom",
      "FORCE_MOVE STEPPER=stepper_z DISTANCE=5 VELOCITY=10",
-     "FORCE_MOVE STEPPER=stepper_z DISTANCE=5 VELOCITY=10\n"
-     "{indent}FORCE_MOVE STEPPER=stepper_z1 DISTANCE=5 VELOCITY=10", 2),
+     "{% if not printer.k2_z_align.endstop_triggered %}\n"
+     "{indent}    FORCE_MOVE STEPPER=stepper_z DISTANCE=5 VELOCITY=10\n"
+     "{indent}    FORCE_MOVE STEPPER=stepper_z1 DISTANCE=5 VELOCITY=10\n"
+     "{indent}{% endif %}", 2),
 ]
 
 
