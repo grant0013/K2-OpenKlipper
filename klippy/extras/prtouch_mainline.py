@@ -224,13 +224,13 @@ class PRTouchMainlineProbe:
         # zigzag around stock Y265.5. The K2 Plus values (X173-223,
         # Y353-356) are for its bigger bed.
         self.scrub_x_start = config.getfloat(
-            "scrub_x_start", 155., minval=0., maxval=255.)
+            "scrub_x_start", 155., minval=0., maxval=360.)
         self.scrub_x_end = config.getfloat(
-            "scrub_x_end", 165., minval=0., maxval=255.)
+            "scrub_x_end", 165., minval=0., maxval=360.)
         self.scrub_y_min = config.getfloat(
-            "scrub_y_min", 264.5, minval=0., maxval=290.)
+            "scrub_y_min", 264.5, minval=0., maxval=400.)
         self.scrub_y_max = config.getfloat(
-            "scrub_y_max", 266.5, minval=0., maxval=290.)
+            "scrub_y_max", 266.5, minval=0., maxval=400.)
         if self.scrub_y_min > self.scrub_y_max:
             raise config.error("scrub_y_min must not exceed scrub_y_max")
         if self.scrub_x_start == self.scrub_x_end:

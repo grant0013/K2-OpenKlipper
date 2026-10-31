@@ -288,7 +288,9 @@ timeout: 90
     ("strip probe point (clean check)",
      "        G90\n        G1 X85 Y265.5 F6000\n",
      "        G90\n        G1 X150 Y355 F6000\n"),
-    ("strip scrub: +-5 mm round the stock probe point. Only runs once\n"
+    ("strip scrub: +-5 mm round stock's prth_clr_pose 185,355.5 (built into\n"
+     "Creality's prtouch_v3 module, which the K2 Plus config does not\n"
+     "override; 150,355 is only where it measures the strip). Only runs once\n"
      "scrub_strip is turned on (below)",
      """    G1 X165 Y265.5 F6000
     G1 Z{z + 1} F600
@@ -299,15 +301,27 @@ timeout: 90
         {% endif %}
         G1 X155 Y{264.5 + i % 3} F12000
         G1 X165 Y{264.5 + (i + 1) % 3} F12000
-""", """    G1 X155 Y355 F6000
+""", """    G1 X190 Y355.5 F6000
     G1 Z{z + 1} F600
     G1 Z{z} F300
     {% for i in range(20) %}
         {% if i == 6 %}
             M104 S{params.COOL|float}
         {% endif %}
-        G1 X145 Y{354 + i % 3} F12000
-        G1 X155 Y{354 + (i + 1) % 3} F12000
+        G1 X180 Y{354.5 + i % 3} F12000
+        G1 X190 Y{354.5 + (i + 1) % 3} F12000
+"""),
+    ("detect scrub line: stock prth_clr_pose 185,355.5, not the K2's strip\n"
+     "(Y265 is the middle of the K2 Plus bed)",
+     """#scrub_x_start: 155
+#scrub_x_end: 165
+#scrub_y_min: 264.5
+#scrub_y_max: 266.5
+""", """# K2 Plus: stock prth_clr_pose 185,355.5 (the K2 defaults are mid-bed here)
+scrub_x_start: 180
+scrub_x_end: 190
+scrub_y_min: 354.5
+scrub_y_max: 356.5
 """),
     ("strip scrub OFF until the strip position is confirmed on a K2 Plus",
      "variable_scrub_method: 'fixed'\n",
@@ -459,6 +473,7 @@ gcode:
         ("back to the chute swing right (clean_right_x, clean_y)", c.clean_right_x, c.clean_y),
         ("back out (clean_right_x, purge_safe_y)", c.clean_right_x, c.purge_safe_y),
         ("rear cleaning strip probe point (stock 150,355)", 150, 355),
+        ("rear cleaning strip scrub point (stock 185,355.5)", 185, 355.5),
         ("cutter approach (cutter_x, cutter_y)", c.cutter_x, c.cutter_y),
         ("bed centre", 175, 175)] %}
     {% for name, x, y in stops %}
