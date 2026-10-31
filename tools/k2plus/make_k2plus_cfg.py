@@ -155,15 +155,36 @@ pins: PB4, PB3
 [fan_generic auxiliary_fan]
 pin: multi_pin:auxiliary_fan_pins
 """),
-    ("chamber (exhaust) fan: PA0. The PTC chamber heater (PC12, power PB2)\n"
-     "is left unconfigured, so it stays off",
+    ("chamber (exhaust) fan: PA0. The PTC chamber heater is set up at the "
+     "end (EXTRA) and stays off until enabled",
      """[multi_pin exhaust_fan_pins]
 pins: PB1, PB3
-""", """# K2 Plus: the chamber fan is PA0. The PTC chamber heater (heater PC12,
-# power PB2, fan PB14) is not configured in the beta and stays off; M141 /
-# M191 run the fan only, as on the K2.
+""", """# K2 Plus: the chamber fan is PA0. The PTC chamber heater is at the end of
+# this file ([hark_chamber]) and stays off until it is enabled.
 [multi_pin exhaust_fan_pins]
 pins: PA0
+"""),
+    ("M141: above 40C also heats the chamber (stock rule), through "
+     "hark_chamber",
+     """    RESPOND MSG="Chamber target {use|int}C: the exhaust fan vents above {(use + 2)|int}C while printing"
+""", """    RESPOND MSG="Chamber target {use|int}C: the exhaust fan vents above {(use + 2)|int}C while printing"
+    # K2 Plus: a target over min_heat_target (40C) also runs the PTC
+    # heater, 40C and under switches it off (stock M141)
+    CHAMBER_HEAT TARGET={target}
+"""),
+    ("M191: heat the chamber and wait (with a timeout)",
+     """description: Set the chamber target (no wait: the K2 has no chamber heater)
+gcode:
+    {% set target = params.S|default(0)|float %}
+    M141 S{target}
+""", """description: Set the chamber target and wait for the PTC heater (over 40C)
+gcode:
+    {% set target = params.S|default(0)|float %}
+    M141 S{target}
+    {% if printer.hark_chamber.enabled
+          and target > printer.hark_chamber.min_heat_target %}
+        CHAMBER_HEAT TARGET={target} WAIT=1
+    {% endif %}
 """),
     # --- probing ------------------------------------------------------
     ("bed mesh over the 350 bed (stock 9x9)",
@@ -365,6 +386,49 @@ def apply(text):
 # K2 Plus only: a slow tour of the chute, brush and cutter positions, so a
 # tester can see that they line up before anything purges, wipes or cuts
 EXTRA = """
+# K2 Plus PTC chamber heater, as stock: heater PC12, its fan PB14 powered
+# through PB2 with the tachometer on PC6 ([fan_feedback] fan0), and the
+# chamber thermistor PC5, shared with [temperature_sensor
+# chamber_temperature] so the screen shows what the heater controls on.
+# [hark_chamber] adds stock's rules (only over 40C, bed first, soft start,
+# fan and over-temperature cut-offs, max 60C) and keeps the heater OFF until
+# printer-overrides.cfg has:
+#   [hark_chamber]
+#   enable: True
+# Do that only after the supervised test in docs/K2-PLUS-BETA.md.
+[duplicate_pin_override]
+pins: PC5
+
+[heater_generic chamber_heater]
+heater_pin: PC12
+max_power: 1.0
+sensor_type: EPCOS 100K B57560G104F
+sensor_pin: PC5
+control: watermark
+min_temp: -30
+max_temp: 80
+
+# Stock's limits: a chamber warms slowly and the door may be open, so the
+# heating-rate check is effectively off (hark_chamber switches the heater
+# off on a dead fan or over-temperature instead). A reading over max_temp
+# still shuts Klipper down.
+[verify_heater chamber_heater]
+max_error: 80
+check_gain_time: 345600
+hysteresis: 15
+heating_gain: 1
+
+# Runs whenever the chamber heater has a target (stock ran it at 30% while
+# heating; full speed keeps the PTC element coolest)
+[heater_fan ptc_fan]
+pin: !PB14
+enable_pin: PB2
+heater: chamber_heater
+heater_temp: 100
+fan_speed: 1.0
+
+[hark_chamber]
+
 # K2 Plus beta: visit the chute, brush, cutter and strip positions slowly
 # (20 mm/s, 3 s at each) and say where the nozzle is. Nothing extrudes, wipes
 # or cuts. Watch the toolhead; KZ / power off if anything is about to hit.
