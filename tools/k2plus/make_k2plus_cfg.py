@@ -255,8 +255,10 @@ endstop_pin: PA15
 position_endstop: 263.12734375
 """, """allow_motion: true
 endstop_pin: PA15, PA8
-# Placeholder until KZ_ALIGN_MEASURE: see docs/K2-PLUS-BETA.md
-position_endstop: 330
+# First K2 Plus measured 349.85 / 350.10 (KZ_ALIGN_MEASURE); stock puts the
+# bottom at position_max - zmax_safe_pox_diff = 350. Kept a little low: too
+# low is safe, too high drives the bed into the nozzle.
+position_endstop: 349.5
 """),
     ("bottom switch direction", "zd_up: 1\n", "zd_up: 0\n"),
     ("bottom switch timeout for the longer travel",

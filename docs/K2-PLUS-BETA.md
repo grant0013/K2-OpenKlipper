@@ -29,12 +29,10 @@ The config is generated from the K2 one by `tools/k2plus/make_k2plus_cfg.py`
 
 ## Known gaps in the beta
 
-- **Chamber heater stays off.** The PTC heater is not configured; `M141` and
-  `M191` run the chamber fan only, like on the K2. ABS/ASA print, but without
-  active chamber heat.
-- **Bottom switch height is a placeholder** (`position_endstop: 330`). Step 6
-  measures the real value. Until then the bottom-switch moves stop the bed
-  short and the nozzle tap fails safely instead of touching.
+- **Bottom switch height** is `position_endstop: 349.5`: the first K2 Plus
+  measured 349.85 / 350.10 and Creality's config puts the bottom at 350, less
+  a little (too low is safe: the bed stops short and the nozzle tap fails
+  instead of touching). Step 6 checks it on your printer.
 - **Rear cleaning strip scrub is off** (`scrub_strip: False`) until step 7
   confirms where the strip is.
 - **Chamber heater is off** until step 9 checks it under supervision.
@@ -119,23 +117,25 @@ Empty bed. Then:
 nozzle on the bed centre. `Z_TILT_ADJUST` taps at the left and right and
 levels the two Z motors; send its output.
 
-Now measure the bottom switches:
+Now check the bottom switches:
 
     KZ_ALIGN_MEASURE CONFIRM=1
 
 The bed goes down slowly until each switch triggers and the console prints
-something like `Suggested [k2_z_align] position_endstop: 351.20`. Put that
-value in **printer-overrides.cfg** (Mainsail > Machine):
+where, with a suggested `position_endstop`. Send the output. Only if the
+suggestion is more than 1 mm away from 349.5, put it in
+**printer-overrides.cfg** (Mainsail > Machine), save and restart:
 
     [k2_z_align]
     position_endstop: 351.20
 
-Save and restart, then check the switch reference:
+Then check the full homing sequence that every print starts with:
 
     KZ_ALIGN_BOTTOM CONFIRM=1
     G28
+    Z_TILT_ADJUST
 
-Send the output of both.
+Send the output of all three.
 
 ## Step 7: the rear cleaning strip
 
