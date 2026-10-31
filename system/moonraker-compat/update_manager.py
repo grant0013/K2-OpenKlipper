@@ -1187,7 +1187,7 @@ class WebClientDeploy(BaseDeploy):
         if self.channel == "stable":
             resource = f"repos/{self.repo}/releases/latest"
         else:
-            resource = f"repos/{self.repo}/releases?per_page=1"
+            resource = f"repos/{self.repo}/releases?per_page=10"
         client = self.cmd_helper.get_http_client()
         resp = await client.github_api_request(
             resource, attempts=3, retry_pause_time=.5
@@ -1211,7 +1211,11 @@ class WebClientDeploy(BaseDeploy):
         result: Dict[str, Any] = {}
         if isinstance(release, list):
             if release:
-                result = release[0]
+                # Hark: GitHub lists the release marked Latest first, not
+                # the newest, so a pre-release published after it would
+                # never be offered. Take the most recently published one.
+                result = max(release,
+                             key=lambda r: r.get('published_at') or '')
         else:
             result = release
         self.last_error = ""
