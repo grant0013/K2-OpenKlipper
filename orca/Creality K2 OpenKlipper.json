@@ -1,0 +1,12 @@
+{
+    "from": "User",
+    "inherits": "Creality K2 0.4 nozzle",
+    "name": "Creality K2 OpenKlipper",
+    "printer_settings_id": "Creality K2 OpenKlipper",
+    "version": "2.3.1.20",
+    "machine_start_gcode": "START_PRINT EXTRUDER_TEMP=[nozzle_temperature_initial_layer] BED_TEMP=[bed_temperature_initial_layer_single] TOOL=[initial_no_support_extruder] TOWER_X={wipe_tower_x[0]} TOWER_Y={wipe_tower_y[0]} TOWER_W={if enable_prime_tower}[prime_tower_width]{else}0{endif}\nT[initial_no_support_extruder]\nM204 S2000\nM83",
+    "change_filament_gcode": "SET_GCODE_VARIABLE MACRO=_CFS_TC VARIABLE=next_purge VALUE={flush_length}\nG90\nG1 Z{max(z_after_toolchange, 0.6)} F600",
+    "host_type": "octoprint",
+    "printer_agent": "moonraker",
+    "print_host": "http://PRINTER-IP:7126"
+}

@@ -151,8 +151,9 @@ with, in printer-overrides.cfg:
     BED_MESH_CALIBRATE
 
 Send the mesh (Mainsail > Height map). Then print something small in PLA from
-the rear spool (single colour, slicer set up as in docs/INSTALL.md, use Orca's
-K2 Plus printer profile as the base). Filament sync works as described there
+the rear spool (single colour; in OrcaSlicer import
+`orca/Creality K2 Plus OpenKlipper.json` as in docs/INSTALL.md step 6 and
+set your printer's IP). Filament sync works as described there
 ("Filament sync with OrcaSlicer"); without a CFS the rear spool is slot 1. Watch the
 first layer. It starts with the K2's first-layer correction (`hot_z_comp`
 0.04 mm closer when hot; Creality's K2 Plus config does not state its own),

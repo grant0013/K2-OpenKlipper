@@ -99,7 +99,24 @@ From now on the open stack starts by itself 30 seconds after every power-on.
 
 ## 6. Set up OrcaSlicer
 
-In OrcaSlicer, start from Creality's profile for your printer, then in
+K2 OpenKlipper comes with a ready-made OrcaSlicer printer profile. It builds
+on Creality's own profile and changes only the start G-code, the
+filament-change G-code and the connection.
+
+1. In OrcaSlicer, add Creality's printer if it is not there yet: **Creality
+   K2** or **Creality K2 Plus**, 0.4 nozzle (printer list > Add/Remove
+   printers). The profile builds on it and does not import without it.
+2. Download the profile for your printer:
+   [Creality K2 OpenKlipper.json](../orca/Creality%20K2%20OpenKlipper.json) or
+   [Creality K2 Plus OpenKlipper.json](../orca/Creality%20K2%20Plus%20OpenKlipper.json)
+   (on GitHub, open it and press the download button, "Download raw file").
+3. **File > Import > Import Configs**, pick the file. "Creality K2
+   OpenKlipper" (or K2 Plus) is now in the printer list: select it.
+4. Click the Wi-Fi icon next to the printer name and replace `PRINTER-IP`
+   with your printer's IP address, keeping `:7126`. **Test**, then **OK**.
+
+That is all. Prefer to set it up by hand, or an older OrcaSlicer that does
+not import it? Start from Creality's profile for your printer, then in
 **Printer settings**:
 
 1. **Machine G-code > Machine start G-code**, replace everything with:
@@ -133,9 +150,10 @@ Orca can read what is loaded in each CFS slot and pick the filament for you.
 On stock firmware it gets this from Creality's own service on the printer,
 which K2 OpenKlipper switches off, so set Orca up to ask Moonraker instead:
 
-1. In the same **Connection** dialog, set **Printer Agent** to **Moonraker**
-   (Orca's K2 profiles default to Creality Print). It is an advanced option:
-   switch Orca to Advanced mode if you do not see it.
+1. In the same **Connection** dialog, check **Printer Agent** is **Moonraker**
+   (the imported profile sets it; Orca's own K2 profiles default to Creality
+   Print). It is an advanced option: switch Orca to Advanced mode if you do
+   not see it.
 2. In the **Device** tab, make sure the K2 is the selected printer. With more
    than one printer, Orca syncs whichever one is selected there.
 3. Set each slot's filament on the printer (Mainsail's CFS panel, or the
