@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.4.10-alpha.1 (2026-11-01)
 
 - **Fix: colours bled on multicolour prints.** An OrcaSlicer printer preset
   whose change-filament G-code lacks the `next_purge` line passed no flush
