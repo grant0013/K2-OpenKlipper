@@ -12,7 +12,10 @@
 - Touchscreen: only one box shows at a time (a question, then an error or
   safety message, a calibration result or pick, the slot menu, an update
   offer). A PA calibration result clears when a print starts, or after 10
-  minutes.
+  minutes. The busy banner shows on the Status page only (other pages show
+  the work in the header) and fits its text; the footer's fan no longer
+  animates through it. Checked across every page, printer state and box
+  (924 combinations) for overlapping, clipped or off-screen text.
 
 ## v0.4.7-alpha.1 (2026-11-01)
 

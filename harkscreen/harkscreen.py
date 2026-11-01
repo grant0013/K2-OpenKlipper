@@ -1046,7 +1046,10 @@ class Screen:
         else:
             getattr(self, "page_" + self.page)(d, body, st)
         self.draw_nav(d)
-        if not err and self.busy(st) and not self.editor and not self.kb:
+        # The busy banner takes the Status page's footer; other pages fill
+        # the body and show the work in the header pill instead
+        if (not err and self.busy(st) and not self.editor and not self.kb
+                and self.page == "status"):
             self.draw_busy(d, body, st)
         # Animations of the page under a box would draw over the box
         page_anims = len(self.anims)
@@ -1392,7 +1395,10 @@ class Screen:
             detail = "  ·  nozzle %d → %d°" % (ex["temperature"], ex["target"])
         self.text(d, (box[0] + 50, (box[1] + box[3]) // 2),
                   ("%s%s" if stage else "%s in progress%s") % (label, detail),
-                  "s", anchor="lm")
+                  "s", anchor="lm", width=box[2] - box[0] - 66)
+        # The banner covers the footer: its animations (the fan) stop
+        self.anims = [a for a in self.anims
+                      if a["rect"][3] <= box[1] or a["rect"][1] >= box[3]]
         cx, cy = box[0] + 26, (box[1] + box[3]) // 2
         self.anims.append({"kind": "spin", "center": (cx, cy), "r": 11,
                            "rect": (cx - 16, cy - 16, cx + 16, cy + 16)})
