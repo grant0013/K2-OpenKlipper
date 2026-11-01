@@ -74,15 +74,17 @@ Host side (Debian/Ubuntu; replace `USER` in the files):
 
 1. Remove ModemManager and brltty (both probe new serial ports), add the user
    to `dialout` (and `video` for the camera).
-2. Clone a release of this repo to `~/k2/K2-OpenKlipper`
-   (`git clone --branch v0.3.0-alpha.1 https://github.com/grant0013/K2-OpenKlipper ~/k2/K2-OpenKlipper`),
-   make a venv `~/k2/klippy-env` with Klipper's requirements plus numpy, and
-   delete `klippy/chelper/c_helper.so`: the repo ships the K2's ARM build, and
-   Klipper only builds its own on first start when the file is missing.
+2. Unzip `k2-openklipper-host.zip` from the newest
+   [release](https://github.com/grant0013/K2-OpenKlipper/releases) into
+   `~/k2/K2-OpenKlipper` (the release without the K2's ARM C helper; Klipper
+   builds its own on first start), and make a venv `~/k2/klippy-env` with
+   Klipper's requirements plus numpy.
 3. Install Moonraker (KIAUH is fine) and give the K2 its own instance: data dir
    `~/printer_data_k2`, port 7126, `klippy_uds_address` in that data dir. In
    `~/printer_data_k2/config`, make the same two-file layout as on the K2:
-   - `k2-openklipper.cfg`: a copy of `config/mainline_stage2.cfg`. Don't edit it.
+   - `k2-openklipper.cfg`: a link to the release's config, so updates reach
+     it (`ln -s ~/k2/K2-OpenKlipper/config/mainline_stage2.cfg k2-openklipper.cfg`).
+     Don't edit it.
    - `printer-overrides.cfg`: a copy of `host/linux/printer-host-overrides.cfg`
      (replace `USER`), plus your printer's settings underneath (extruder,
      first-layer correction).
@@ -99,23 +101,41 @@ Host side (Debian/Ubuntu; replace `USER` in the files):
 
 ## Updating a host
 
-The **Update** button and `OKL_UPDATE` install onto the K2 itself, so the host
-overrides switch automatic update offers off (`[hark_update]`); run
-`OKL_UPDATE_CHECK` in the console to see whether a new release is out. Then,
-with nothing printing:
+Moonraker's Update Manager installs new releases on the host. Add to the K2
+instance's `moonraker.conf`:
 
-```sh
-cd ~/k2/K2-OpenKlipper
-git checkout -- klippy/chelper/c_helper.so    # put it back so git can switch
-git fetch --tags && git checkout v0.4.0       # the new release's tag
-rm -f klippy/chelper/c_helper.so              # the K2's ARM build again
-cp config/mainline_stage2.cfg ~/printer_data_k2/config/k2-openklipper.cfg
-sudo systemctl restart klipper-k2
+```ini
+[machine]
+provider: systemd_cli      # lets the update restart klipper-k2
+
+[update_manager]
+
+[update_manager k2-openklipper]
+type: zip
+channel: beta              # stable = full releases only
+repo: grant0013/K2-OpenKlipper
+path: ~/k2/K2-OpenKlipper
+managed_services: klipper
 ```
 
-`printer-overrides.cfg` is untouched, so your settings carry over. Klipper
-rebuilds its C helper on the first start (a few seconds). The K2 side
-(`host/k2/`) only needs copying again when a release says it changed.
+K2 OpenKlipper then shows in Mainsail's Update Manager with its version, and
+**Update** downloads the release's `k2-openklipper-host.zip`, replaces
+`~/k2/K2-OpenKlipper` and restarts Klipper (it builds its C helper again, a
+few seconds). `printer-overrides.cfg` is untouched, so your settings carry
+over. Moonraker refuses while printing; don't update with a print paused.
+
+`channel: beta` offers every published release (all releases so far are
+pre-releases). Its newest-release lookup needs Moonraker's
+`releases?per_page=10` fix (`system/moonraker-compat/update_manager.py` has it
+for the K2): stock Moonraker v0.11 reads only the first release GitHub lists,
+which is the one marked Latest. On a host, make the same change in
+`_fetch_github_version` in `moonraker/components/update_manager/net_deploy.py`
+(take the most recently published of `releases?per_page=10`).
+
+The touchscreen's and Mainsail's own **Update** dialog (`OKL_UPDATE`)
+installs onto the K2 board, so the host overrides switch it off
+(`[hark_update]`). The K2 side (`host/k2/`) only needs copying again when a
+release says it changed.
 
 ## Things that bit us
 

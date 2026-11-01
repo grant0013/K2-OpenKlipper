@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.4.3-alpha.1 (2026-11-01)
 
 - **K2 Plus (F008) beta config** (`k2plus-beta` branch, untested on a real
   K2 Plus): `config/mainline_stage2_k2plus.cfg`, generated from the K2 config
@@ -37,6 +37,23 @@
   of the older moving one, and the touchscreen shows its result (saved value,
   measured value and scale). With auto PA on load, "load then calibrate" no
   longer measures twice.
+- **Soft filaments (TPU, TPE):** loads, the print start's prime-out, flush
+  and prime line run them at a flow cap (`[gcode_macro _SOFT_FILAMENT]
+  variable_max_flow`, default TPU 3, TPE 2 mm3/s) so they don't buckle in the
+  extruder gears, and the automatic pressure advance test is skipped for
+  them (the slot keeps its saved PA).
+- Prime line: the nozzle lifts 1 mm after the Z0 wipe, so the slicer's first
+  travel no longer drags it across the plate.
+- **Mainsail updates come from the Hark releases only**
+  (grant0013/mainsail): stock mainsail-crew/mainsail would replace the Hark
+  build. The updater's beta channel takes the newest published release
+  (GitHub lists the one marked Latest first). Updating moves an existing
+  install's Mainsail entry to the fork's releases on the beta channel.
+- **External Klipper host: updates from Mainsail's Update Manager.** Each
+  release now carries `k2-openklipper-host.zip`
+  (`tools/release/make_host_zip.py`, attached by a release workflow), which
+  Moonraker installs with `[update_manager k2-openklipper]` (type zip). Setup
+  in docs/EXTERNAL-HOST.md, "Updating a host".
 
 ## v0.4.2-alpha.1 (2026-10-28)
 

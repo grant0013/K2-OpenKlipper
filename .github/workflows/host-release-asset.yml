@@ -1,0 +1,32 @@
+# Attach k2-openklipper-host.zip to each published release: what Moonraker's
+# Update Manager installs on an external Klipper host (docs/EXTERNAL-HOST.md).
+# Run it by hand with a tag for a release published before this workflow.
+name: Host release asset
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag, e.g. v0.4.3-alpha.1
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  host-zip:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Build k2-openklipper-host.zip
+        run: python3 tools/release/make_host_zip.py "$TAG" k2-openklipper-host.zip
+      - name: Attach it to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" k2-openklipper-host.zip --clobber --repo "$GITHUB_REPOSITORY"
