@@ -74,6 +74,8 @@ PA_ACK_FILE = "/mnt/UDISK/harkscreen/.pa_result_ack"
 # An update offer put off with Later: {"version": tag, "until": epoch}
 UPDATE_SNOOZE_FILE = "/mnt/UDISK/harkscreen/.update_snooze"
 UPDATE_SNOOZE = 24 * 3600
+# A PA result nobody dismissed goes away after this (seconds)
+PA_RESULT_TIMEOUT = 600
 # Error lines shown while idle; while printing or paused every one is shown
 IDLE_ALERTS = ("Safety watch", "Chamber heater", "safety watch")
 
@@ -557,6 +559,9 @@ class Screen:
         # Stationary PA results (PA_CAL_STATIC): set to the first stamp seen,
         # so only results after this screen started pop up
         self.pa_static_ack = None
+        # When each PA result was first seen, for PA_RESULT_TIMEOUT
+        self.pa_seen = {}
+        self.box_kind = None
         # Notices (notice()): error lines and print errors are acknowledged
         # from the first ones seen, so only new ones pop up; an update offer
         # put off with Later stays away for UPDATE_SNOOZE
@@ -905,12 +910,30 @@ class Screen:
 
     def pa_result(self, st):
         """A PA calibration result not yet dismissed with OK, or None:
-        the stationary test's (PA_CAL_STATIC), else the moving test's."""
+        the stationary test's (PA_CAL_STATIC), else the moving test's. A
+        print starting, or PA_RESULT_TIMEOUT, dismisses it: it must not sit
+        over a print start (11-01)."""
         static = (st.get("gcode_macro _PA_STATIC_SAVE") or {}).get(
             "last") or {}
         stamp = static.get("stamp")
         if self.pa_static_ack is None and "gcode_macro _PA_STATIC_SAVE" in st:
             self.pa_static_ack = stamp or 0.
+        last = (st.get("pa_pressure_log") or {}).get("last") or {}
+        printing = st.get("print_stats", {}).get("state") in ("printing",
+                                                              "paused")
+        now = time.time()
+        for key in (("static", stamp), ("moving", last.get("stamp"))):
+            if key[1] and key not in self.pa_seen:
+                self.pa_seen[key] = now
+        if printing or any(now - t > PA_RESULT_TIMEOUT
+                           for k, t in self.pa_seen.items()
+                           if k in (("static", stamp),
+                                    ("moving", last.get("stamp")))):
+            if stamp:
+                self.pa_static_ack = stamp
+            if last.get("stamp") and last["stamp"] != self.pa_ack:
+                self.ack_pa(last["stamp"])
+            return None
         if stamp and stamp != self.pa_static_ack:
             return {"static": True, "slot": static.get("slot"),
                     "saved": bool(static.get("saved")),
@@ -920,11 +943,18 @@ class Screen:
                     "scale": static.get("scale"),
                     "material": static.get("material"),
                     "reason": static.get("reason"), "stamp": stamp}
-        last = (st.get("pa_pressure_log") or {}).get("last") or {}
         stamp = last.get("stamp")
         if stamp and stamp != self.pa_ack:
             return last
         return None
+
+    def ack_pa(self, stamp):
+        self.pa_ack = stamp or 0.
+        try:
+            with open(PA_ACK_FILE, "w") as f:
+                f.write(repr(self.pa_ack))
+        except Exception:
+            pass
 
     def track_stage(self, st):
         """Log each stage with the time it started; a new print start
@@ -1020,28 +1050,48 @@ class Screen:
             self.draw_busy(d, body, st)
         # Animations of the page under a box would draw over the box
         page_anims = len(self.anims)
-        if self.slot_menu and not self.confirm:
-            self.draw_slot_menu(st)
-        if self.confirm:
-            self.draw_confirm(d)
-        res = None if err else self.pa_result(st)
-        if res and not self.confirm:
-            self.draw_pa_result(res)
-        pick = None if err else self.calib_pick(st)
-        if pick and not self.confirm and not res:
-            self.draw_calib_pick(pick)
-        note = self.notice(st, err)
-        shown_note = (note and not self.confirm and not res and not pick
-                      and not self.slot_menu and not self.editor
-                      and not self.kb)
-        if shown_note:
-            self.draw_notice(note)
-        # A box over the page: main() fades it in and out
-        self.modal_on = bool(self.confirm or self.slot_menu or res or pick
-                             or shown_note)
-        if self.modal_on:
+        box = self.top_box(st, err)
+        self.box_kind = box and box[0]
+        if box:
+            kind, arg = box
+            if kind == "confirm":
+                self.draw_confirm(d)
+            elif kind == "notice":
+                self.draw_notice(arg)
+            elif kind == "pa":
+                self.draw_pa_result(arg)
+            elif kind == "calib":
+                self.draw_calib_pick(arg)
+            elif kind == "slot":
+                self.draw_slot_menu(st)
+            # main() fades a box in and out; only the box animates
             self.anims = self.anims[page_anims:]
+        self.modal_on = bool(box)
         return self.canvas
+
+    def top_box(self, st, err):
+        """The one box shown over the page, most important first: a question
+        the user is answering, an error or safety message, a calibration
+        result or pick, the slot menu, then an update offer. Boxes never
+        stack."""
+        if self.confirm:
+            return ("confirm", None)
+        if err:
+            return None
+        note = self.notice(st, err)
+        if note and note["kind"] != "update":
+            return ("notice", note)
+        res = self.pa_result(st)
+        if res:
+            return ("pa", res)
+        pick = self.calib_pick(st)
+        if pick:
+            return ("calib", pick)
+        if self.slot_menu:
+            return ("slot", None)
+        if note and not self.editor and not self.kb:
+            return ("notice", note)
+        return None
 
     # --- notices: update offers, print errors, safety messages ------------
     def notice(self, st, err):
@@ -2357,12 +2407,7 @@ class Screen:
             elif kind == "pa_static_ok":
                 self.pa_static_ack = action[1]
             elif kind == "pa_ok":
-                self.pa_ack = action[1] or 0.
-                try:
-                    with open(PA_ACK_FILE, "w") as f:
-                        f.write(repr(self.pa_ack))
-                except Exception:
-                    pass
+                self.ack_pa(action[1])
             elif kind == "edit_slot":
                 self.slot_menu = {"slot": action[1], "rec": action[2]}
             elif kind == "slot_close":
