@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- **Fix: colours bled on multicolour prints.** An OrcaSlicer printer preset
+  whose change-filament G-code lacks the `next_purge` line passed no flush
+  length, so every PLA-to-PLA change purged a fixed 70 mm. Orca's own matrix
+  in HT-P-2026-0416 asked for up to 743 mm^3 = 309 mm (black to white).
+  `[k2_cfs] toolchange_purge_from_file` is now on by default: the printer
+  reads the flush matrix from the print file itself. Colour-change purges
+  can now be up to 360 mm (was 240), the load's own limit. New test:
+  tests/test_cfs_flush_matrix.py.
+
 ## v0.4.9-alpha.1 (2026-11-01)
 
 - Touchscreen preview: the thumbnail was asked for once, the moment a print

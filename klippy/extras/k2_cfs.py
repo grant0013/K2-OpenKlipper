@@ -498,9 +498,12 @@ class K2CFS:
             'path_owner_from_feed_slot', True)
         # Tool change purge from the print file's flush_volumes_matrix when
         # the slicer did not pass one (no PURGE=), like Jacob10383's
-        # _purge_plan. Off = the fixed fallbacks, as before.
+        # _purge_plan. On by default since 11-01: an Orca preset without the
+        # next_purge line purged a fixed 70 mm on every PLA change where its
+        # matrix asked for up to 309 mm (black to white), and colours bled.
+        # False = the fixed fallbacks.
         self.toolchange_purge_from_file = config.getboolean(
-            'toolchange_purge_from_file', False)
+            'toolchange_purge_from_file', True)
         self.flush_cache = None
         # Clog check from the hub measuring wheel (Jacob10383's _check_clog):
         # pause when the extruder has fed clog_extruder_length while the
@@ -2569,9 +2572,9 @@ class K2CFS:
         # like materials, with the prime tower doing the rest of the flush.
         # PURGE_FALLBACK=<mm>: the same, used only when
         # toolchange_purge_from_file finds nothing in the print file.
-        purge_length = gcmd.get_float('PURGE', None, minval=30., maxval=240.)
+        purge_length = gcmd.get_float('PURGE', None, minval=30., maxval=360.)
         purge_fallback = gcmd.get_float(
-            'PURGE_FALLBACK', None, minval=30., maxval=240.)
+            'PURGE_FALLBACK', None, minval=30., maxval=360.)
         self._require_actuation(gcmd)
         print_stats = self.printer.lookup_object('print_stats', None)
         state = print_stats.get_status(0.).get('state', '') \
@@ -2700,7 +2703,8 @@ class K2CFS:
         # Jacob10383's _purge_plan: flush volume (mm^3) for this change from
         # the file's matrix over the filament area. T0-T3 are slots A-D.
         # Returns (short purge, full purge): between like materials it is a
-        # SHORT purge clamped to 30-240 mm; otherwise the stock purge, made
+        # SHORT purge clamped to 30-360 mm (the load's limit; Orca asks
+        # 309 mm for black to white PLA); otherwise the stock purge, made
         # longer when the file asks for more.
         meta = self._flush_matrix()
         matrix = meta and meta['matrix']
@@ -2718,7 +2722,7 @@ class K2CFS:
         old_type = (records.get(old_slot, {}).get('type') or '').upper()
         new_type = (records.get(slot, {}).get('type') or '').upper()
         if old_type and old_type == new_type:
-            short, full = min(max(length, 30.), 240.), None
+            short, full = min(max(length, 30.), 360.), None
         else:
             short = None
             full = min(max(length, self.purge_extrude_length, 140.), 360.)
