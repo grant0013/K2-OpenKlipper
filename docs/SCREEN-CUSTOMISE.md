@@ -31,13 +31,20 @@ The gear at the bottom of the side bar opens Settings, with no file to edit:
   off; motors off lets the bed drop on a K2 Plus.
 - **Time zone** of the printer (the one Creality's settings set), used for
   the "done about" time.
-- **G-code files**: keep uploaded prints on the printer's own storage or on
-  a USB drive in the K2's USB port (FAT32, exFAT or NTFS; the K2 mounts it
-  at /mnt/exUDISK). The choice can only change while nothing is printing;
-  Moonraker restarts once. With the drive unplugged, files go back to the
-  printer's storage until it is plugged in again; files on the other place
-  are not shown until you switch back. Not shown on a K2 run from a PC
-  (files live on the PC).
+- **Storage**: keep uploaded prints, time-lapse videos and Klipper's logs on
+  the printer's own storage (eMMC) or on a USB drive in the K2's USB port
+  (FAT32, exFAT or NTFS; the K2 mounts it at /mnt/exUDISK), which saves the
+  eMMC from wear. Uploads from OrcaSlicer land there and print from there.
+  The choice can only change while nothing is printing; Moonraker restarts
+  once; logs move at the next restart. With the drive unplugged, everything
+  goes back to the printer's storage until it is plugged in again; files on
+  the other place are not shown until you switch back. Not shown on a K2
+  run from a PC (files live on the PC).
+- **Time-lapse**: on or off (one frame each layer from the chamber camera;
+  the video is made on the printer after the print, at low priority, and
+  saved to the chosen storage; Mainsail's Timelapse tab shows and downloads
+  it). Needs the layer change G-code from the K2 OpenKlipper Orca profile
+  (config/ORCA-K2-PROFILE.cfg).
 - **Highlight** colour, over the theme's own.
 
 On the **Status** page, tap the Nozzle or Bed gauge to set its temperature

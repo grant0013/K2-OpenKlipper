@@ -8,6 +8,9 @@ K2 OpenKlipper needs (the reasons are in config/ORCA-K2-PROFILE.cfg):
     tower area,
   - Change filament G-code: no move to X0 and drop to Z0 (Creality's
     template scraped the bed on the first tool selection),
+  - Layer change G-code: the layer number for Mainsail and the
+    touchscreen, and a time-lapse frame (does nothing while time-lapse is
+    off),
   - Connection: Octo/Klipper and Moonraker on port 7126, in place of
     Creality's own service, which K2 OpenKlipper switches off.
 The user only types the printer's IP into the Connection dialog.
@@ -29,6 +32,12 @@ START_GCODE = "\n".join([
     "T[initial_no_support_extruder]",
     "M204 S2000",
     "M83",
+    "SET_PRINT_STATS_INFO TOTAL_LAYER=[total_layer_count]",
+])
+
+LAYER_CHANGE_GCODE = "\n".join([
+    "SET_PRINT_STATS_INFO CURRENT_LAYER={layer_num + 1}",
+    "TIMELAPSE_TAKE_FRAME",
 ])
 
 CHANGE_FILAMENT_GCODE = "\n".join([
@@ -55,6 +64,7 @@ def profile(name, parent):
         "version": "2.3.1.20",
         "machine_start_gcode": START_GCODE,
         "change_filament_gcode": CHANGE_FILAMENT_GCODE,
+        "layer_change_gcode": LAYER_CHANGE_GCODE,
         # Octo/Klipper: Moonraker answers OctoPrint's upload API
         "host_type": "octoprint",
         "printer_agent": "moonraker",

@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **Time-lapse on the K2** (moonraker-timelapse, vendored and adapted: the
+  K2 has no wget, frames are fetched with Python): one frame a layer from
+  the chamber camera into RAM, the video rendered after the print with the
+  K2's own ffmpeg at lowest priority, shown in Mainsail's Timelapse tab.
+  Off until switched on (Mainsail or the touchscreen's Settings). The Orca
+  profiles' layer change G-code takes the frames and reports the layer
+  number (exact layer counts in Mainsail); TIMELAPSE_TAKE_FRAME is in the
+  printer config everywhere and does nothing while off.
+- **Storage choice covers G-code files, time-lapse videos and logs**: with a
+  USB drive chosen, uploads (Moonraker writes its temporary upload file in
+  the same folder), prints, thumbnails, videos and Klipper's log stay off
+  the eMMC (system/storage-links.sh at start-up, before Klipper opens its
+  log; the touchscreen moves G-code and videos between prints).
 - **K2 Plus chamber heater on by default** after the supervised test on a
   real K2 Plus heated as stock did (`[hark_chamber] enable: False` turns it
   off). Mainsail's chamber box, the slicer's M141/M191 and the touchscreen

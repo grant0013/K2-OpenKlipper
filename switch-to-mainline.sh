@@ -24,7 +24,17 @@ sleep 2
 sleep 1
 rm -f /tmp/klippy_uds
 
-mkdir -p "$PDATA/config" "$PDATA/logs"
+mkdir -p "$PDATA/config"
+# G-code, time-lapse and log folders on the storage chosen on the
+# touchscreen (USB drive or the printer's own); before Klipper starts so
+# its log opens there. Moonraker started earlier at boot: restart it when
+# a folder moved.
+MOVED=$(sh "$MAINLINE/system/storage-links.sh" 2>/dev/null)
+mkdir -p "$PDATA/logs" 2>/dev/null || true
+if [ -n "$MOVED" ]; then
+    echo "storage: moved $MOVED"
+    /etc/init.d/moonraker-mainline restart >/dev/null 2>&1 &
+fi
 
 # Keep the running configuration inside Moonraker's visible config root.  Seed
 # each build once so later edits made in Mainsail are preserved across restarts.

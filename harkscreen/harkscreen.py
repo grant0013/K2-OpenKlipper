@@ -116,6 +116,11 @@ GCODE_LINK = "/mnt/UDISK/printer_data_mainline/gcodes"
 GCODE_INTERNAL = "/mnt/UDISK/printer_data/gcodes"
 USB_MOUNT = "/mnt/exUDISK"
 GCODE_USB = USB_MOUNT + "/gcodes"
+# Time-lapse videos follow the same choice (logs too, at the next restart:
+# system/storage-links.sh at start-up)
+TIMELAPSE_LINK = "/mnt/UDISK/printer_data_mainline/timelapse"
+TIMELAPSE_INTERNAL = "/mnt/UDISK/printer_data/timelapse"
+TIMELAPSE_USB = USB_MOUNT + "/timelapse"
 LIGHT_OFF = ((0, "Never"), (300, "5 min"), (600, "10 min"), (1800, "30 min"))
 # 99999999 s is stock's "never"
 IDLE_OFF = ((900, "15 min"), (1800, "30 min"), (3600, "1 hour"),
@@ -461,19 +466,26 @@ def storage_state():
             else None}
 
 
-def point_gcodes(where):
-    """Point the G-code folder at the USB drive or back at internal
-    storage. Moonraker must restart to read it."""
-    target = GCODE_USB if where == "usb" else GCODE_INTERNAL
-    if where == "usb":
-        if not os.path.ismount(USB_MOUNT):
-            raise OSError("no USB drive")
-        os.makedirs(GCODE_USB, exist_ok=True)
-    tmp = GCODE_LINK + ".new"
+def point_link(link, target):
+    os.makedirs(target, exist_ok=True)
+    tmp = link + ".new"
     if os.path.lexists(tmp):
         os.remove(tmp)
     os.symlink(target, tmp)
-    os.replace(tmp, GCODE_LINK)
+    os.replace(tmp, link)
+
+
+def point_gcodes(where):
+    """Point the G-code and time-lapse folders at the USB drive or back at
+    internal storage. Moonraker must restart to read them."""
+    if where == "usb" and not os.path.ismount(USB_MOUNT):
+        raise OSError("no USB drive")
+    usb = where == "usb"
+    point_link(GCODE_LINK, GCODE_USB if usb else GCODE_INTERNAL)
+    # time-lapse: only once start-up has made it a link
+    if os.path.islink(TIMELAPSE_LINK):
+        point_link(TIMELAPSE_LINK, TIMELAPSE_USB if usb
+                   else TIMELAPSE_INTERNAL)
 
 
 def restart():
@@ -558,6 +570,16 @@ class Moonraker:
             img = Image.open(io.BytesIO(r.read()))
             img.load()
         return img.convert("RGBA"), height
+
+    def timelapse(self):
+        """moonraker-timelapse settings, or None without the add-on."""
+        try:
+            with urllib.request.urlopen(
+                    self.base + "/machine/timelapse/settings",
+                    timeout=3) as r:
+                return json.load(r)["result"]
+        except Exception:
+            return None
 
     def info(self):
         with urllib.request.urlopen(self.base + "/printer/info",
@@ -729,6 +751,7 @@ class DataThread(threading.Thread):
                     err = "Klipper " + st.get("webhooks", {}).get("state",
                                                                    "?")
                 if time.time() - settings_at > 30:
+                    self.screen.timelapse = mr.timelapse()
                     self.screen.settings = mr.settings()
                     self.screen.filaments = mr.filaments()
                     settings_at = time.time()
@@ -892,6 +915,8 @@ class Screen:
         self.prefs = load_prefs()
         self.prefs_pending = False
         self.last_st = {}
+        # moonraker-timelapse settings (None: not installed)
+        self.timelapse = None
         # Temperature box (heater being set, the target shown) and fan box
         self.temp_pick = None
         self.temp_target = 0
@@ -1358,6 +1383,8 @@ class Screen:
             (st.get("gcode_move") or {}).get("homing_origin"),
             (st.get("gcode_macro START_PRINT") or {}).get("z_offset"),
             storage_state() if self.page == "settings" else None,
+            (self.timelapse or {}).get("enabled") if self.timelapse
+            is not None else None,
             (st.get("idle_timeout") or {}).get("idle_timeout"),
             (st.get("gcode_macro _LIGHT_IDLE") or {}).get("off_after"),
             # the Settings page shows the time
@@ -2514,8 +2541,8 @@ class Screen:
             ("Idle off", [(n, ("pref", "idle", v),
                            cur["idle"] == v) for v, n in IDLE_OFF]),
         ]
-        rh, gap = 46, 8
-        y = y0 + 10
+        rh, gap = 42, 7
+        y = y0 + 8
         for label, opts in rows:
             self.text(d, (x0 + pad, y + rh // 2), label, "s", "muted",
                       anchor="lm")
@@ -2541,6 +2568,20 @@ class Screen:
         y += rh + gap
         self.draw_storage_row(d, body, y, rh, st)
         y += rh + gap
+        if self.timelapse is not None:
+            on = bool(self.timelapse.get("enabled"))
+            self.text(d, (x0 + pad, y + rh // 2), "Time-lapse", "s",
+                      "muted", anchor="lm")
+            bx = x0 + pad + label_w
+            bw = (x1 - pad - bx - 10) // 2
+            for i, (text, value) in enumerate((("Off", False),
+                                               ("On (one frame a layer)",
+                                                True))):
+                box = (bx + i * (bw + 10), y, bx + i * (bw + 10) + bw,
+                       y + rh)
+                self.button(d, box, text, ("timelapse", value),
+                            "accent" if on == value else "muted", True, "s")
+            y += rh + gap
         # Highlight colour
         self.text(d, (x0 + pad, y + rh // 2), "Highlight", "s", "muted",
                   anchor="lm")
@@ -2667,7 +2708,8 @@ class Screen:
     def draw_storage_row(self, d, body, y, rh, st):
         x0, y0, x1, y1 = body
         pad = 14
-        self.text(d, (x0 + pad, y + rh // 2), "G-code files", "s", "muted",
+        # G-code files, time-lapse videos and logs
+        self.text(d, (x0 + pad, y + rh // 2), "Storage", "s", "muted",
                   anchor="lm")
         bx = x0 + pad + 150
         if remote_moonraker(self.cfg.get("screen", "moonraker")):
@@ -3108,6 +3150,11 @@ class Screen:
                          "VARIABLE=manual VALUE=0")
             elif kind == "box_close":
                 self.temp_pick, self.fans_open = None, False
+            elif kind == "timelapse":
+                mr.post("/machine/timelapse/settings?enabled=%s"
+                        % ("true" if action[1] else "false"))
+                if self.timelapse is not None:
+                    self.timelapse["enabled"] = action[1]
             elif kind == "z_adjust":
                 self.z_adjust = round(self.z_adjust + action[1], 3)
                 mr.gcode("SET_GCODE_OFFSET Z_ADJUST=%.3f MOVE=1" % action[1])

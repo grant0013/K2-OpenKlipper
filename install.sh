@@ -409,6 +409,16 @@ if t != s:
 if not re.search(r"(?m)^\[zeroconf\]", t):
     t = t.rstrip("\n") + "\n\n[zeroconf]\n"
     print("    moonraker.conf: network announce ([zeroconf]) on")
+# Time-lapse (off until switched on) for installs made before it
+if not re.search(r"(?m)^\[timelapse\]", t):
+    t = t.rstrip("\n") + (
+        "\n\n[timelapse]\n"
+        "output_path: /mnt/UDISK/printer_data_mainline/timelapse/\n"
+        "frame_path: /tmp/timelapse/\n"
+        "ffmpeg_binary_path: /mnt/UDISK/k2-mainline-20260729-v62/system/"
+        "timelapse-ffmpeg.sh\n"
+        "snapshoturl: http://127.0.0.1:8080/?action=snapshot\n")
+    print("    moonraker.conf: time-lapse added (off until switched on)")
 if t != s:
     open(p, "w").write(t)
 PY
@@ -438,6 +448,9 @@ fi
 cp "$BUILD/system/moonraker-mainline.init" /etc/init.d/moonraker-mainline
 chmod 755 /etc/init.d/moonraker-mainline
 cp "$BUILD/system/moonraker-compat/update_manager.py" /usr/share/moonraker/components/update_manager/update_manager.py
+# Time-lapse: moonraker-timelapse (vendored, frames fetched without wget)
+cp "$BUILD/system/moonraker-compat/timelapse.py" /usr/share/moonraker/components/timelapse.py
+chmod 755 "$BUILD/system/timelapse-ffmpeg.sh" "$BUILD/system/storage-links.sh"
 cp "$BUILD/system/moonraker-compat/.version" /usr/share/moonraker/.version
 
 # Printer configuration: k2-openklipper.cfg (managed, written by the switch

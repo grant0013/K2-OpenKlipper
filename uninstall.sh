@@ -45,6 +45,7 @@ cp "$BACKUP/nginx.conf" /etc/nginx/nginx.conf
 [ -f "$BACKUP/update_manager.py" ] && cp "$BACKUP/update_manager.py" /usr/share/moonraker/components/update_manager/update_manager.py
 [ -f "$BACKUP/moonraker.version" ] && cp "$BACKUP/moonraker.version" /usr/share/moonraker/.version
 [ -f "$BACKUP/metadata.py" ] && cp "$BACKUP/metadata.py" /usr/share/moonraker/components/file_manager/metadata.py
+rm -f /usr/share/moonraker/components/timelapse.py
 [ -f "$BACKUP/moonraker-stock.conf" ] && cp "$BACKUP/moonraker-stock.conf" /usr/share/moonraker/moonraker.conf
 # rc.local: drop only our boot hook, keep anything else added since
 grep -v -e "boot-mainline" -e "K2 OpenKlipper boot hook" /etc/rc.local > /tmp/rc.local.okl || true
