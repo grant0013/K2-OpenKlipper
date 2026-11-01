@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- **Fix: no print preview on the K2 for OrcaSlicer files** (Mainsail and
+  touchscreen). Creality's Moonraker read OrcaSlicer files as an unknown
+  slicer, which skips thumbnails (and the slicer's time estimate). The
+  installer now adds OrcaSlicer to its PrusaSlicer-style reader, as current
+  Moonraker does; the original is backed up and uninstall.sh restores it.
+  Files already on the printer keep their old details: send them again.
+  Checked on Creality's metadata.py with a real Orca 2.5 file: "Unknown",
+  no thumbnails before; OrcaSlicer, 300/96/32 px thumbnails after.
+
 ## v0.4.11-alpha.1 (2026-11-01)
 
 - **K2 driven by a separate PC: the touchscreen now updates itself.** A host

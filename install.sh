@@ -358,6 +358,7 @@ cp -a /etc/nginx/nginx.conf "$BACKUP/nginx.conf"
 cp -a /usr/share/moonraker/moonraker.conf "$BACKUP/moonraker-stock.conf" 2>/dev/null || true
 cp -a /usr/share/moonraker/components/update_manager/update_manager.py "$BACKUP/update_manager.py" 2>/dev/null || true
 cp -a /usr/share/moonraker/.version "$BACKUP/moonraker.version" 2>/dev/null || true
+cp -a /usr/share/moonraker/components/file_manager/metadata.py "$BACKUP/metadata.py" 2>/dev/null || true
 [ -e /etc/init.d/moonraker-mainline ] && cp -a /etc/init.d/moonraker-mainline "$BACKUP/moonraker-mainline.init"
 /etc/init.d/moonraker enabled 2>/dev/null && touch "$BACKUP/stock-moonraker-was-enabled" || true
 # On an update or reinstall the system files are already ours: carry the
@@ -365,7 +366,7 @@ cp -a /usr/share/moonraker/.version "$BACKUP/moonraker.version" 2>/dev/null || t
 # still restores stock.
 PREV=$(cat /mnt/UDISK/openklipper-backups/LATEST 2>/dev/null || true)
 if [ "$APPINIT" = already ] && [ -n "$PREV" ] && [ -f "$PREV/app.init" ]; then
-    for f in app.init rc.local nginx.conf moonraker-stock.conf update_manager.py moonraker.version stock-moonraker-was-enabled; do
+    for f in app.init rc.local nginx.conf moonraker-stock.conf update_manager.py moonraker.version metadata.py stock-moonraker-was-enabled; do
         [ -e "$PREV/$f" ] && cp -a "$PREV/$f" "$BACKUP/$f"
     done
 fi
@@ -411,6 +412,29 @@ if not re.search(r"(?m)^\[zeroconf\]", t):
 if t != s:
     open(p, "w").write(t)
 PY
+# Creality's Moonraker does not know OrcaSlicer files: they are read as an
+# unknown slicer, which skips the thumbnails (no print preview in Mainsail
+# or on the touchscreen, nur00 11-01). Read them as PrusaSlicer-style, as
+# current Moonraker does.
+MD=/usr/share/moonraker/components/file_manager/metadata.py
+if [ -f "$MD" ]; then
+    python3 - "$MD" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = "'SuperSlicer': r\"SuperSlicer\\s(.*)\\son\",\n"
+if "'OrcaSlicer'" not in s and old in s:
+    i = s.index(old)
+    indent = s[s.rindex("\n", 0, i) + 1:i]
+    s = s.replace(old, old + indent
+                  + "'OrcaSlicer': r\"OrcaSlicer\\s(.*)\\son\",\n", 1)
+    open(p, "w").write(s)
+    print("    Moonraker: OrcaSlicer files now read with their thumbnails")
+PY
+    python3 -m py_compile "$MD" 2>/dev/null || {
+        echo "    Moonraker metadata patch did not compile: restoring the original"
+        [ -f "$BACKUP/metadata.py" ] && cp "$BACKUP/metadata.py" "$MD"; }
+fi
 cp "$BUILD/system/moonraker-mainline.init" /etc/init.d/moonraker-mainline
 chmod 755 /etc/init.d/moonraker-mainline
 cp "$BUILD/system/moonraker-compat/update_manager.py" /usr/share/moonraker/components/update_manager/update_manager.py
