@@ -102,6 +102,21 @@ class FanCapTest(unittest.TestCase):
         reactor.run_until(reactor.now + 5.1)
         self.assertEqual(hotend.fan_speed, 1.)
 
+    def test_cap_held_through_a_slow_tap(self):
+        # 11-01: a 0.8 mm/s probe took over 5 s; the cap must not lift
+        # until the tap ends
+        hotend = FakeHeaterFan("extruder")
+        cap, reactor = make(hotend_fan=hotend)
+        cap.acquire()
+        reactor.run_until(reactor.now + 12.)
+        self.assertEqual(hotend.fan_speed, 0.6)
+        self.assertEqual(hotend.last_speed, 0.6)
+        cap.release()
+        reactor.run_until(reactor.now + 4.9)
+        self.assertEqual(hotend.fan_speed, 0.6)
+        reactor.run_until(reactor.now + 0.2)
+        self.assertEqual(hotend.fan_speed, 1.)
+
     def test_cold_fan_capped_without_waiting(self):
         hotend = FakeHeaterFan("extruder", hot=False)
         cap, reactor = make(hotend_fan=hotend)

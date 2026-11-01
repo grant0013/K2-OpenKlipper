@@ -8,9 +8,11 @@
 #
 # acquire() at each tap caps every [heater_fan] that serves the extruder
 # and, if that changed a running fan, waits settle_time for it to slow.
-# The cap holds while taps keep coming and is lifted hold_time after the
-# last one, so a whole mesh pays one spin-down. Fans of other heaters
-# (the K2 Plus chamber heater's fan) are left alone.
+# The cap holds while a tap runs and while taps keep coming, and is lifted
+# hold_time after the last one ends, so a whole mesh pays one spin-down.
+# (The countdown runs only between taps: started at acquire() it ran out
+# during a slow 5 s probe on 11-01 and the fans came back up mid-tap.)
+# Fans of other heaters (the K2 Plus chamber heater's fan) are left alone.
 #
 # Copyright (C) 2026  Hark Tech
 #
@@ -19,7 +21,7 @@ import logging
 
 
 class ProbeFanCap:
-    def __init__(self, printer, cap, settle_time=2., hold_time=5.):
+    def __init__(self, printer, cap, settle_time=3., hold_time=5.):
         self.printer = printer
         self.cap = cap
         self.settle_time = settle_time
@@ -59,15 +61,16 @@ class ProbeFanCap:
                              ", ".join(slowed), self.cap * 100.)
                 if self.settle_time:
                     reactor.pause(reactor.monotonic() + self.settle_time)
-        self._schedule_restore()
+        # A tap is running: no restore until it ends
+        self._set_restore(reactor.NEVER)
 
     def release(self):
         if self.saved is not None:
-            self._schedule_restore()
+            reactor = self.printer.get_reactor()
+            self._set_restore(reactor.monotonic() + self.hold_time)
 
-    def _schedule_restore(self):
+    def _set_restore(self, when):
         reactor = self.printer.get_reactor()
-        when = reactor.monotonic() + self.hold_time
         if self.timer is None:
             self.timer = reactor.register_timer(self._restore, when)
         else:
