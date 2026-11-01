@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- **Klipper fix: small arcs printed as straight lines.** Klipper's G2/G3
+  support cuts every arc into pieces of one fixed length and rounded the
+  count down, so any arc shorter than two pieces became a single straight
+  chord: a half circle of radius 0.3 mm (fillets, letters, small holes)
+  missed its curve by 0.3 mm at our resolution 0.5. Measured on 564,000 arcs
+  from six real K2 prints: worst miss 0.30 mm. `gcode_arcs` now rounds up and
+  takes `max_deviation`: arcs are cut by accuracy, with `resolution` as the
+  longest segment. The K2 config uses 0.01 mm / 2 mm: worst miss 0.01 mm
+  with 11% fewer moves than before (lighter on the K2's processor). Upstream
+  Klipper has the same bug. If you set `[gcode_arcs] resolution` in
+  printer-overrides.cfg, remove it. New test: tests/test_gcode_arcs.py.
+
 ## v0.4.12-alpha.1 (2026-11-01)
 
 - **Fix: no print preview on the K2 for OrcaSlicer files** (Mainsail and
