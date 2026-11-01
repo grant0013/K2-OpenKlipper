@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.4.17-alpha.1 (2026-11-01)
+
+- **Touchscreen froze on the time zone picker** (K2 Plus report). Choosing a
+  zone ran `/etc/init.d/system reload` (which also resets the clock chip
+  with `hwclock`) on the screen's own loop, waiting up to 10 s per step.
+  It now does what Creality's `/usr/bin/timezone.sh` does (uci zonename +
+  commit, `/tmp/localtime` link, no service reload) in the background, and
+  logs the zone and the time taken to /tmp/harkscreen.log.
+- **A button that fails no longer stops the screen.** An error in a tap is
+  logged and the screen carries on (rendering errors already were).
+- The Status page redraws when the chamber heater's target changes.
+
 ## v0.4.16-alpha.1 (2026-11-01)
 
 - **Eject the USB drive from the touchscreen** (Settings > Storage, next to

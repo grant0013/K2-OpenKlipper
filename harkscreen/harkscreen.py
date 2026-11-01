@@ -424,16 +424,30 @@ def system_zone():
 
 
 def set_system_zone(name):
-    """Set the printer's own time zone, as Creality's settings screen did."""
+    """Set the printer's own time zone, as Creality's settings screen did
+    (/usr/bin/timezone.sh): the uci zonename for the next start, and
+    /tmp/localtime (/etc/localtime links there) for now. No service
+    reload: nothing else needs it, and it also resets the clock chip."""
+    t0 = time.time()
     for cmd in (["uci", "set", "system.@system[0].zonename=%s" % name],
-                ["uci", "commit", "system"],
-                ["/etc/init.d/system", "reload"]):
+                ["uci", "commit", "system"]):
         try:
             subprocess.call(cmd, stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL, timeout=10)
         except Exception as e:
             print("time zone: %s failed: %s" % (cmd[0], e), flush=True)
+    path = os.path.join(ZONEINFO, name)
+    if os.path.isfile(path):
+        try:
+            tmp = "/tmp/localtime.new"
+            if os.path.lexists(tmp):
+                os.remove(tmp)
+            os.symlink(path, tmp)
+            os.replace(tmp, "/tmp/localtime")
+        except OSError as e:
+            print("time zone: %s" % e, flush=True)
     time.tzset()
+    print("time zone: %s (%.1f s)" % (name, time.time() - t0), flush=True)
 
 
 def klipper_prefs(prefs, idle):
@@ -1478,6 +1492,7 @@ class Screen:
             r("extruder", "temperature"), r("extruder", "target"),
             r("heater_bed", "temperature"), r("heater_bed", "target"),
             r("temperature_sensor chamber_temperature", "temperature"),
+            st.get("hark_chamber"),
             round((st.get("display_status", {}).get("progress")
                    or vs.get("progress") or 0) * 100),
             round(st.get("fan", {}).get("speed", 0) * 100), round(z, 2), rem,
@@ -3490,7 +3505,9 @@ class Screen:
             elif kind == "zone_back":
                 self.zone_pick = False
             elif kind == "zone_set":
-                set_system_zone(action[1])
+                # off the screen's loop: it never waits for the system
+                threading.Thread(target=set_system_zone, args=(action[1],),
+                                 daemon=True).start()
                 self.zone_name = action[1]
                 self.prefs["timezone"] = "auto"
                 try:
@@ -3684,7 +3701,14 @@ def main():
               and now - touch.last_activity > sleep_after):
             screen.set_sleep(True)
         for x, y in taps:
-            screen.handle_tap(x, y, mr)
+            try:
+                screen.handle_tap(x, y, mr)
+            except Exception:
+                # one bad button must not stop the screen
+                import traceback
+                traceback.print_exc()
+                sys.stdout.flush()
+                screen.dirty = True
         if screen.asleep:
             time.sleep(0.2)
             continue
