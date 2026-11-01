@@ -269,6 +269,21 @@ def own_version():
     return read_text(VERSION_FILE).lstrip("vV")
 
 
+def version_key(version):
+    """'0.4.11-alpha.1' -> ((0, 4, 11), (0, 1)); a final release sorts
+    after its alpha/beta/rc (as hark_update)."""
+    v = (version or "").strip().lstrip("vV")
+    main, _, pre = v.partition("-")
+    nums = tuple(int(n) for n in re.findall(r"\d+", main)[:3])
+    nums += (0,) * (3 - len(nums))
+    if not pre:
+        return nums, (9, 0)
+    rank = {"alpha": 0, "beta": 1, "rc": 2}.get(
+        re.sub(r"[^a-z]", "", pre.lower()), 0)
+    num = re.findall(r"\d+", pre)
+    return nums, (rank, int(num[0]) if num else 0)
+
+
 def remote_moonraker(url):
     host = urllib.parse.urlparse(url).hostname or ""
     return host not in ("", "127.0.0.1", "localhost", "::1")
@@ -605,8 +620,11 @@ class DataThread(threading.Thread):
         want = ((st.get("hark_update") or {}).get("installed")
                 or "").lstrip("vV")
         state = st.get("print_stats", {}).get("state")
+        # Forward only: a release from before this sync would leave the
+        # screen unable to follow later ones
         if (not remote_moonraker(mr.base) or not want
-                or want == own_version()
+                or (own_version()
+                    and version_key(want) <= version_key(own_version()))
                 or want == read_text(BAD_VERSION_FILE)
                 or st.get("webhooks", {}).get("state") != "ready"
                 or state in ("printing", "paused")
