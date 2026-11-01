@@ -362,6 +362,34 @@ scrub_y_max: 356.5
     G28 Z
     SET_GCODE_VARIABLE MACRO=START_PRINT VARIABLE=skip_home_wipe VALUE=0
 """),
+    # --- homing: Z from the bottom switches outside a print -------------
+    ("G28 outside a print: Z from the bottom switches (decide once)",
+     """    {% set z_was_homed = 'z' in printer.toolhead.homed_axes %}
+""", """    {% set z_was_homed = 'z' in printer.toolhead.homed_axes %}
+    # K2 Plus: outside a print, homing Z first sets it from the bottom
+    # switches (KZ_ALIGN_BOTTOM), then taps from 5 mm. A Z kept from an
+    # earlier tap that fired early, or a 350 mm climb with the gauge armed,
+    # could otherwise leave Z wrong by the whole bed travel (10-31). A print
+    # already parks on the switches in START_PRINT and keeps that Z.
+    {% set z_from_bottom = home_z and printer.print_stats.state not in ("printing", "paused") %}
+"""),
+    ("G28 outside a print: park on the bottom switches before XY homing",
+     """    {% if home_z %}
+        {% if not z_was_homed %}
+            FORCE_MOVE STEPPER=stepper_z DISTANCE=5 VELOCITY=10
+""", """    {% if home_z %}
+        {% if z_from_bottom %}
+            KZ_ALIGN_BOTTOM CONFIRM=1
+        {% elif not z_was_homed %}
+            FORCE_MOVE STEPPER=stepper_z DISTANCE=5 VELOCITY=10
+"""),
+    ("G28 outside a print: no 350 mm gauge search once Z is set from the\n"
+     "bottom switches",
+     """        {% if not z_was_homed %}
+            # Stock G28 Z: raise the bed at homing_speed until the strain
+""", """        {% if not z_was_homed and not z_from_bottom %}
+            # Stock G28 Z: raise the bed at homing_speed until the strain
+"""),
 ]
 
 # Several identical lines: replace them all, but check the count
