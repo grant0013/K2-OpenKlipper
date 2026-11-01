@@ -121,6 +121,12 @@ GCODE_USB = USB_MOUNT + "/gcodes"
 TIMELAPSE_LINK = "/mnt/UDISK/printer_data_mainline/timelapse"
 TIMELAPSE_INTERNAL = "/mnt/UDISK/printer_data/timelapse"
 TIMELAPSE_USB = USB_MOUNT + "/timelapse"
+LOGS_LINK = "/mnt/UDISK/printer_data_mainline/logs"
+# The K2 mounts its USB port's drive (sda, or sda1) at USB_MOUNT; its own
+# memory is mmcblk0, so only sdX can ever be formatted here
+USB_DEV = "sda"
+USB_DEV_RE = r"sd[a-z]$"
+USB_LABEL = "K2PRINTER"
 LIGHT_OFF = ((0, "Never"), (300, "5 min"), (600, "10 min"), (1800, "30 min"))
 # 99999999 s is stock's "never"
 IDLE_OFF = ((900, "15 min"), (1800, "30 min"), (3600, "1 hour"),
@@ -151,6 +157,9 @@ UPDATE_SNOOZE = 24 * 3600
 PA_RESULT_TIMEOUT = 600
 # Error lines shown while idle; while printing or paused every one is shown
 IDLE_ALERTS = ("Safety watch", "Chamber heater", "safety watch")
+# Notices that wait their turn (no waking the screen, not over other boxes)
+QUIET_NOTICES = ("update", "usb_new", "usb_unreadable", "usb_busy",
+                 "usb_done")
 
 
 class Config:
@@ -488,6 +497,69 @@ def point_gcodes(where):
                    else TIMELAPSE_INTERNAL)
 
 
+def usb_disk():
+    """The drive in the K2's USB port, or None: device, size, a name for
+    it (vendor model), an id to remember it by and whether it is mounted."""
+    base = "/sys/block/" + USB_DEV
+    try:
+        size = int(read_text(base + "/size") or 0) * 512
+    except ValueError:
+        size = 0
+    if size <= 0:
+        return None
+    model = " ".join(x for x in (read_text(base + "/device/vendor"),
+                                 read_text(base + "/device/model")) if x)
+    return {"dev": USB_DEV, "bytes": size, "gb": size / 1e9,
+            "model": model or "USB drive",
+            "id": "%s-%d" % (model, size),
+            "mounted": os.path.ismount(USB_MOUNT)}
+
+
+def usb_in_use():
+    """G-code, time-lapse or log folders on the USB drive right now."""
+    return [os.path.basename(link) for link in
+            (GCODE_LINK, TIMELAPSE_LINK, LOGS_LINK)
+            if os.path.realpath(link).startswith(USB_MOUNT + "/")]
+
+
+def format_usb(dev=USB_DEV, mount=USB_MOUNT):
+    """Erase the USB drive and make it one FAT32 volume (readable on
+    Windows and macOS too; FAT32 uses the kernel's own fast driver, unlike
+    NTFS's FUSE one). The whole drive, no partition table: the K2 mounts
+    sda itself when it has no sda1. Refused for anything but sdX, odd
+    sizes, or a drive holding the folders in use."""
+    if not re.match(USB_DEV_RE, dev):
+        raise ValueError("not a USB drive: %s" % dev)
+    path = "/dev/" + dev
+    size = int(read_text("/sys/block/%s/size" % dev) or 0) * 512
+    if not 256e6 <= size <= 2.2e12:
+        raise ValueError("drive size %.1f GB not supported" % (size / 1e9))
+    busy = usb_in_use()
+    if busy:
+        raise OSError("in use for %s" % ", ".join(busy))
+    with open("/proc/mounts") as f:
+        mounted = [line.split()[1] for line in f
+                   if line.split()[0].startswith(path)]
+    for point in mounted:
+        subprocess.check_call(["umount", point])
+    subprocess.check_call(["mkfs.fat", "-F", "32", "-I", "-n", USB_LABEL,
+                           path], stdout=subprocess.DEVNULL,
+                          stderr=subprocess.STDOUT)
+    try:
+        # Forget the old partitions (sda1 ...) now that sda is one volume
+        import fcntl
+        fd = os.open(path, os.O_RDONLY)
+        try:
+            fcntl.ioctl(fd, 0x125F)    # BLKRRPART
+        finally:
+            os.close(fd)
+    except OSError:
+        pass
+    os.makedirs(mount, exist_ok=True)
+    subprocess.check_call(["mount", "-t", "vfat", "-o", "rw,async", path,
+                           mount])
+
+
 def restart():
     os.execv(sys.executable, [sys.executable] + sys.argv)
 
@@ -788,6 +860,10 @@ class DataThread(threading.Thread):
                     # config, so send the Settings page's choices again
                     self.screen.prefs_pending = True
                 was_ready = ready
+                usb = usb_disk()
+                if usb and not self.screen.usb:
+                    self.screen.usb_since = time.time()
+                self.screen.usb = usb
                 if time.time() - storage_at > 10:
                     storage_at = time.time()
                     self.keep_storage(mr, st)
@@ -917,6 +993,11 @@ class Screen:
         self.last_st = {}
         # moonraker-timelapse settings (None: not installed)
         self.timelapse = None
+        # USB drive in the K2's port, since when, and a format in progress
+        # or its outcome (shown as a notice)
+        self.usb = None
+        self.usb_since = 0.
+        self.usb_job = None
         # Temperature box (heater being set, the target shown) and fan box
         self.temp_pick = None
         self.temp_target = 0
@@ -1378,6 +1459,7 @@ class Screen:
             bool(self.thumb and self.thumb[1] is not None),
             self.prefs, self.zone_pick, self.zone_name, self.z_adjust,
             self.temp_pick, self.temp_target, self.fans_open,
+            self.usb, self.usb_job and self.usb_job.get("kind"),
             [(st.get(o) or {}).get("speed") for _, _, o in FANS],
             (st.get("gcode_macro _CHAMBER_FAN") or {}).get("manual"),
             (st.get("gcode_move") or {}).get("homing_origin"),
@@ -1478,7 +1560,7 @@ class Screen:
         if err:
             return None
         note = self.notice(st, err)
-        if note and note["kind"] != "update":
+        if note and note["kind"] not in QUIET_NOTICES:
             return ("notice", note)
         res = self.pa_result(st)
         if res:
@@ -1550,12 +1632,46 @@ class Screen:
                 lines.append(first)
             return {"kind": "update", "title": "Update available",
                     "lines": lines, "color": "accent", "version": latest}
+        return self.usb_notice(st)
+
+    def usb_notice(self, st):
+        """Formatting, its result, or a drive just plugged in."""
+        if self.usb_job:
+            return self.usb_job
+        usb = self.usb
+        if (not usb or remote_moonraker(self.cfg.get("screen", "moonraker"))
+                or st.get("print_stats", {}).get("state") in ("printing",
+                                                              "paused")
+                or self.busy(st)
+                or usb["id"] in (self.prefs.get("usb_asked") or [])):
+            return None
+        waited = time.time() - self.usb_since
+        name = "%s (%.0f GB)" % (usb["model"], usb["gb"])
+        if usb["mounted"] and waited > 3:
+            if self.prefs.get("gcode_storage") == "usb":
+                return None
+            free = free_gb(USB_MOUNT)
+            return {"kind": "usb_new", "title": "USB drive found",
+                    "lines": ["%s, %.1f GB free." % (name, free or 0),
+                              "Keep print files, time-lapses and logs on it?"
+                              " It saves the printer's built-in memory from"
+                              " wear. Change it any time in Settings."],
+                    "color": "accent", "id": usb["id"]}
+        if not usb["mounted"] and waited > 10:
+            return {"kind": "usb_unreadable",
+                    "title": "USB drive can't be read",
+                    "lines": ["%s is not in a format the printer reads."
+                              % name,
+                              "Format it for the printer? Everything on it"
+                              " will be erased. It will still work on"
+                              " Windows and Mac computers."],
+                    "color": "warn", "id": usb["id"]}
         return None
 
     def urgent(self, st, err):
         """An error notice is waiting: wake the screen and keep it on."""
         note = self.notice(st, err)
-        return bool(note and note["kind"] != "update")
+        return bool(note and note["kind"] not in QUIET_NOTICES)
 
     def notice_key(self, st, err):
         note = self.notice(st, err)
@@ -1568,9 +1684,9 @@ class Screen:
         col = self.c[note["color"]]
         box = (110, 50, W - 110, 430)
         self.panel(d, box, col, True)
-        icon = "update" if note["kind"] == "update" else "warning"
+        icon = "update" if note["kind"] in QUIET_NOTICES else "warning"
         self.icon(d, icon, box[0] + 46, 96, 30, col)
-        if note["kind"] != "update":
+        if note["kind"] not in QUIET_NOTICES:
             c = (box[0] + 46, 96)
             self.anims.append({"kind": "pulse", "center": c, "color": col,
                                "big": True,
@@ -1588,11 +1704,26 @@ class Screen:
             self.text(d, (box[0] + 30, y), line, font, colour, anchor="lm")
             y += 34 if font == "s" else 28
         self.buttons = []
-        if note["kind"] == "update":
-            self.button(d, (box[0] + 30, 350, W // 2 - 10, 410), "Later",
-                        ("notice_later", note["version"]), "muted", True, "m")
-            self.button(d, (W // 2 + 10, 350, box[2] - 30, 410),
-                        "Update now", ("notice_update",), "accent", True, "m")
+        two = {"update": (("Later", ("notice_later", note.get("version"))),
+                          ("Update now", ("notice_update",))),
+               "usb_new": (("Not now", ("usb_later", note.get("id"))),
+                           ("Use it", ("usb_use", note.get("id")))),
+               "usb_unreadable": (("Not now", ("usb_later", note.get("id"))),
+                                  ("Format", ("usb_format_ask",)))}
+        if note["kind"] in two:
+            (l1, a1), (l2, a2) = two[note["kind"]]
+            self.button(d, (box[0] + 30, 350, W // 2 - 10, 410), l1, a1,
+                        "muted", True, "m")
+            self.button(d, (W // 2 + 10, 350, box[2] - 30, 410), l2, a2,
+                        "accent", True, "m")
+        elif note["kind"] == "usb_busy":
+            c = (W // 2, 380)
+            self.anims.append({"kind": "spin", "center": c, "r": 16,
+                               "rect": (c[0] - 22, c[1] - 22, c[0] + 22,
+                                        c[1] + 22)})
+        elif note["kind"] == "usb_done":
+            self.button(d, (W // 2 - 110, 350, W // 2 + 110, 410), "OK",
+                        ("usb_done_ok",), "accent", True, "m")
         else:
             self.button(d, (W // 2 - 110, 350, W // 2 + 110, 410), "OK",
                         ("notice_ok", note["ack"]), "accent", True, "m")
@@ -2722,7 +2853,9 @@ class Screen:
         busy = st.get("print_stats", {}).get("state") in ("printing",
                                                           "paused")
         want = self.prefs.get("gcode_storage", "internal")
-        bw = (x1 - pad - bx - 10) // 2
+        usb = self.usb
+        fw = 110 if usb else 0
+        bw = (x1 - pad - bx - 10 - (fw + 10 if fw else 0)) // 2
         gb = lambda v: ("%.1f GB free" % v) if v is not None else ""
         opts = (("internal", "Printer · %s" % gb(state["internal_free"]),
                  True),
@@ -2734,6 +2867,11 @@ class Screen:
             on = want == where
             self.button(d, box, label, ("pref", "gcode_storage", where),
                         "accent" if on else "muted", ok and not busy, "xs")
+        if usb:
+            fx = x1 - pad - fw
+            self.button(d, (fx, y, x1 - pad, y + rh), "Format",
+                        ("usb_format_ask",), "warn",
+                        not busy and not usb_in_use(), "xs")
 
     def draw_zone_pick(self, d, body):
         x0, y0, x1, y1 = body
@@ -2761,6 +2899,49 @@ class Screen:
         by = top + (i // cols) * (rh + gap)
         self.button(d, (bx, by, bx + bw, by + rh), "Back", ("zone_back",),
                     "muted", True, "xs")
+
+    def remember_usb(self, usb_id):
+        asked = list(self.prefs.get("usb_asked") or [])
+        if usb_id and usb_id not in asked:
+            self.prefs["usb_asked"] = (asked + [usb_id])[-10:]
+            try:
+                save_prefs(self.prefs)
+            except Exception:
+                pass
+
+    def start_usb_format(self):
+        st = self.last_st
+        if st.get("print_stats", {}).get("state") in ("printing", "paused"):
+            self.usb_job = {"kind": "usb_done", "title": "Not formatted",
+                            "lines": ["The printer is printing."],
+                            "color": "warn"}
+            return
+        self.usb_job = {"kind": "usb_busy", "title": "Formatting",
+                        "lines": ["Formatting the USB drive. This takes a few"
+                                  " seconds; don't unplug it."],
+                        "color": "accent"}
+
+        def run():
+            try:
+                format_usb()
+                job = {"kind": "usb_done", "title": "USB drive ready",
+                       "lines": ["Formatted for the printer (FAT32, label %s)."
+                                 % USB_LABEL,
+                                 "Choose Storage: USB in Settings to keep"
+                                 " files, time-lapses and logs on it."],
+                       "color": "ok"}
+            except Exception as e:
+                msg = str(e)
+                if "in use" in msg:
+                    msg = ("It holds the printer's files or logs. Set Storage"
+                           " to Printer in Settings, restart the printer,"
+                           " then format.")
+                job = {"kind": "usb_done", "title": "Not formatted",
+                       "lines": [msg], "color": "warn"}
+                print("usb format: %s" % e, flush=True)
+            self.usb_job = job
+            self.dirty = True
+        threading.Thread(target=run, daemon=True).start()
 
     def set_pref(self, key, value, mr, st):
         self.prefs[key] = value
@@ -3150,6 +3331,19 @@ class Screen:
                          "VARIABLE=manual VALUE=0")
             elif kind == "box_close":
                 self.temp_pick, self.fans_open = None, False
+            elif kind == "usb_use":
+                self.remember_usb(action[1])
+                self.set_pref("gcode_storage", "usb", mr, self.last_st)
+            elif kind == "usb_later":
+                self.remember_usb(action[1])
+            elif kind == "usb_format_ask":
+                usb = self.usb or {}
+                self.confirm = ("Erase everything on %s (%.0f GB) and format"
+                                " it for the printer?" % (
+                                    usb.get("model", "the USB drive"),
+                                    usb.get("gb", 0)), "@usbformat")
+            elif kind == "usb_done_ok":
+                self.usb_job = None
             elif kind == "timelapse":
                 mr.post("/machine/timelapse/settings?enabled=%s"
                         % ("true" if action[1] else "false"))
@@ -3275,6 +3469,8 @@ class Screen:
                     self.editor = None
                 if script == "@restart":
                     mr.post("/printer/restart")
+                elif script == "@usbformat":
+                    self.start_usb_format()
                 elif script.startswith("@wifi:"):
                     self.wifi.connect(script[6:], "", self.after_wifi)
                 else:

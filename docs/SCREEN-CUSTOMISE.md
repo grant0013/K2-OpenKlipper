@@ -40,6 +40,14 @@ The gear at the bottom of the side bar opens Settings, with no file to edit:
   goes back to the printer's storage until it is plugged in again; files on
   the other place are not shown until you switch back. Not shown on a K2
   run from a PC (files live on the PC).
+- **Plugging in a USB drive**: the screen asks whether to keep files,
+  time-lapses and logs on it (once per drive). A drive the printer cannot
+  read (e.g. formatted on a Mac) gets an offer to **Format** it for the
+  printer, after a second "erase everything?" question. Storage has a
+  **Format** button too. Formatting makes the whole drive one FAT32 volume
+  labelled K2PRINTER (it still works on Windows and Mac). It is refused
+  while printing and while the drive holds the files or logs in use (set
+  Storage to Printer and restart first).
 - **Time-lapse**: on or off (one frame each layer from the chamber camera;
   the video is made on the printer after the print, at low priority, and
   saved to the chosen storage; Mainsail's Timelapse tab shows and downloads

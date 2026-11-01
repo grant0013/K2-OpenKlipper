@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **USB drive: plug in and go.** The touchscreen asks once per drive whether
+  to use a newly plugged drive for storage, and offers to format one the
+  K2 cannot read (two confirmations). Format (also on Settings > Storage)
+  makes the whole drive one FAT32 volume (`mkfs.fat -F 32 -I`, label
+  K2PRINTER, the kernel's own driver; the K2 mounts a partitionless sda
+  itself). Refused for anything but sdX (the K2's memory is mmcblk0), for
+  sizes outside 256 MB-2.2 TB, while printing, and while the drive holds
+  the G-code, time-lapse or log folders in use.
 - **Time-lapse on the K2** (moonraker-timelapse, vendored and adapted: the
   K2 has no wget, frames are fetched with Python): one frame a layer from
   the chamber camera into RAM, the video rendered after the print with the
