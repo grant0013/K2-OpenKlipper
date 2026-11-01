@@ -1,5 +1,41 @@
 # Changelog
 
+## v0.4.4-alpha.1 (2026-11-01)
+
+- **Cancel works like stock:** `CANCEL_PRINT` runs `END_PRINT` (heaters off,
+  lift, park) instead of stopping dead with the motors off. The safety watch
+  cancels with `CANCEL_PRINT SAFE=1`: no motion, motors off, as before.
+- **END_PRINT keeps the motors on** (stock comments out `M84`) and lowers the
+  bed half way, like stock's END_PRINT_POINT, so the bed no longer drops on
+  the K2 Plus and the print is presented.
+- **Warm start:** a print that follows one that finished or was cancelled
+  normally, with the motors still on, skips `KZ_ALIGN_BOTTOM` and `G28 X Y`;
+  the Z tap (and the K2 Plus Z tilt) still runs.
+  `[gcode_macro START_PRINT] variable_warm_start: False` always homes in full.
+- **Chamber light auto-off:** `[gcode_macro _LIGHT_IDLE] variable_off_after:`
+  seconds after a print, a cancel or start-up (0 = stays on, the default).
+- Idle timeout messages show the configured time; `[idle_timeout] timeout:`
+  in printer-overrides.cfg sets how long before heaters and motors go off.
+- **Network announce:** Moonraker `[zeroconf]`, added to existing installs.
+- **Nozzle tap with the fans down:** like stock `prth_min_fans`, the hotend
+  fans drop to 60% while the strain gauge is armed (8 s settle,
+  `prth_fan_settle`), held through the tap. Fan vibration fired hot taps on
+  the K2 Plus with nothing touching. The safety watch checks the hotend fan
+  only at full power.
+- **Failed bed mesh:** the nozzle is cleaned and Z and the mesh measured
+  again (`variable_dirty_retries: 2`) before the print stops and asks for a
+  nozzle and plate clean.
+- **K2 Plus first layer:** Creality's own hot-nozzle correction
+  (0.017316 + 5.1e-6 x (print - tap temperature)^2, 0.050 mm for PLA at
+  220C). `variable_z_offset` is your fine-tune, in Creality's direction
+  (negative = nozzle closer).
+- **K2 Plus beta, first prints on a real K2 Plus:** hotend fans on toolhead
+  PB7 + main PB1 as stock; G28 outside a print sets Z from the bottom
+  switches first; scrub and probe points from stock; chamber heater
+  supervisor (`[hark_chamber]`, off until enabled). A printer already on the
+  K2 Plus config now updates with the Update button like a K2 (the first
+  install still needs `OKL_K2PLUS_BETA=1`).
+
 ## v0.4.3-alpha.1 (2026-11-01)
 
 - **K2 Plus (F008) beta config** (`k2plus-beta` branch, untested on a real

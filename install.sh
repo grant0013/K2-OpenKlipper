@@ -112,6 +112,12 @@ case "$MODEL" in
             CR0CN240110C10:0|CR0CN240319C13:0|CR0CN240319C14:0) ;;
             *) [ "${OKL_FORCE:-0}" = 1 ] || die "this K2 Plus layout ($BOARD, structure $STRUCT) is not the one the beta config was written for; please send the check output to the developer" ;;
         esac
+        # An update of a printer already running the K2 Plus config (its boot
+        # hook names it) was opted in at install: the Mainsail/touchscreen
+        # Update button runs install.sh --update without the flag
+        if [ "$MODE" = update ] && grep -q "boot-mainline.*mainline_stage2_k2plus\.cfg" /etc/rc.local 2>/dev/null; then
+            OKL_K2PLUS_BETA=1
+        fi
         if [ "$MODE" != check ]; then
             [ "${OKL_K2PLUS_BETA:-0}" = 1 ] || [ "${OKL_FORCE:-0}" = 1 ] || die "the K2 Plus config is a BETA that has not run on a real K2 Plus yet. Read docs/K2-PLUS-BETA.md, then run with OKL_K2PLUS_BETA=1"
             echo "    WARNING: K2 Plus BETA config (untested on a real K2 Plus)"

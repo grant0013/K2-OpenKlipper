@@ -228,6 +228,13 @@ the output.
   printer on the network by name. The printer's IP is on the touchscreen's
   Wi-Fi page.
 
+## Updates
+
+After the first install, updates come from the project's GitHub releases
+like any Klipper update: Mainsail offers a new version in a dialog with an
+Update button (also on the touchscreen's Machine page, or `OKL_UPDATE
+CONFIRM=1` in the console). Your printer-overrides.cfg is kept.
+
 ## What to send back after each step
 
 - the console output of the step
