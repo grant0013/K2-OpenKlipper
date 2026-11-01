@@ -478,6 +478,7 @@ class DataThread(threading.Thread):
 
     def run(self):
         settings_at = wifi_at = alerts_at = 0
+        thumb_file, thumb_tries, thumb_at = None, 0, 0.
         while True:
             mr = Moonraker(self.cfg.get("screen", "moonraker"))
             st, err = {}, None
@@ -493,13 +494,28 @@ class DataThread(threading.Thread):
                 # While the printer reports a stage, follow the console too
                 if (st.get("gcode_macro _STAGE") or {}).get("text"):
                     self.screen.console = mr.console()
-                # The print's thumbnail, once per file
+                # The print's thumbnail. Moonraker may still be reading a
+                # file the slicer has just uploaded and started, so a miss
+                # is retried every 15 s for the first 5 minutes.
                 fn = st.get("print_stats", {}).get("filename") or ""
-                if fn and (self.screen.thumb or (None,))[0] != fn:
+                if fn != thumb_file:
+                    thumb_file, thumb_tries, thumb_at = fn, 0, 0.
+                if (fn and (not self.screen.thumb
+                            or self.screen.thumb[0] != fn
+                            or self.screen.thumb[1] is None)
+                        and thumb_tries < 20
+                        and time.time() - thumb_at > 15):
+                    thumb_tries += 1
+                    thumb_at = time.time()
                     try:
                         img, height = mr.thumbnail(fn)
-                    except Exception:
+                        if img is None:
+                            print("thumbnail: %s has none (try %d)"
+                                  % (fn, thumb_tries), flush=True)
+                    except Exception as e:
                         img, height = None, 0.
+                        print("thumbnail: %s: %s (try %d)"
+                              % (fn, e, thumb_tries), flush=True)
                     self.screen.thumb = (fn, img, height)
                     self.screen.preview_cache = {}
                 # Error lines: every refresh while a print runs, else every 5 s
@@ -1000,6 +1016,7 @@ class Screen:
             (st.get("hark_calib") or {}).get("pending"),
             self.track_stage(st), self.console[-2:],
             self.notice_key(st, err),
+            bool(self.thumb and self.thumb[1] is not None),
             # the stage timer ticks every 2 s while a stage runs
             int(time.time() / 2) if self.stage_log and self.stage_log[-1][0]
             else 0],

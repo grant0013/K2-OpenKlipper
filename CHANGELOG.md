@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Touchscreen preview: the thumbnail was asked for once, the moment a print
+  started. A file the slicer had just uploaded and started could still be
+  in Moonraker's metadata scan, and the screen then showed no preview for
+  the whole print. A miss is now retried every 15 s for 5 minutes, and the
+  reason is written to /tmp/harkscreen.log.
+
 ## v0.4.8-alpha.1 (2026-11-01)
 
 - Fixed: every K2 Plus warned "Motor check: ... calibration param 19 is 0.15
