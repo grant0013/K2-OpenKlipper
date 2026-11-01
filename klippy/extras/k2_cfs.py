@@ -1951,6 +1951,14 @@ class K2CFS:
                 return True
         return False
 
+    def _gcode_z(self, raw_z):
+        # Raw toolhead Z to the G-code Z that reaches it under the current
+        # G-code offset, plus a hair so float rounding stays above a gate
+        # (offset read off the live position pair, so a G92 counts too)
+        status = self.printer.lookup_object('gcode_move').get_status(0.)
+        origin_z = status['position'][2] - status['gcode_position'][2]
+        return raw_z - origin_z + 0.001
+
     def _flex_filament_path(self, gcmd, message):
         # Jacob10383's filament_retry_motion: sweep the toolhead across the
         # bed so the PTFE tube to the head changes shape, which frees
@@ -1973,7 +1981,8 @@ class K2CFS:
         # Mid-print the head sits only just above the part, so lift clear of
         # it before crossing the bed and come back down at the chute
         z_max = toolhead.get_status(0.).get('axis_maximum', [0., 0., 0.])[2]
-        z_lift = min(position[2] + self.stall_retry_z_lift, z_max)
+        z_lift = self._gcode_z(
+            min(position[2] + self.stall_retry_z_lift, z_max))
         lines = ["G90", "G1 Z%.3f F600" % z_lift,
                  "G1 Y%.3f F%.3f" % (self.purge_safe_y, rate)]
         for move in self.stall_retry_moves:
@@ -1985,7 +1994,7 @@ class K2CFS:
             "G1 Y%.3f F%.3f" % (self.purge_y, rate),
             "G1 X%.3f Y%.3f F%.3f" % (self.purge_gate_x, self.purge_y, rate),
             "G1 X%.3f Y%.3f F%.3f" % (self.purge_x, self.purge_y, rate),
-            "G1 Z%.3f F600" % position[2],
+            "G1 Z%.3f F600" % self._gcode_z(position[2]),
             "M400",
         ])
         self.gcode.run_script_from_command(
@@ -2605,7 +2614,12 @@ class K2CFS:
         print_temp = heater.get_status(0.).get('target', 0.)
         new_temp = self._slot_nozzle_temp(slot) or print_temp
         purge_temp = max(print_temp, new_temp)
-        lift_z = max(start[2] + self.toolchange_lift, self.purge_min_z)
+        # start is the raw toolhead Z and the purge gate checks raw Z, but G1
+        # takes G-code Z: convert, or a negative SET_GCODE_OFFSET (the hot
+        # nozzle comp, ~-0.04 for PETG) lands the lift just under
+        # purge_min_z and the change aborts (HT-P-2026-0416, 2026-11-01)
+        lift_z = self._gcode_z(
+            max(start[2] + self.toolchange_lift, self.purge_min_z))
         fan_speeds = self._fan_speeds()
         self._set_fans({name: 0. for name in fan_speeds})
         reactor = self.printer.get_reactor()
