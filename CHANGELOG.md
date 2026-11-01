@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.4.16-alpha.1 (2026-11-01)
+
+- **Eject the USB drive from the touchscreen** (Settings > Storage, next to
+  Format). Moves G-codes and time-lapses back to the printer's storage; when
+  Klipper's log is on the drive, restarts Klipper the way the printer starts
+  it (the rc.local hook's `switch-to-mainline.sh` and config), which reopens
+  the log internally and restarts Moonraker and the screen; the restarted
+  screen finishes the eject. Then `sync` and `umount` (retried for 40 s),
+  and "Safe to remove" or, if the drive is still busy, "switch the printer
+  off before unplugging it". Refused while printing. The prefs flag
+  `usb_ejected` keeps the drive unused (`storage-links.sh` and the screen)
+  until it is unplugged, or Storage: USB is chosen while it is still
+  mounted; no "USB drive found" prompt for an ejected drive.
+- **Chamber target on the Status page.** With the K2 Plus chamber heater
+  enabled, the Chamber gauge shows its target (`hark_chamber.requested`)
+  like the nozzle and bed.
+
 ## v0.4.15-alpha.1 (2026-11-01)
 
 - **Pressure advance calibration saves print-ready values by default.** The

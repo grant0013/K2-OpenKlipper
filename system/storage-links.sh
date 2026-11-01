@@ -14,7 +14,10 @@ PREFS=$PDATA/config/harkscreen-settings.json
 USB=${OKL_USB:-/mnt/exUDISK}
 
 where=internal
+# A drive ejected on the touchscreen stays unused until it is unplugged and
+# plugged in again (the screen clears "usb_ejected" when it is removed)
 if grep -q '"gcode_storage": *"usb"' "$PREFS" 2>/dev/null \
+        && ! grep -q '"usb_ejected": *true' "$PREFS" 2>/dev/null \
         && grep -q " $USB " "$MOUNTS"; then
     where=usb
 fi

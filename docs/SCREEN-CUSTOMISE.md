@@ -46,8 +46,14 @@ The gear at the bottom of the side bar opens Settings, with no file to edit:
   printer, after a second "erase everything?" question. Storage has a
   **Format** button too. Formatting makes the whole drive one FAT32 volume
   labelled K2PRINTER (it still works on Windows and Mac). It is refused
-  while printing and while the drive holds the files or logs in use (set
-  Storage to Printer and restart first).
+  while printing and while the drive holds the files or logs in use (Eject
+  it first).
+- **Eject**, next to Format: unplug a drive safely. The printer moves files,
+  time-lapses and logs back to its own storage (restarting Klipper if its
+  log was on the drive, about a minute), writes everything out, unmounts
+  the drive and says **Safe to remove**. Not while printing. The drive is
+  not used again until it is unplugged and plugged in again (or Storage:
+  USB is chosen while it is still in).
 - **Time-lapse**: on or off (one frame each layer from the chamber camera;
   the video is made on the printer after the print, at low priority, and
   saved to the chosen storage; Mainsail's Timelapse tab shows and downloads
@@ -58,7 +64,8 @@ The gear at the bottom of the side bar opens Settings, with no file to edit:
 On the **Status** page, tap the Nozzle or Bed gauge to set its temperature
 (PLA/PETG/ABS/TPU presets, +/-5 and 10 degree steps, up to the printer's own
 limit less a margin, nozzle at most 300C). The Chamber gauge sets the K2
-Plus chamber heater once it is enabled; otherwise it opens the fans. Tap the
+Plus chamber heater once it is enabled (its target shows under the gauge,
+like the nozzle and bed); otherwise it opens the fans. Tap the
 fan in the bottom bar for the part, side and exhaust fans (exhaust: Auto
 gives it back to the automatic chamber control). The slicer can change fans
 and temperatures again at its next command, as on stock.

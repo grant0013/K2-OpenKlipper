@@ -560,6 +560,27 @@ def format_usb(dev=USB_DEV, mount=USB_MOUNT):
                            mount])
 
 
+def mainline_start_cmd():
+    """The printer's own start command (script, config) from its boot
+    hook in /etc/rc.local, or None."""
+    m = re.search(r"sh (\S+/switch-to-mainline\.sh) (\S+\.cfg)",
+                  read_text("/etc/rc.local"))
+    return (m.group(1), m.group(2)) if m else None
+
+
+def unmount_usb(mount=USB_MOUNT, tries=20):
+    """Flush and unmount the USB drive; True when it is safe to remove."""
+    subprocess.call(["sync"])
+    for _ in range(tries):
+        if not os.path.ismount(mount):
+            return True
+        if subprocess.call(["umount", mount], stderr=subprocess.DEVNULL) \
+                == 0:
+            return True
+        time.sleep(2)
+    return not os.path.ismount(mount)
+
+
 def restart():
     os.execv(sys.executable, [sys.executable] + sys.argv)
 
@@ -863,6 +884,14 @@ class DataThread(threading.Thread):
                 usb = usb_disk()
                 if usb and not self.screen.usb:
                     self.screen.usb_since = time.time()
+                if not usb and self.screen.prefs.get("usb_ejected") \
+                        and not self.screen.prefs.get("usb_eject_pending"):
+                    # unplugged after an eject: the next drive is used again
+                    self.screen.prefs["usb_ejected"] = False
+                    try:
+                        save_prefs(self.screen.prefs)
+                    except Exception:
+                        pass
                 self.screen.usb = usb
                 if time.time() - storage_at > 10:
                     storage_at = time.time()
@@ -898,6 +927,8 @@ class DataThread(threading.Thread):
         if st.get("print_stats", {}).get("state") in ("printing", "paused"):
             return
         want = self.screen.prefs.get("gcode_storage", "internal")
+        if self.screen.prefs.get("usb_ejected"):
+            want = "internal"
         state = storage_state()
         where = "usb" if want == "usb" and state["usb"] else "internal"
         if state["on"] == where:
@@ -998,6 +1029,10 @@ class Screen:
         self.usb = None
         self.usb_since = 0.
         self.usb_job = None
+        if self.prefs.get("usb_eject_pending"):
+            # an eject restarted Klipper (and so this screen): finish it
+            threading.Thread(target=self.finish_usb_eject,
+                             daemon=True).start()
         # Temperature box (heater being set, the target shown) and fan box
         self.temp_pick = None
         self.temp_target = 0
@@ -1460,6 +1495,8 @@ class Screen:
             self.prefs, self.zone_pick, self.zone_name, self.z_adjust,
             self.temp_pick, self.temp_target, self.fans_open,
             self.usb, self.usb_job and self.usb_job.get("kind"),
+            self.usb_job and self.usb_job.get("title"),
+            self.prefs.get("usb_ejected"),
             [(st.get(o) or {}).get("speed") for _, _, o in FANS],
             (st.get("gcode_macro _CHAMBER_FAN") or {}).get("manual"),
             (st.get("gcode_move") or {}).get("homing_origin"),
@@ -1639,7 +1676,8 @@ class Screen:
         if self.usb_job:
             return self.usb_job
         usb = self.usb
-        if (not usb or remote_moonraker(self.cfg.get("screen", "moonraker"))
+        if (not usb or self.prefs.get("usb_ejected")
+                or remote_moonraker(self.cfg.get("screen", "moonraker"))
                 or st.get("print_stats", {}).get("state") in ("printing",
                                                               "paused")
                 or self.busy(st)
@@ -2175,10 +2213,14 @@ class Screen:
     def draw_status_side(self, d, body, st, left, pad):
         x0, y0, x1, y1 = body
         # Temperature gauges down the right
+        chamber = dict(st.get("temperature_sensor chamber_temperature", {}))
+        hc = st.get("hark_chamber") or {}
+        if hc.get("enabled"):
+            # the chamber heater's target, as the nozzle and bed show theirs
+            chamber["target"] = hc.get("requested") or 0
         tiles = [("Nozzle", "nozzle", st.get("extruder", {})),
                  ("Bed", "bed", st.get("heater_bed", {})),
-                 ("Chamber", "chamber",
-                  st.get("temperature_sensor chamber_temperature", {}))]
+                 ("Chamber", "chamber", chamber)]
         tx0, tx1 = x0 + 434, x1 - pad
         th = (left[3] - left[1] - 2 * 10) // 3
         chamber_heater = (st.get("hark_chamber") or {}).get("enabled")
@@ -2854,12 +2896,22 @@ class Screen:
                                                           "paused")
         want = self.prefs.get("gcode_storage", "internal")
         usb = self.usb
-        fw = 110 if usb else 0
-        bw = (x1 - pad - bx - 10 - (fw + 10 if fw else 0)) // 2
+        ejected = self.prefs.get("usb_ejected")
+        # small buttons: Eject (a mounted drive) and Format (any drive)
+        small = []
+        if usb and usb["mounted"] and not ejected:
+            small.append(("Eject", ("usb_eject",), "accent", not busy))
+        if usb and not ejected:
+            small.append(("Format", ("usb_format_ask",), "warn",
+                          not busy and not usb_in_use()))
+        fw = 84
+        sw = len(small) * (fw + 8)
+        bw = (x1 - pad - bx - 10 - sw) // 2
         gb = lambda v: ("%.1f GB free" % v) if v is not None else ""
         opts = (("internal", "Printer · %s" % gb(state["internal_free"]),
                  True),
-                ("usb", ("USB · %s" % gb(state["usb_free"]))
+                ("usb", "USB drive (ejected)" if usb and ejected else
+                 ("USB · %s" % gb(state["usb_free"]))
                  if state["usb"] else "USB drive (not inserted)",
                  state["usb"] or want == "usb"))
         for i, (where, label, ok) in enumerate(opts):
@@ -2867,11 +2919,10 @@ class Screen:
             on = want == where
             self.button(d, box, label, ("pref", "gcode_storage", where),
                         "accent" if on else "muted", ok and not busy, "xs")
-        if usb:
-            fx = x1 - pad - fw
-            self.button(d, (fx, y, x1 - pad, y + rh), "Format",
-                        ("usb_format_ask",), "warn",
-                        not busy and not usb_in_use(), "xs")
+        for i, (text, action, colour, enabled) in enumerate(small):
+            fx = x1 - pad - (len(small) - i) * (fw + 8) + 8
+            self.button(d, (fx, y, fx + fw, y + rh), text, action, colour,
+                        enabled, "xs")
 
     def draw_zone_pick(self, d, body):
         x0, y0, x1, y1 = body
@@ -2943,8 +2994,80 @@ class Screen:
             self.dirty = True
         threading.Thread(target=run, daemon=True).start()
 
+    def start_usb_eject(self, mr):
+        st = self.last_st
+        if st.get("print_stats", {}).get("state") in ("printing", "paused"):
+            self.usb_job = {"kind": "usb_done", "title": "Not ejected",
+                            "lines": ["The printer is printing. Eject the"
+                                      " drive when the print is over."],
+                            "color": "warn"}
+            return
+        self.prefs["usb_ejected"] = True
+        self.prefs["usb_eject_pending"] = True
+        try:
+            save_prefs(self.prefs)
+        except Exception:
+            pass
+        busy = usb_in_use()
+        self.usb_job = {"kind": "usb_busy", "title": "Ejecting",
+                        "lines": ["Moving the printer's files off the USB"
+                                  " drive. Don't unplug it yet."],
+                        "color": "accent"}
+        if "logs" in busy:
+            # Klipper's log is open on the drive: restart Klipper the way
+            # the printer starts it (storage-links.sh keeps everything
+            # internal while usb_ejected is set). That restarts this
+            # screen too; the new one finishes the eject.
+            cmd = mainline_start_cmd()
+            if cmd:
+                self.usb_job["lines"] = [
+                    "Restarting Klipper to release the USB drive (about a"
+                    " minute). Don't unplug it yet."]
+                subprocess.Popen(["sh", cmd[0], cmd[1]],
+                                 stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL,
+                                 start_new_session=True)
+                return
+        if busy:
+            try:
+                point_gcodes("internal")
+            except OSError as e:
+                print("eject: %s" % e, flush=True)
+            mr.post("/server/restart")
+        threading.Thread(target=self.finish_usb_eject, daemon=True).start()
+
+    def finish_usb_eject(self):
+        # Moonraker (and Klipper) must have let go of the drive
+        deadline = time.time() + 90
+        while usb_in_use() and time.time() < deadline:
+            time.sleep(2)
+        time.sleep(5)
+        ok = unmount_usb()
+        self.prefs["usb_eject_pending"] = False
+        try:
+            save_prefs(self.prefs)
+        except Exception:
+            pass
+        if ok:
+            self.usb_job = {"kind": "usb_done", "title": "Safe to remove",
+                            "lines": ["You can unplug the USB drive now.",
+                                      "Files are kept on the printer until"
+                                      " it is plugged in again."],
+                            "color": "ok"}
+        else:
+            self.usb_job = {"kind": "usb_done", "title": "Not ejected",
+                            "lines": ["The drive is still in use. Switch the"
+                                      " printer off before unplugging it."],
+                            "color": "warn"}
+        self.dirty = True
+
     def set_pref(self, key, value, mr, st):
         self.prefs[key] = value
+        if key == "gcode_storage" and value == "usb" \
+                and os.path.ismount(USB_MOUNT) \
+                and not self.prefs.get("usb_eject_pending"):
+            # chosen again while still mounted: the eject is undone
+            self.prefs["usb_ejected"] = False
         try:
             save_prefs(self.prefs)
         except Exception as e:
@@ -3342,6 +3465,8 @@ class Screen:
                                 " it for the printer?" % (
                                     usb.get("model", "the USB drive"),
                                     usb.get("gb", 0)), "@usbformat")
+            elif kind == "usb_eject":
+                self.start_usb_eject(mr)
             elif kind == "usb_done_ok":
                 self.usb_job = None
             elif kind == "timelapse":
