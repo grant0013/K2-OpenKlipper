@@ -45,10 +45,9 @@
 - Prime line: the nozzle lifts 1 mm after the Z0 wipe, so the slicer's first
   travel no longer drags it across the plate.
 - **Mainsail updates come from the Hark releases only**
-  (grant0013/mainsail): stock mainsail-crew/mainsail would replace the Hark
-  build. The updater's beta channel takes the newest published release
-  (GitHub lists the one marked Latest first). Updating moves an existing
-  install's Mainsail entry to the fork's releases on the beta channel.
+  (grant0013/mainsail, full releases): stock mainsail-crew/mainsail would
+  replace the Hark build. The updater's beta channel takes the newest
+  published release (GitHub lists the one marked Latest first).
 - **External Klipper host: updates from Mainsail's Update Manager.** Each
   release now carries `k2-openklipper-host.zip`
   (`tools/release/make_host_zip.py`, attached by a release workflow), which

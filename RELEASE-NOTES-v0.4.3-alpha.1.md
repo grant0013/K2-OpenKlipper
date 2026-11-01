@@ -43,9 +43,9 @@ PLA". Setup in docs/INSTALL.md, "Filament sync with OrcaSlicer".
   temperature (OrcaSlicer's K2 filaments all send `M191 S35`).
 - **Prime line:** the nozzle lifts 1 mm after the Z0 wipe, so the slicer's
   first travel no longer drags it across the plate.
-- **Mainsail updates come from the Hark releases only** (grant0013/mainsail,
-  beta channel). An update moves an existing install off stock Mainsail,
-  which would replace the Hark build.
+- **Mainsail updates come from the Hark releases only** (grant0013/mainsail).
+  An update moves an existing install off stock Mainsail, which would
+  replace the Hark build.
 - **External Klipper host:** each release carries `k2-openklipper-host.zip`,
   which Moonraker's Update Manager installs on the host. Setup in
   docs/EXTERNAL-HOST.md.

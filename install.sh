@@ -396,14 +396,9 @@ p = sys.argv[1]
 s = open(p).read()
 t = re.sub(r"(?m)^(repo:\s*)mainsail-crew/mainsail\s*$",
            r"\1grant0013/mainsail", s)
-# The bundled Mainsail is a pre-release of the fork: on channel stable the
-# updater would offer the older full release as an update. beta takes the
-# newest published release, full or pre.
-t = re.sub(r"(?m)^(\[update_manager mainsail\]\s*\n(?:(?!\[).*\n)*?channel:\s*)stable\s*$",
-           r"\1beta", t)
 if t != s:
     open(p, "w").write(t)
-    print("    moonraker.conf: Mainsail updates from grant0013/mainsail releases (beta channel)")
+    print("    moonraker.conf: Mainsail updates now from grant0013/mainsail")
 PY
 cp "$BUILD/system/moonraker-mainline.init" /etc/init.d/moonraker-mainline
 chmod 755 /etc/init.d/moonraker-mainline
