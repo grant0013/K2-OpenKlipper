@@ -24,13 +24,26 @@ On the printer, the default Klipper theme and the Hark Tech theme:
 The gear at the bottom of the side bar opens Settings, with no file to edit:
 
 - **Brightness** of the panel (25 to 100%), kept after sleep and restarts.
+- **Screen off**: how long without a touch before the panel turns off.
 - **Light off**: the chamber light switches itself off this long after a
   print ends (or never).
 - **Idle off**: how long the printer sits idle before heaters and motors go
   off; motors off lets the bed drop on a K2 Plus.
 - **Time zone** of the printer (the one Creality's settings set), used for
   the "done about" time.
+- **G-code files**: keep uploaded prints on the printer's own storage or on
+  a USB drive in the K2's USB port (FAT32, exFAT or NTFS; the K2 mounts it
+  at /mnt/exUDISK). The choice can only change while nothing is printing;
+  Moonraker restarts once. With the drive unplugged, files go back to the
+  printer's storage until it is plugged in again; files on the other place
+  are not shown until you switch back. Not shown on a K2 run from a PC
+  (files live on the PC).
 - **Highlight** colour, over the theme's own.
+
+While printing, the **Controls** page has Z offset buttons (-0.05, -0.01,
++0.01, +0.05 mm; negative = nozzle closer) for the first layer. **Save Z**
+keeps the result for every print (`variable_z_offset` of START_PRINT, sent to
+Klipper whenever it starts).
 
 Choices are kept in `harkscreen-settings.json` next to harkscreen.cfg and
 win over it; the light and idle times are sent to Klipper again whenever it

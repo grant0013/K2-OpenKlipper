@@ -7,7 +7,13 @@
   printer's time zone (picker of 17 regions, written to the printer's own
   setting) and the highlight colour. Kept in harkscreen-settings.json; the
   Klipper ones are sent again whenever Klipper restarts. The idle message
-  shows the timeout in force. Audited across 1,188 page/state/box renders.
+  shows the timeout in force. Also on the Settings page: screen-off time,
+  and where G-code files are kept (the printer's storage or a USB drive in
+  the K2's USB port; follows the drive when it is unplugged and plugged back,
+  only while idle). While printing, the Controls page has Z offset buttons
+  (-0.05/-0.01/+0.01/+0.05) and Save Z, kept for every print. Audited across
+  1,320 page/state/box renders. The installer repoints a G-code link left
+  dangling by a removed USB drive.
 
 ## v0.4.13-alpha.1 (2026-11-01)
 

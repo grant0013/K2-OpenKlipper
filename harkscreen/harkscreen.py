@@ -50,7 +50,8 @@ OBJECTS = {
     "temperature_sensor chamber_temperature": ["temperature"],
     "fan": ["speed"],
     "toolhead": ["homed_axes"],
-    "gcode_move": ["gcode_position"],
+    "gcode_move": ["gcode_position", "homing_origin"],
+    "gcode_macro START_PRINT": ["z_offset"],
     "k2_cfs": ["fitted", "online", "active_slot", "feed_slot", "running_out",
                "runout_next",
                "temperature", "humidity"],
@@ -89,6 +90,13 @@ PREFS_FILE = os.path.join(os.path.dirname(os.path.abspath(CFG_PATH)),
                           "harkscreen-settings.json")
 BRIGHTNESS_SH = "/usr/bin/brightness.sh"   # Creality's backlight control
 BRIGHTNESS = (25, 50, 75, 100)
+SLEEP_AFTER = ((120, "2 min"), (300, "5 min"), (600, "10 min"), (0, "Never"))
+# G-code storage: Klipper and Moonraker read GCODE_LINK; it points at the
+# internal folder or at a folder on the USB drive the K2 mounts itself
+GCODE_LINK = "/mnt/UDISK/printer_data_mainline/gcodes"
+GCODE_INTERNAL = "/mnt/UDISK/printer_data/gcodes"
+USB_MOUNT = "/mnt/exUDISK"
+GCODE_USB = USB_MOUNT + "/gcodes"
 LIGHT_OFF = ((0, "Never"), (300, "5 min"), (600, "10 min"), (1800, "30 min"))
 # 99999999 s is stock's "never"
 IDLE_OFF = ((900, "15 min"), (1800, "30 min"), (3600, "1 hour"),
@@ -406,7 +414,47 @@ def klipper_prefs(prefs, idle):
             lines.append("_LIGHT_IDLE")
     if "idle" in prefs:
         lines.append("SET_IDLE_TIMEOUT TIMEOUT=%d" % int(prefs["idle"]))
+    if "z_offset" in prefs:
+        lines.append("SET_GCODE_VARIABLE MACRO=START_PRINT VARIABLE=z_offset"
+                     " VALUE=%.3f" % float(prefs["z_offset"]))
     return "\n".join(lines)
+
+
+def free_gb(path):
+    try:
+        st = os.statvfs(path)
+        return st.f_bavail * st.f_frsize / 1e9
+    except OSError:
+        return None
+
+
+def storage_state():
+    """Where G-codes go now, and whether a USB drive is there."""
+    try:
+        target = os.readlink(GCODE_LINK)
+    except OSError:
+        target = None
+    return {"on": "usb" if target == GCODE_USB else
+            ("internal" if target == GCODE_INTERNAL else None),
+            "usb": os.path.ismount(USB_MOUNT),
+            "internal_free": free_gb("/mnt/UDISK"),
+            "usb_free": free_gb(USB_MOUNT) if os.path.ismount(USB_MOUNT)
+            else None}
+
+
+def point_gcodes(where):
+    """Point the G-code folder at the USB drive or back at internal
+    storage. Moonraker must restart to read it."""
+    target = GCODE_USB if where == "usb" else GCODE_INTERNAL
+    if where == "usb":
+        if not os.path.ismount(USB_MOUNT):
+            raise OSError("no USB drive")
+        os.makedirs(GCODE_USB, exist_ok=True)
+    tmp = GCODE_LINK + ".new"
+    if os.path.lexists(tmp):
+        os.remove(tmp)
+    os.symlink(target, tmp)
+    os.replace(tmp, GCODE_LINK)
 
 
 def restart():
@@ -652,6 +700,7 @@ class DataThread(threading.Thread):
         thumb_file, thumb_tries, thumb_at = None, 0, 0.
         sync_at = 0.
         was_ready = False
+        storage_at = 0.
         while True:
             mr = Moonraker(self.cfg.get("screen", "moonraker"))
             st, err = {}, None
@@ -697,6 +746,9 @@ class DataThread(threading.Thread):
                     # config, so send the Settings page's choices again
                     self.screen.prefs_pending = True
                 was_ready = ready
+                if time.time() - storage_at > 10:
+                    storage_at = time.time()
+                    self.keep_storage(mr, st)
                 if time.time() - sync_at > 600:
                     if self.sync(mr, st):
                         sync_at = time.time()
@@ -718,6 +770,27 @@ class DataThread(threading.Thread):
             self.version += 1
             time.sleep(self.cfg.num("screen", "refresh"))
 
+
+    def keep_storage(self, mr, st):
+        """USB storage chosen: follow the drive. Unplugged -> back to
+        internal storage; plugged in again -> USB. Only while idle, on a K2
+        whose Moonraker runs on the printer, and Moonraker restarts."""
+        if remote_moonraker(mr.base) or not os.path.lexists(GCODE_LINK):
+            return
+        if st.get("print_stats", {}).get("state") in ("printing", "paused"):
+            return
+        want = self.screen.prefs.get("gcode_storage", "internal")
+        state = storage_state()
+        where = "usb" if want == "usb" and state["usb"] else "internal"
+        if state["on"] == where:
+            return
+        try:
+            point_gcodes(where)
+        except OSError as e:
+            print("storage: %s" % e, flush=True)
+            return
+        print("storage: G-codes now on %s" % where, flush=True)
+        mr.post("/server/restart")
 
     def sync(self, mr, st):
         """K2 board driven by a separate PC: fetch the screen of the release
@@ -800,6 +873,9 @@ class Screen:
         self.prefs = load_prefs()
         self.prefs_pending = False
         self.last_st = {}
+        # Z offset steps made on the Controls page during this print
+        self.z_adjust = 0.
+        self.z_print = None
         self.zone_pick = False
         self.zone_name = None
         self.modal_on = False
@@ -1252,7 +1328,10 @@ class Screen:
             self.track_stage(st), self.console[-2:],
             self.notice_key(st, err),
             bool(self.thumb and self.thumb[1] is not None),
-            self.prefs, self.zone_pick, self.zone_name,
+            self.prefs, self.zone_pick, self.zone_name, self.z_adjust,
+            (st.get("gcode_move") or {}).get("homing_origin"),
+            (st.get("gcode_macro START_PRINT") or {}).get("z_offset"),
+            storage_state() if self.page == "settings" else None,
             (st.get("idle_timeout") or {}).get("idle_timeout"),
             (st.get("gcode_macro _LIGHT_IDLE") or {}).get("off_after"),
             # the Settings page shows the time
@@ -2111,6 +2190,9 @@ class Screen:
             ("Restart", ("confirm", "Restart Klipper?", "@restart"),
              "error", ps not in ("printing", "paused"), "restart"),
         ]
+        if ps in ("printing", "paused"):
+            # While printing, the second row is the Z offset (babystep)
+            return self.draw_print_controls(d, body, st, grid[:2], light)
         cols, rows = 4, 2
         if self.busy(st):
             y1 -= 62
@@ -2121,6 +2203,49 @@ class Screen:
             by = y0 + pad + (i // cols) * (bh + pad)
             self.button(d, (bx, by, bx + bw, by + bh), label, action, color,
                         enabled, icon=icon)
+
+    def draw_print_controls(self, d, body, st, grid, light):
+        x0, y0, x1, y1 = body
+        pad = 14
+        sp = st.get("gcode_macro START_PRINT") or {}
+        saved = float(sp.get("z_offset") or 0.)
+        offset = float((st.get("gcode_move") or {}).get(
+            "homing_origin", [0, 0, 0])[2])
+        cols = 4
+        bw = (x1 - x0 - (cols + 1) * pad) // cols
+        bh = 150
+        top = list(grid) + [
+            ("Light off" if light else "Light on",
+             ("gcode", "SET_PIN PIN=chamber_led VALUE=%d" % (0 if light
+                                                             else 1)),
+             "accent", True, "light"),
+            ("Save Z %+.3f" % (saved + self.z_adjust), ("z_save",),
+             "ok", abs(self.z_adjust) > 1e-6, None)]
+        for i, (label, action, color, enabled, icon) in enumerate(top):
+            bx = x0 + pad + i * (bw + pad)
+            self.button(d, (bx, y0 + pad, bx + bw, y0 + pad + bh), label,
+                        action, color, enabled, icon=icon)
+        # Z offset strip
+        zy = y0 + 2 * pad + bh
+        zbox = (x0 + pad, zy, x1 - pad, y1 - pad)
+        self.panel(d, zbox)
+        self.text(d, (zbox[0] + 18, zy + 26),
+                  "Z offset now %+.3f mm" % offset, "s", anchor="lm")
+        note = ("this print %+.3f · saved %+.3f" % (self.z_adjust, saved)
+                if self.z_adjust else "saved %+.3f, used by every print"
+                % saved)
+        self.text(d, (zbox[2] - 18, zy + 26), note, "xs", "muted",
+                  anchor="rm", width=zbox[2] - zbox[0] - 300)
+        self.text(d, (zbox[0] + 18, zy + 56),
+                  "negative = nozzle closer to the bed", "xs", "muted",
+                  anchor="lm")
+        steps = (-0.05, -0.01, 0.01, 0.05)
+        sw = (zbox[2] - zbox[0] - 2 * 18 - 3 * 12) // 4
+        sy = zy + 80
+        for i, step in enumerate(steps):
+            bx = zbox[0] + 18 + i * (sw + 12)
+            self.button(d, (bx, sy, bx + sw, zbox[3] - 14), "%+.2f" % step,
+                        ("z_adjust", step), "accent", True, "m")
 
     def page_machine(self, d, body, st):
         x0, y0, x1, y1 = body
@@ -2318,6 +2443,8 @@ class Screen:
         if idle is None:
             idle = (st.get("idle_timeout") or {}).get("idle_timeout")
         return {"brightness": self.prefs.get("brightness", 100),
+                "sleep_after": int(self.prefs.get(
+                    "sleep_after", self.cfg.num("screen", "sleep_after"))),
                 "light_off": int(light or 0), "idle": int(idle or 0),
                 "accent": self.prefs.get("accent", "")}
 
@@ -2333,13 +2460,16 @@ class Screen:
         rows = [
             ("Brightness", [("%d%%" % b, ("pref", "brightness", b),
                              cur["brightness"] == b) for b in BRIGHTNESS]),
+            ("Screen off", [(n, ("pref", "sleep_after", v),
+                             cur["sleep_after"] == v)
+                            for v, n in SLEEP_AFTER]),
             ("Light off", [(n, ("pref", "light_off", v),
                             cur["light_off"] == v) for v, n in LIGHT_OFF]),
             ("Idle off", [(n, ("pref", "idle", v),
                            cur["idle"] == v) for v, n in IDLE_OFF]),
         ]
-        rh, gap = 58, 12
-        y = y0 + pad
+        rh, gap = 46, 8
+        y = y0 + 10
         for label, opts in rows:
             self.text(d, (x0 + pad, y + rh // 2), label, "s", "muted",
                       anchor="lm")
@@ -2363,6 +2493,8 @@ class Screen:
         self.button(d, (x1 - pad - 160, y, x1 - pad, y + rh), "Change",
                     ("zone_pick",), "accent", True, "s")
         y += rh + gap
+        self.draw_storage_row(d, body, y, rh, st)
+        y += rh + gap
         # Highlight colour
         self.text(d, (x0 + pad, y + rh // 2), "Highlight", "s", "muted",
                   anchor="lm")
@@ -2380,6 +2512,35 @@ class Screen:
                       name, "xs", (255, 255, 255), anchor="mm",
                       width=bw - 8)
             self.buttons.append((*box, ("pref", "accent", hexval)))
+
+    def draw_storage_row(self, d, body, y, rh, st):
+        x0, y0, x1, y1 = body
+        pad = 14
+        self.text(d, (x0 + pad, y + rh // 2), "G-code files", "s", "muted",
+                  anchor="lm")
+        bx = x0 + pad + 150
+        if remote_moonraker(self.cfg.get("screen", "moonraker")):
+            self.panel(d, (bx, y, x1 - pad, y + rh))
+            self.text(d, (bx + 16, y + rh // 2),
+                      "Stored on the PC that runs Klipper", "s", "muted",
+                      anchor="lm")
+            return
+        state = storage_state()
+        busy = st.get("print_stats", {}).get("state") in ("printing",
+                                                          "paused")
+        want = self.prefs.get("gcode_storage", "internal")
+        bw = (x1 - pad - bx - 10) // 2
+        gb = lambda v: ("%.1f GB free" % v) if v is not None else ""
+        opts = (("internal", "Printer · %s" % gb(state["internal_free"]),
+                 True),
+                ("usb", ("USB · %s" % gb(state["usb_free"]))
+                 if state["usb"] else "USB drive (not inserted)",
+                 state["usb"] or want == "usb"))
+        for i, (where, label, ok) in enumerate(opts):
+            box = (bx + i * (bw + 10), y, bx + i * (bw + 10) + bw, y + rh)
+            on = want == where
+            self.button(d, box, label, ("pref", "gcode_storage", where),
+                        "accent" if on else "muted", ok and not busy, "xs")
 
     def draw_zone_pick(self, d, body):
         x0, y0, x1, y1 = body
@@ -2418,7 +2579,7 @@ class Screen:
             set_brightness(value)
         elif key == "accent":
             self.apply_config()
-        elif key in ("light_off", "idle"):
+        elif key in ("light_off", "idle", "z_offset"):
             idle = st.get("print_stats", {}).get("state") not in (
                 "printing", "paused")
             mr.gcode(klipper_prefs({key: value}, idle))
@@ -2778,6 +2939,15 @@ class Screen:
                 mr.gcode(action[1])
             elif kind == "confirm":
                 self.confirm = (action[1], action[2])
+            elif kind == "z_adjust":
+                self.z_adjust = round(self.z_adjust + action[1], 3)
+                mr.gcode("SET_GCODE_OFFSET Z_ADJUST=%.3f MOVE=1" % action[1])
+            elif kind == "z_save":
+                sp = self.last_st.get("gcode_macro START_PRINT") or {}
+                new = round(float(sp.get("z_offset") or 0.) + self.z_adjust,
+                            3)
+                self.z_adjust = 0.
+                self.set_pref("z_offset", new, mr, self.last_st)
             elif kind == "pref":
                 self.set_pref(action[1], action[2], mr, self.last_st)
             elif kind == "zone_pick":
@@ -2946,6 +3116,14 @@ def main():
             restart()
         st, err = data.st, data.err
         screen.last_st = st
+        # A new print starts with no Z offset steps of its own
+        ps_now = st.get("print_stats", {})
+        key = (ps_now.get("filename"), ps_now.get("state") in ("printing",
+                                                               "paused"))
+        if key[1] and screen.z_print != key:
+            screen.z_print, screen.z_adjust = key, 0.
+        elif not key[1]:
+            screen.z_print = None
         if screen.prefs_pending and not err:
             screen.prefs_pending = False
             script = klipper_prefs(screen.prefs, st.get("print_stats", {}).get(
@@ -2955,7 +3133,8 @@ def main():
         printing = st.get("print_stats", {}).get("state") in (
             "printing", "paused")
         taps = touch.pop()
-        sleep_after = cfg.num("screen", "sleep_after")
+        sleep_after = float(screen.prefs.get(
+            "sleep_after", cfg.num("screen", "sleep_after")))
         if screen.asleep:
             if (taps or printing or screen.pa_result(st)
                     or screen.calib_pick(st) or screen.urgent(st, err)):
