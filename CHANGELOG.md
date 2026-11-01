@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.4.15-alpha.1 (2026-11-01)
+
+- **Pressure advance calibration saves print-ready values by default.** The
+  stationary strain-gauge measurement (`PA_CAL_STATIC`, the touchscreen's
+  Calibrate PA) reads lower than the value that prints best; printed PA
+  patterns put the factor at x1.34 for PLA and x1.13 for PETG (10-28). That
+  was only in our test printer's overrides, so other printers saved PA
+  13-34% low. `_PA_STATIC_SAVE variable_scale_material` now defaults to
+  `{'PLA': 1.34, 'PETG': 1.13}` (other materials: `variable_scale`, 1.0).
+  Already-saved slot values are not changed: run Calibrate PA again.
+
 ## v0.4.14-alpha.1 (2026-11-01)
 
 - **USB drive: plug in and go.** The touchscreen asks once per drive whether
