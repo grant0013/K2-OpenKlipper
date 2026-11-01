@@ -144,5 +144,35 @@ class HotendFanCheckTest(unittest.TestCase):
         self.assertEqual(gcode.scripts, [])
 
 
+class BusQuietTest(unittest.TestCase):
+    # 10-31: a protection query between MOTOR_STALL_MODE DATA=1 and G28 Y
+    # made Y homing fail at a print start
+    def setUp(self):
+        self.watch, _ = make()
+        self.watch.bus = types.SimpleNamespace(stall_armed=False,
+                                               stall_changed=0.)
+
+    def test_idle_bus_is_free(self):
+        self.assertFalse(self.watch.bus_quiet(100.))
+
+    def test_stall_armed_is_quiet(self):
+        self.watch.bus.stall_armed = True
+        self.assertTrue(self.watch.bus_quiet(100.))
+
+    def test_quiet_while_homing_and_just_after(self):
+        self.watch._homing_begin(None, [])
+        self.assertTrue(self.watch.bus_quiet(100.))
+        self.watch.homing_changed = 100.
+        self.watch._homing_end(None, [])
+        self.watch.homing_changed = 100.
+        self.assertTrue(self.watch.bus_quiet(103.))
+        self.assertFalse(self.watch.bus_quiet(107.))
+
+    def test_quiet_just_after_stall_mode_change(self):
+        self.watch.bus.stall_changed = 50.
+        self.assertTrue(self.watch.bus_quiet(55.))
+        self.assertFalse(self.watch.bus_quiet(57.))
+
+
 if __name__ == "__main__":
     unittest.main()

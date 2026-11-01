@@ -35,7 +35,6 @@ The config is generated from the K2 one by `tools/k2plus/make_k2plus_cfg.py`
   instead of touching). Step 6 checks it on your printer.
 - **Rear cleaning strip scrub is off** (`scrub_strip: False`) until step 7
   confirms where the strip is.
-- **Chamber heater is off** until step 9 checks it under supervision.
 - Not ported yet: belt tension tool, Creality's per-motor gain change (stock
   runs one X/Y motor at a lower position gain while printing; the beta leaves
   the motor firmware default, which is what the K2 uses).
@@ -172,37 +171,29 @@ fine-tune it like Creality's Z offset in printer-overrides.cfg:
 closer to the bed: lines sitting apart or not sticking; positive = further
 away: ridges or a scraped look).
 
-## Step 9: the chamber heater (stay with the printer)
+## Step 9: the chamber heater
 
 The PTC chamber heater follows stock's rules: it only heats for a chamber
-target over 40C (M141/M191; PLA's 35C never heats), never above 60C, never
-while the bed is still heating up, at half power for the first minute. It
-switches off with a `!! Chamber heater off` message if its fan stops turning
-for 15 s or the chamber runs 10C over the target. It is off until you enable
-it, and this step does that.
-
-Door shut, bed and nozzle cold, nothing printing. `CHAMBER_STATUS` should say
-`NOT enabled`. Then add to **printer-overrides.cfg**:
+target over 40C (M141/M191 from the slicer, Mainsail's chamber box,
+`CHAMBER_HEAT TARGET=`, or the touchscreen's Chamber gauge; PLA's 35C never
+heats), never above 60C, never while the bed is still heating up, at half
+power for the first minute. It switches off with a `!! Chamber heater off`
+message if its fan stops turning for 15 s or the chamber runs 10C over the
+target. It is on since v0.4.14, after the supervised test on a real K2 Plus;
+to turn it off, in printer-overrides.cfg:
 
     [hark_chamber]
-    enable: True
+    enable: False
 
-Save and restart, then:
+To check yours: door shut, nothing printing, then
 
     CHAMBER_HEAT TARGET=45
     CHAMBER_STATUS
 
-You should hear the heater fan start within a few seconds. Run
-`CHAMBER_STATUS` every minute or so for 10 minutes: `fan tach` must be a
-number above 0 while it heats, and the chamber temperature should climb
-steadily. Then:
-
-    CHAMBER_HEAT TARGET=0
-
-Send all the `CHAMBER_STATUS` lines and a screenshot of the temperature graph.
-If anything smells hot, the fan is silent or the console shows
-`!! Chamber heater off`, run `CHAMBER_HEAT TARGET=0` (or switch off) and send
-the output.
+The heater fan starts within a few seconds; `fan tach` must be above 0 while
+it heats and the chamber should climb steadily. `CHAMBER_HEAT TARGET=0` to
+stop. If anything smells hot, the fan is silent or the console shows
+`!! Chamber heater off`, stop and send the output.
 
 ## Between prints
 

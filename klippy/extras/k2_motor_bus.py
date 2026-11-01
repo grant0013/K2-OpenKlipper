@@ -199,6 +199,8 @@ class K2MotorBus:
         self.e_reported_addr = None
         self.calibration_warnings = []
         self.last_faults = {}
+        self.stall_armed = False
+        self.stall_changed = 0.
         # (name, pin, oid, wake level, chip); chip = per-MCU commands
         self.wake_pins = []
         chips = {}
@@ -818,6 +820,9 @@ class K2MotorBus:
     # --- gcode ---
     def cmd_MOTOR_STALL_MODE(self, gcmd):
         mode = gcmd.get_int('DATA', 1, minval=0, maxval=255)
+        # hark_safety leaves the bus alone while stall homing is armed
+        self.stall_armed = mode == 1
+        self.stall_changed = self.reactor.monotonic()
         if mode == 1 and self.homing_fault_check != 'off':
             # Their homing start: a fault latched from before must not be
             # mistaken for the stall that ends the homing move

@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- **K2 Plus chamber heater on by default** after the supervised test on a
+  real K2 Plus heated as stock did (`[hark_chamber] enable: False` turns it
+  off). Mainsail's chamber box, the slicer's M141/M191 and the touchscreen
+  set it.
+- **Safety watch stays off the motor bus while homing**: a protection query
+  between stall-homing arm (`MOTOR_STALL_MODE DATA=1`) and `G28 Y` made Y
+  homing fail at a print start (10-31). It now waits while homing or stall
+  homing is armed, and a few seconds after; fan checks carry on. The
+  `[hark_safety] start_grace: 300` workaround can come out.
+- **From upstream Klipper** (our base is 28 July): `PID_CALIBRATE` recommended
+  values twice too high (Astrom-Hagglund Ku), now corrected, with a smaller
+  oscillation band and `PID_PROFILE CALIBRATE` using the same fix; a lost
+  MCU link fails waiting commands at once ("No communication with MCU")
+  instead of hanging; `BED_MESH_CALIBRATE` always checks the mesh algorithm
+  and the direct mode no longer shares its matrix; motion reports no stale
+  speed between moves. Existing PID values are kept (upstream: re-tune only
+  if heating oscillates).
 - **Touchscreen Settings page** (gear in the side bar): panel brightness,
   chamber light off time, idle time before heaters and motors go off, the
   printer's time zone (picker of 17 regions, written to the printer's own

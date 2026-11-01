@@ -164,7 +164,7 @@ pin: multi_pin:auxiliary_fan_pins
      """[multi_pin exhaust_fan_pins]
 pins: PB1, PB3
 """, """# K2 Plus: the chamber fan is PA0. The PTC chamber heater is at the end of
-# this file ([hark_chamber]) and stays off until it is enabled.
+# this file ([hark_chamber]).
 [multi_pin exhaust_fan_pins]
 pins: PA0
 """),
@@ -453,11 +453,10 @@ EXTRA = """
 # chamber thermistor PC5, shared with [temperature_sensor
 # chamber_temperature] so the screen shows what the heater controls on.
 # [hark_chamber] adds stock's rules (only over 40C, bed first, soft start,
-# fan and over-temperature cut-offs, max 60C) and keeps the heater OFF until
-# printer-overrides.cfg has:
-#   [hark_chamber]
-#   enable: True
-# Do that only after the supervised test in docs/K2-PLUS-BETA.md.
+# fan and over-temperature cut-offs, max 60C). On since 11-01, after the
+# supervised test on a real K2 Plus (docs/K2-PLUS-BETA.md step 9) heated as
+# stock did; [hark_chamber] enable: False in printer-overrides.cfg turns it
+# off.
 [duplicate_pin_override]
 pins: PC5
 
@@ -490,6 +489,7 @@ heater_temp: 100
 fan_speed: 1.0
 
 [hark_chamber]
+enable: True
 
 # K2 Plus beta: visit the chute, brush, cutter and strip positions slowly
 # (20 mm/s, 3 s at each) and say where the nozzle is. Nothing extrudes, wipes

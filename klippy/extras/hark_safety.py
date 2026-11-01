@@ -57,6 +57,17 @@ class HarkSafety:
         self.bus = self.fans = self.part_fan = self.hotend_fan = None
         self.was_printing = False
         self.watch_from = 0.
+        # No motor bus traffic while homing or stall homing is armed: a
+        # protection query between MOTOR_STALL_MODE DATA=1 and G28 Y made
+        # Y homing fail at nur00's print start (10-31; start_grace 300 was
+        # the workaround)
+        self.homing = 0
+        self.homing_changed = 0.
+        self.need_clear = False
+        self.printer.register_event_handler("homing:home_rails_begin",
+                                            self._homing_begin)
+        self.printer.register_event_handler("homing:home_rails_end",
+                                            self._homing_end)
         self.tripped = False
         self.fan_on_since = {}
         self.fan_zero_since = {}
@@ -78,21 +89,41 @@ class HarkSafety:
         self.reactor.register_timer(self._poll, self.reactor.NOW)
 
     # --- polling -------------------------------------------------------
+    def _homing_begin(self, homing_state, rails):
+        self.homing += 1
+        self.homing_changed = self.reactor.monotonic()
+
+    def _homing_end(self, homing_state, rails):
+        self.homing = max(0, self.homing - 1)
+        self.homing_changed = self.reactor.monotonic()
+
+    def bus_quiet(self, eventtime):
+        """Homing, stall homing armed, or just changed: hands off the bus."""
+        armed = bool(getattr(self.bus, 'stall_armed', False))
+        changed = max(self.homing_changed,
+                      getattr(self.bus, 'stall_changed', 0.))
+        return (armed or self.homing > 0
+                or eventtime - changed < 2. * self.poll_interval)
+
     def _poll(self, eventtime):
         try:
             state = self.print_stats.get_status(eventtime).get('state')
             printing = state == 'printing'
             if printing and not self.was_printing:
                 # New print or resume: stale fault bits must not trip us
-                self._clear_motor_errors()
+                self.need_clear = True
                 self.watch_from = eventtime + self.start_grace
                 self.tripped = False
                 self.fan_on_since.clear(); self.fan_zero_since.clear()
                 self.motor_bad.clear(); self.motor_warned.clear()
             self.was_printing = printing
+            quiet = self.bus is not None and self.bus_quiet(eventtime)
+            if printing and self.need_clear and not quiet:
+                self.need_clear = False
+                self._clear_motor_errors()
             if printing and not self.tripped and eventtime >= self.watch_from:
                 self._check_fans(eventtime)
-                if not self.tripped:
+                if not self.tripped and not quiet and not self.need_clear:
                     self._check_motors(eventtime)
         except Exception:
             logging.exception("hark_safety: poll failed")
