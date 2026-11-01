@@ -12,6 +12,12 @@ measurement and no ooze on the measured bed.
    (Z = 263.13 on F021) and backs off 10 mm. This gives an absolute Z
    reference on every print, whatever happened to Z before. It takes about
    50 s.
+   **Warm start:** if the previous print finished or was cancelled
+   normally and the motors stayed on, the printer is still homed, so steps 2
+   and 3 are skipped (like stock). Z is still measured by the tap in step 6.
+   A restart, motors off (`M84`, the idle timeout), a safety-watch stop or a
+   failed start homes in full. `variable_warm_start: False` in
+   `[gcode_macro START_PRINT]` always homes in full.
 3. **`G28 X Y`** only. No Z contact yet, so a crusted nozzle cannot fake a
    probe trigger.
 4. **CFS load and purge at print temperature over the chute** (with `TOOL`):

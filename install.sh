@@ -397,8 +397,13 @@ s = open(p).read()
 t = re.sub(r"(?m)^(repo:\s*)mainsail-crew/mainsail\s*$",
            r"\1grant0013/mainsail", s)
 if t != s:
-    open(p, "w").write(t)
     print("    moonraker.conf: Mainsail updates now from grant0013/mainsail")
+# Network announce (mDNS) for installs made before it was in the default
+if not re.search(r"(?m)^\[zeroconf\]", t):
+    t = t.rstrip("\n") + "\n\n[zeroconf]\n"
+    print("    moonraker.conf: network announce ([zeroconf]) on")
+if t != s:
+    open(p, "w").write(t)
 PY
 cp "$BUILD/system/moonraker-mainline.init" /etc/init.d/moonraker-mainline
 chmod 755 /etc/init.d/moonraker-mainline

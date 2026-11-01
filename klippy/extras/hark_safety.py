@@ -247,7 +247,7 @@ class HarkSafety:
             script = "PAUSE"
         else:
             msg = "Print cancelled by the safety watch: %s" % why
-            script = "CANCEL_PRINT\nTURN_OFF_HEATERS"
+            script = "CANCEL_PRINT SAFE=1\nTURN_OFF_HEATERS"
         self.gcode.respond_raw("!! %s" % msg)
         try:
             self.gcode.run_script(script)

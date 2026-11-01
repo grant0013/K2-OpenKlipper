@@ -1455,8 +1455,10 @@ class Screen:
                             "NOZZLE_DEEP_CLEAN"), "accent", not busy,
              "clean"),
             ("Light off" if light else "Light on",
-             ("gcode", "SET_PIN PIN=chamber_led VALUE=%d" % (0 if light
-                                                             else 1)),
+             # switched on by hand: the idle switch-off countdown
+             # (_LIGHT_IDLE off_after) starts again
+             ("gcode", "SET_PIN PIN=chamber_led VALUE=0" if light
+              else "SET_PIN PIN=chamber_led VALUE=1\n_LIGHT_IDLE"),
              "accent", True, "light"),
             ("Motors off", ("gcode", "M84"), "accent", not busy, "motor"),
             ("Heaters off", ("gcode", "TURN_OFF_HEATERS"), "warn",
