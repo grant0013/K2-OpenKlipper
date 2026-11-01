@@ -49,6 +49,10 @@ OBJECTS = {
     "heater_bed": ["temperature", "target"],
     "temperature_sensor chamber_temperature": ["temperature"],
     "fan": ["speed"],
+    "fan_generic auxiliary_fan": ["speed"],
+    "fan_generic exhaust_fan": ["speed"],
+    "gcode_macro _CHAMBER_FAN": ["manual"],
+    "hark_chamber": ["enabled", "requested"],
     "toolhead": ["homed_axes"],
     "gcode_move": ["gcode_position", "homing_origin"],
     "gcode_macro START_PRINT": ["z_offset"],
@@ -90,6 +94,21 @@ PREFS_FILE = os.path.join(os.path.dirname(os.path.abspath(CFG_PATH)),
                           "harkscreen-settings.json")
 BRIGHTNESS_SH = "/usr/bin/brightness.sh"   # Creality's backlight control
 BRIGHTNESS = (25, 50, 75, 100)
+# Temperature box presets (degrees C), as stock's screen offered
+TEMP_PRESETS = {
+    "extruder": (("Off", 0), ("PLA", 220), ("PETG", 250), ("ABS", 260),
+                 ("TPU", 230)),
+    "heater_bed": (("Off", 0), ("PLA", 60), ("PETG", 80), ("ABS", 100),
+                   ("TPU", 50)),
+    "chamber": (("Off", 0), ("45°", 45), ("50°", 50), ("55°", 55),
+                ("60°", 60)),
+}
+TEMP_NAMES = {"extruder": "Nozzle", "heater_bed": "Bed",
+              "chamber": "Chamber heater"}
+# (label, M106 fan index, status object)
+FANS = (("Part fan", 0, "fan"), ("Side fan", 2, "fan_generic auxiliary_fan"),
+        ("Exhaust fan", 1, "fan_generic exhaust_fan"))
+FAN_STEPS = (0, 25, 50, 75, 100)
 SLEEP_AFTER = ((120, "2 min"), (300, "5 min"), (600, "10 min"), (0, "Never"))
 # G-code storage: Klipper and Moonraker read GCODE_LINK; it points at the
 # internal folder or at a folder on the USB drive the K2 mounts itself
@@ -873,6 +892,10 @@ class Screen:
         self.prefs = load_prefs()
         self.prefs_pending = False
         self.last_st = {}
+        # Temperature box (heater being set, the target shown) and fan box
+        self.temp_pick = None
+        self.temp_target = 0
+        self.fans_open = False
         # Z offset steps made on the Controls page during this print
         self.z_adjust = 0.
         self.z_print = None
@@ -1329,6 +1352,9 @@ class Screen:
             self.notice_key(st, err),
             bool(self.thumb and self.thumb[1] is not None),
             self.prefs, self.zone_pick, self.zone_name, self.z_adjust,
+            self.temp_pick, self.temp_target, self.fans_open,
+            [(st.get(o) or {}).get("speed") for _, _, o in FANS],
+            (st.get("gcode_macro _CHAMBER_FAN") or {}).get("manual"),
             (st.get("gcode_move") or {}).get("homing_origin"),
             (st.get("gcode_macro START_PRINT") or {}).get("z_offset"),
             storage_state() if self.page == "settings" else None,
@@ -1403,9 +1429,16 @@ class Screen:
                 self.draw_calib_pick(arg)
             elif kind == "slot":
                 self.draw_slot_menu(st)
+            elif kind == "temp":
+                self.draw_temp_box(arg, st)
+            elif kind == "fans":
+                self.draw_fans_box(st)
             # main() fades a box in and out; only the box animates
             self.anims = self.anims[page_anims:]
         self.modal_on = bool(box)
+        # a box that cannot show (Klipper not ready) is closed
+        if err:
+            self.temp_pick, self.fans_open = None, False
         return self.canvas
 
     def top_box(self, st, err):
@@ -1426,6 +1459,10 @@ class Screen:
         pick = self.calib_pick(st)
         if pick:
             return ("calib", pick)
+        if self.temp_pick:
+            return ("temp", self.temp_pick)
+        if self.fans_open:
+            return ("fans", None)
         if self.slot_menu:
             return ("slot", None)
         if note and not self.editor and not self.kb:
@@ -1986,9 +2023,17 @@ class Screen:
                   st.get("temperature_sensor chamber_temperature", {}))]
         tx0, tx1 = x0 + 434, x1 - pad
         th = (left[3] - left[1] - 2 * 10) // 3
+        chamber_heater = (st.get("hark_chamber") or {}).get("enabled")
         for i, (label, icon, h) in enumerate(tiles):
             ty = left[1] + i * (th + 10)
             self.gauge(d, (tx0, ty, tx1, ty + th), label, icon, h)
+            # Tap a gauge to set its temperature (the chamber: its heater
+            # when enabled, else the fans that vent it)
+            action = {"nozzle": ("temp_pick", "extruder"),
+                      "bed": ("temp_pick", "heater_bed")}.get(
+                icon, ("temp_pick", "chamber") if chamber_heater
+                else ("fans_pick",))
+            self.buttons.append((tx0, ty, tx1, ty + th, action))
         # Footer: active CFS slot with its colour, part fan
         cfs = st.get("k2_cfs", {})
         slots = st.get("hark_cfs_slots", {}).get("slots", {})
@@ -2033,6 +2078,7 @@ class Screen:
         fx = x1 - pad - 140
         self.text(d, (x1 - pad - 18, fy + 27), "fan %d%%" % round(fan * 100),
                   "s", anchor="rm")
+        self.buttons.append((fx - 30, fy, x1 - pad, fy + 54, ("fans_pick",)))
         if fan > 0:
             self.anims.append({"kind": "fan", "center": (fx, fy + 27),
                                "speed": fan, "size": 30,
@@ -2513,6 +2559,111 @@ class Screen:
                       width=bw - 8)
             self.buttons.append((*box, ("pref", "accent", hexval)))
 
+    # --- temperature and fan boxes ---------------------------------------
+    def temp_limit(self, heater):
+        """Highest target the box offers: the config's max_temp less a
+        margin (nozzle at most 300C); the chamber heater's own 60C."""
+        if heater == "chamber":
+            return 60
+        cfgmax = float((self.settings.get(heater) or {}).get(
+            "max_temp", 300 if heater == "extruder" else 110))
+        if heater == "extruder":
+            return int(min(300, cfgmax - 10))
+        return int(cfgmax - 5)
+
+    def heater_now(self, heater, st):
+        if heater == "chamber":
+            return ((st.get("temperature_sensor chamber_temperature") or {})
+                    .get("temperature", 0),
+                    (st.get("hark_chamber") or {}).get("requested", 0))
+        h = st.get(heater) or {}
+        return h.get("temperature", 0), h.get("target", 0)
+
+    def set_temp(self, heater, value, mr):
+        value = max(0, min(int(value), self.temp_limit(heater)))
+        self.temp_target = value
+        cmd = {"extruder": "M104 S%d", "heater_bed": "M140 S%d",
+               "chamber": "CHAMBER_HEAT TARGET=%d"}[heater] % value
+        mr.gcode(cmd)
+
+    def modal_dim(self):
+        dim = Image.new("RGB", (W, H), (0, 0, 0))
+        self.canvas = Image.blend(self.canvas, dim, 0.65)
+        return ImageDraw.Draw(self.canvas)
+
+    def draw_temp_box(self, heater, st):
+        d = self.modal_dim()
+        box = (110, 40, W - 110, 440)
+        self.panel(d, box, self.c["accent"], True)
+        cur, tgt = self.heater_now(heater, st)
+        self.text(d, (box[0] + 30, 80), TEMP_NAMES[heater], "m",
+                  anchor="lm")
+        self.text(d, (box[2] - 30, 80), "now %d°" % round(cur or 0), "s",
+                  "muted", anchor="rm")
+        self.buttons = []
+        # target with steps either side
+        cy = 160
+        self.text(d, (W // 2, cy), ("%d°" % self.temp_target)
+                  if self.temp_target else "Off", "xl",
+                  "warn" if self.temp_target else "muted", anchor="mm")
+        for i, step in enumerate((-10, -5, 5, 10)):
+            bx = box[0] + 30 + i * 70 if step < 0 else \
+                box[2] - 30 - (3 - i) * 70 - 60
+            self.button(d, (bx, cy - 30, bx + 60, cy + 30), "%+d" % step,
+                        ("temp_to", heater, self.temp_target + step),
+                        "accent", True, "s")
+        presets = TEMP_PRESETS[heater]
+        n = len(presets)
+        pw = (box[2] - box[0] - 60 - (n - 1) * 10) // n
+        py = 230
+        for i, (name, value) in enumerate(presets):
+            bx = box[0] + 30 + i * (pw + 10)
+            label = name if not value or heater == "chamber" else \
+                "%s %d°" % (name, value)
+            self.button(d, (bx, py, bx + pw, py + 64), label,
+                        ("temp_to", heater, value),
+                        "accent" if value == self.temp_target else "muted",
+                        value <= self.temp_limit(heater), "xs")
+        note = {"extruder": "max %d°" % self.temp_limit(heater),
+                "heater_bed": "max %d°" % self.temp_limit(heater),
+                "chamber": "heats only above 40°, max 60°"}[heater]
+        self.text(d, (W // 2, 326), note, "xs", "muted", anchor="mm")
+        self.button(d, (W // 2 - 110, 352, W // 2 + 110, 416), "Done",
+                    ("box_close",), "accent", True, "m")
+
+    def draw_fans_box(self, st):
+        d = self.modal_dim()
+        box = (90, 40, W - 90, 440)
+        self.panel(d, box, self.c["accent"], True)
+        self.text(d, (box[0] + 30, 80), "Fans", "m", anchor="lm")
+        self.buttons = []
+        auto = not (st.get("gcode_macro _CHAMBER_FAN") or {}).get("manual")
+        y = 112
+        for label, index, obj in FANS:
+            speed = round(float((st.get(obj) or {}).get("speed", 0)) * 100)
+            self.text(d, (box[0] + 30, y + 26), label, "s", "muted",
+                      anchor="lm")
+            steps = list(FAN_STEPS)
+            opts = [("%d%%" % v if v else "Off", ("fan_to", index, v),
+                     abs(speed - v) < 13 and not (index == 1 and auto))
+                    for v in steps]
+            if index == 1:
+                # the exhaust fan's automatic chamber control
+                opts = [("Auto", ("fan_auto",), auto)] + [
+                    o for o in opts if o[1][2] in (0, 25, 50, 100)]
+            bx = box[0] + 190
+            n = len(opts)
+            bw = (box[2] - 30 - bx - (n - 1) * 8) // n
+            for i, (text, action, on) in enumerate(opts):
+                x = bx + i * (bw + 8)
+                self.button(d, (x, y, x + bw, y + 52), text, action,
+                            "accent" if on else "muted", True, "xs")
+            y += 70
+        self.text(d, (W // 2, y + 14), "The slicer may change them again"
+                  " at its next fan command", "xs", "muted", anchor="mm")
+        self.button(d, (W // 2 - 110, 352, W // 2 + 110, 416), "Done",
+                    ("box_close",), "accent", True, "m")
+
     def draw_storage_row(self, d, body, y, rh, st):
         x0, y0, x1, y1 = body
         pad = 14
@@ -2939,6 +3090,24 @@ class Screen:
                 mr.gcode(action[1])
             elif kind == "confirm":
                 self.confirm = (action[1], action[2])
+            elif kind == "temp_pick":
+                self.temp_pick = action[1]
+                self.temp_target = int(round(
+                    self.heater_now(action[1], self.last_st)[1] or 0))
+            elif kind == "temp_to":
+                self.set_temp(action[1], action[2], mr)
+            elif kind == "fans_pick":
+                self.fans_open = True
+            elif kind == "fan_to":
+                index, pct = action[1], action[2]
+                p = (" P%d" % index) if index else ""
+                mr.gcode(("M106%s S%d" % (p, round(pct * 2.55))) if pct
+                         else ("M107%s" % p))
+            elif kind == "fan_auto":
+                mr.gcode("SET_GCODE_VARIABLE MACRO=_CHAMBER_FAN "
+                         "VARIABLE=manual VALUE=0")
+            elif kind == "box_close":
+                self.temp_pick, self.fans_open = None, False
             elif kind == "z_adjust":
                 self.z_adjust = round(self.z_adjust + action[1], 3)
                 mr.gcode("SET_GCODE_OFFSET Z_ADJUST=%.3f MOVE=1" % action[1])

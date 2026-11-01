@@ -14,6 +14,12 @@
   (-0.05/-0.01/+0.01/+0.05) and Save Z, kept for every print. Audited across
   1,320 page/state/box renders. The installer repoints a G-code link left
   dangling by a removed USB drive.
+- **Touchscreen temperature and fan control** (nur00): tap the Nozzle or Bed
+  gauge for a temperature box (presets, steps, limits from the config), the
+  Chamber gauge for the K2 Plus chamber heater once enabled, and the fan in
+  the bottom bar for part, side and exhaust fans (exhaust Auto = automatic
+  chamber control). Audited across 1,800 renders; every command run through
+  Klipper on both configs.
 
 ## v0.4.13-alpha.1 (2026-11-01)
 

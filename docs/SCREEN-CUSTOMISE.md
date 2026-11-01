@@ -40,6 +40,14 @@ The gear at the bottom of the side bar opens Settings, with no file to edit:
   (files live on the PC).
 - **Highlight** colour, over the theme's own.
 
+On the **Status** page, tap the Nozzle or Bed gauge to set its temperature
+(PLA/PETG/ABS/TPU presets, +/-5 and 10 degree steps, up to the printer's own
+limit less a margin, nozzle at most 300C). The Chamber gauge sets the K2
+Plus chamber heater once it is enabled; otherwise it opens the fans. Tap the
+fan in the bottom bar for the part, side and exhaust fans (exhaust: Auto
+gives it back to the automatic chamber control). The slicer can change fans
+and temperatures again at its next command, as on stock.
+
 While printing, the **Controls** page has Z offset buttons (-0.05, -0.01,
 +0.01, +0.05 mm; negative = nozzle closer) for the first layer. **Save Z**
 keeps the result for every print (`variable_z_offset` of START_PRINT, sent to
