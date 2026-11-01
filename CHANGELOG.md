@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.4.6-alpha.1 (2026-11-01)
 
 - **Print preview on the touchscreen:** the Status page shows the slicer's
   thumbnail of the print, a faint ghost that fills in with colour from the
