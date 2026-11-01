@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- **Touchscreen notices:** a pending update shows a box with **Update now**
+  and **Later** (Later puts that version off for 24 h; the Machine page row
+  still updates any time). A print that stops on an error shows the reason,
+  and error messages during a print (safety watch, runout, failed bed mesh)
+  show in a box with OK; they wake the screen. While idle only safety-watch
+  and chamber-heater messages pop up. A Klipper shutdown shows Klipper's own
+  reason on the not-ready page.
+
 ## v0.4.4-alpha.1 (2026-11-01)
 
 - **Cancel works like stock:** `CANCEL_PRINT` runs `END_PRINT` (heaters off,

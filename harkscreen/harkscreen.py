@@ -65,11 +65,17 @@ OBJECTS = {
     "gcode_macro _PA_STATIC_SAVE": ["last"],
     "gcode_macro _PA_AUTO": ["on_load"],
     "gcode_macro _STAGE": ["text"],
-    "hark_update": ["installed", "latest", "update_available", "updating"],
+    "hark_update": ["installed", "latest", "update_available", "updating",
+                    "notes"],
 }
 
 # The last PA calibration result the user has dismissed (its stamp)
 PA_ACK_FILE = "/mnt/UDISK/harkscreen/.pa_result_ack"
+# An update offer put off with Later: {"version": tag, "until": epoch}
+UPDATE_SNOOZE_FILE = "/mnt/UDISK/harkscreen/.update_snooze"
+UPDATE_SNOOZE = 24 * 3600
+# Error lines shown while idle; while printing or paused every one is shown
+IDLE_ALERTS = ("Safety watch", "Chamber heater", "safety watch")
 
 
 class Config:
@@ -278,6 +284,20 @@ class Moonraker:
             out.append(line.lstrip("/! ").replace("echo: ", ""))
         return out
 
+    def alerts(self, count=40):
+        """Recent error lines ("!! ..."): the safety watch, runouts, print
+        errors. Oldest first, as (time, text)."""
+        with urllib.request.urlopen(
+                self.base + "/server/gcode_store?count=%d" % count,
+                timeout=3) as r:
+            items = json.load(r)["result"]["gcode_store"]
+        out = []
+        for m in items:
+            line = (m.get("message") or "").strip()
+            if m.get("type") == "response" and line.startswith("!!"):
+                out.append((float(m.get("time") or 0.), line[2:].strip()))
+        return out
+
     def info(self):
         with urllib.request.urlopen(self.base + "/printer/info",
                                     timeout=3) as r:
@@ -431,7 +451,7 @@ class DataThread(threading.Thread):
         self.st, self.err, self.version = {}, "Starting", 0
 
     def run(self):
-        settings_at = wifi_at = 0
+        settings_at = wifi_at = alerts_at = 0
         while True:
             mr = Moonraker(self.cfg.get("screen", "moonraker"))
             st, err = {}, None
@@ -447,6 +467,12 @@ class DataThread(threading.Thread):
                 # While the printer reports a stage, follow the console too
                 if (st.get("gcode_macro _STAGE") or {}).get("text"):
                     self.screen.console = mr.console()
+                # Error lines: every refresh while a print runs, else every 5 s
+                ps = st.get("print_stats", {}).get("state")
+                if (ps in ("printing", "paused", "error")
+                        or time.time() - alerts_at > 5):
+                    self.screen.alerts = mr.alerts()
+                    alerts_at = time.time()
             except Exception:
                 try:
                     err = "Klipper " + mr.info().get("state", "starting")
@@ -498,6 +524,17 @@ class Screen:
         # Stationary PA results (PA_CAL_STATIC): set to the first stamp seen,
         # so only results after this screen started pop up
         self.pa_static_ack = None
+        # Notices (notice()): error lines and print errors are acknowledged
+        # from the first ones seen, so only new ones pop up; an update offer
+        # put off with Later stays away for UPDATE_SNOOZE
+        self.alerts = []
+        self.alert_ack = None
+        self.error_ack = None
+        try:
+            with open(UPDATE_SNOOZE_FILE) as f:
+                self.update_snooze = json.load(f)
+        except Exception:
+            self.update_snooze = {}
         self.dirty = True
         self.ip = "?"
         self.eta = Eta()
@@ -764,6 +801,20 @@ class Screen:
             d.polygon([(cx + h * .55, cy - h * .95), (cx + h * .95,
                        cy - h * .35), (cx + h * .25, cy - h * .3)],
                       fill=color)
+        elif name == "warning":
+            outline(d, [(cx, cy - h), (cx + h, cy + h * .8),
+                        (cx - h, cy + h * .8), (cx, cy - h)], color, w)
+            d.line((cx, cy - h * .35, cx, cy + h * .25), fill=color,
+                   width=w + 1)
+            d.ellipse((cx - w, cy + h * .45, cx + w, cy + h * .45 + 2 * w),
+                      fill=color)
+        elif name == "update":
+            d.ellipse((cx - h, cy - h, cx + h, cy + h), outline=color,
+                      width=w)
+            d.line((cx, cy - h * .55, cx, cy + h * .35), fill=color,
+                   width=w + 1)
+            d.polygon([(cx - h * .4, cy + h * .05), (cx + h * .4,
+                       cy + h * .05), (cx, cy + h * .55)], fill=color)
 
     def ring(self, d, cx, cy, r, frac, color, width=8):
         d.arc((cx - r, cy - r, cx + r, cy + r), 135, 405,
@@ -850,6 +901,7 @@ class Screen:
             self.ip, bool(self.pa_result(st)),
             (st.get("hark_calib") or {}).get("pending"),
             self.track_stage(st), self.console[-2:],
+            self.notice_key(st, err),
             # the stage timer ticks every 2 s while a stage runs
             int(time.time() / 2) if self.stage_log and self.stage_log[-1][0]
             else 0],
@@ -889,7 +941,8 @@ class Screen:
                 "printing", "paused"):
             self.editor = None
         if err:
-            self.draw_offline(d, body, err)
+            self.draw_offline(d, body, err,
+                              st.get("webhooks", {}).get("state_message", ""))
         elif self.editor:
             self.draw_editor(d, body, st)
         else:
@@ -907,7 +960,102 @@ class Screen:
         pick = None if err else self.calib_pick(st)
         if pick and not self.confirm and not res:
             self.draw_calib_pick(pick)
+        note = self.notice(st, err)
+        if (note and not self.confirm and not res and not pick
+                and not self.slot_menu and not self.editor and not self.kb):
+            self.draw_notice(note)
         return self.canvas
+
+    # --- notices: update offers, print errors, safety messages ------------
+    def notice(self, st, err):
+        """The box to show, most urgent first, or None."""
+        if err:
+            return None
+        ps = st.get("print_stats", {})
+        state = ps.get("state", "")
+        running = state in ("printing", "paused")
+        alerts = self.alerts or []
+        newest = alerts[-1][0] if alerts else 0.
+        if self.alert_ack is None and "print_stats" in st:
+            # Screen start: what is already in the console is old news
+            self.alert_ack = newest
+            self.error_ack = (ps.get("filename"), ps.get("message"))
+        if self.alert_ack is None:
+            return None
+        if state == "error" and ps.get("message") and (
+                ps.get("filename"), ps.get("message")) != self.error_ack:
+            return {"kind": "error", "title": "Print stopped",
+                    "lines": [ps["message"]], "color": "error",
+                    "ack": ((ps.get("filename"), ps.get("message")), newest)}
+        fresh = [m for t, m in alerts if t > self.alert_ack
+                 and (running or state == "error"
+                      or any(k in m for k in IDLE_ALERTS))]
+        if fresh:
+            title = {"paused": "Print paused",
+                     "error": "Print stopped"}.get(state, "Printer message")
+            return {"kind": "alert", "title": title, "lines": fresh[-3:],
+                    "color": "warn" if state == "printing" else "error",
+                    "ack": (self.error_ack, newest)}
+        upd = st.get("hark_update", {})
+        latest = upd.get("latest")
+        snooze = self.update_snooze or {}
+        if (upd.get("update_available") and not upd.get("updating")
+                and not running and not self.busy(st)
+                and not (snooze.get("version") == latest
+                         and time.time() < snooze.get("until", 0))):
+            first = ""
+            for line in (upd.get("notes") or "").splitlines():
+                line = line.strip().lstrip("#*- ").strip()
+                if line and not line.startswith("K2 OpenKlipper v"):
+                    first = line
+                    break
+            lines = ["Version %s is ready to install (this printer has %s)."
+                     % (latest, upd.get("installed") or "?"),
+                     "Settings are kept. The printer restarts (about 2 min)."]
+            if first:
+                lines.append(first)
+            return {"kind": "update", "title": "Update available",
+                    "lines": lines, "color": "accent", "version": latest}
+        return None
+
+    def urgent(self, st, err):
+        """An error notice is waiting: wake the screen and keep it on."""
+        note = self.notice(st, err)
+        return bool(note and note["kind"] != "update")
+
+    def notice_key(self, st, err):
+        note = self.notice(st, err)
+        return note and [note["kind"], note["lines"]]
+
+    def draw_notice(self, note):
+        dim = Image.new("RGB", (W, H), (0, 0, 0))
+        self.canvas = Image.blend(self.canvas, dim, 0.65)
+        d = ImageDraw.Draw(self.canvas)
+        col = self.c[note["color"]]
+        box = (110, 50, W - 110, 430)
+        self.panel(d, box, col, True)
+        icon = "update" if note["kind"] == "update" else "warning"
+        self.icon(d, icon, box[0] + 46, 96, 30, col)
+        self.text(d, (box[0] + 80, 96), note["title"], "m", col, anchor="lm")
+        width = box[2] - box[0] - 60
+        rows = []
+        for i, msg in enumerate(note["lines"]):
+            font = "s" if i == 0 else "xs"
+            for line in self.wrap(msg, font, width)[:3]:
+                rows.append((line, font, "text" if i == 0 else "muted"))
+        y = 150
+        for line, font, colour in rows[:7]:
+            self.text(d, (box[0] + 30, y), line, font, colour, anchor="lm")
+            y += 34 if font == "s" else 28
+        self.buttons = []
+        if note["kind"] == "update":
+            self.button(d, (box[0] + 30, 350, W // 2 - 10, 410), "Later",
+                        ("notice_later", note["version"]), "muted", True, "m")
+            self.button(d, (W // 2 + 10, 350, box[2] - 30, 410),
+                        "Update now", ("notice_update",), "accent", True, "m")
+        else:
+            self.button(d, (W // 2 - 110, 350, W // 2 + 110, 410), "OK",
+                        ("notice_ok", note["ack"]), "accent", True, "m")
 
     def calib_pick(self, st):
         """A finished flow or retraction test waiting for its best result."""
@@ -1128,15 +1276,29 @@ class Screen:
                 "cancelled": ("Cancelled", "muted"),
                 "error": ("Error", "error")}.get(ps, ("Ready", "ok"))
 
-    def draw_offline(self, d, body, err):
+    def draw_offline(self, d, body, err, why=""):
         x0, y0, x1, y1 = body
         cx = (x0 + x1) // 2
-        self.paste_logo((cx - 130, y0 + 20, cx + 130, y0 + 280))
-        self.text(d, (cx, y0 + 320), "Klipper is not ready", "m", "warn",
+        # Klipper's own reason (shutdown, config error): the first lines,
+        # without its generic "Once the underlying issue is corrected" tail
+        why = (why or "").split("Once the underlying issue")[0].strip()
+        lines = []
+        for para in why.splitlines():
+            if para.strip():
+                lines += self.wrap(para.strip(), "xs", x1 - x0 - 60)
+        lines = lines[:4]
+        logo = 260 - 30 * len(lines)
+        self.paste_logo((cx - logo // 2, y0 + 20, cx + logo // 2,
+                         y0 + 20 + logo))
+        y = y0 + 40 + logo
+        self.text(d, (cx, y), "Klipper is not ready", "m", "warn",
                   anchor="mm")
-        self.text(d, (cx, y0 + 360), err[:50], "xs", "muted", anchor="mm")
-        self.anims.append({"kind": "spin", "center": (cx, y0 + 395), "r": 12,
-                           "rect": (cx - 18, y0 + 377, cx + 18, y0 + 413)})
+        self.text(d, (cx, y + 38), err[:50], "xs", "muted", anchor="mm")
+        for i, line in enumerate(lines):
+            self.text(d, (cx, y + 70 + i * 26), line, "xs", anchor="mm")
+        sy = y + 70 + len(lines) * 26 + 10
+        self.anims.append({"kind": "spin", "center": (cx, sy), "r": 12,
+                           "rect": (cx - 18, sy - 18, cx + 18, sy + 18)})
 
     def gauge(self, d, box, label, icon, h):
         x0, y0, x1, y1 = box
@@ -1978,6 +2140,19 @@ class Screen:
                 mr.gcode(action[1])
             elif kind == "confirm":
                 self.confirm = (action[1], action[2])
+            elif kind == "notice_ok":
+                self.error_ack, self.alert_ack = action[1]
+            elif kind == "notice_later":
+                self.update_snooze = {"version": action[1],
+                                      "until": time.time() + UPDATE_SNOOZE}
+                try:
+                    with open(UPDATE_SNOOZE_FILE, "w") as f:
+                        json.dump(self.update_snooze, f)
+                except Exception:
+                    pass
+            elif kind == "notice_update":
+                self.running = ("Updating", time.time())
+                mr.gcode("OKL_UPDATE CONFIRM=1")
             elif kind == "pa_static_ok":
                 self.pa_static_ack = action[1]
             elif kind == "pa_ok":
@@ -2124,12 +2299,13 @@ def main():
         sleep_after = cfg.num("screen", "sleep_after")
         if screen.asleep:
             if (taps or printing or screen.pa_result(st)
-                    or screen.calib_pick(st)):
+                    or screen.calib_pick(st) or screen.urgent(st, err)):
                 screen.set_sleep(False)
                 touch.last_activity = now
             taps = []
         elif (sleep_after > 0 and not printing and not screen.confirm
               and not screen.pa_result(st) and not screen.calib_pick(st)
+              and not screen.urgent(st, err)
               and now - touch.last_activity > sleep_after):
             screen.set_sleep(True)
         for x, y in taps:
