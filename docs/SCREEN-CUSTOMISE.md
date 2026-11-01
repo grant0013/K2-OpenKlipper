@@ -19,6 +19,24 @@ On the printer, the default Klipper theme and the Hark Tech theme:
 <img src="img/photos/k2-screen-hark-theme.jpg" alt="Hark Tech theme on the K2's screen" width="58%">
 </p>
 
+## The Settings page
+
+The gear at the bottom of the side bar opens Settings, with no file to edit:
+
+- **Brightness** of the panel (25 to 100%), kept after sleep and restarts.
+- **Light off**: the chamber light switches itself off this long after a
+  print ends (or never).
+- **Idle off**: how long the printer sits idle before heaters and motors go
+  off; motors off lets the bed drop on a K2 Plus.
+- **Time zone** of the printer (the one Creality's settings set), used for
+  the "done about" time.
+- **Highlight** colour, over the theme's own.
+
+Choices are kept in `harkscreen-settings.json` next to harkscreen.cfg and
+win over it; the light and idle times are sent to Klipper again whenever it
+restarts, so they also win over printer-overrides.cfg. Delete the file to go
+back to the config files' values.
+
 ## Edit it in Mainsail
 
 1. Open Mainsail (`http://PRINTER-IP:4409`), then **Machine** in the left menu.

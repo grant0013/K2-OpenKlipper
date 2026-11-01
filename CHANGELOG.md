@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- **Touchscreen Settings page** (gear in the side bar): panel brightness,
+  chamber light off time, idle time before heaters and motors go off, the
+  printer's time zone (picker of 17 regions, written to the printer's own
+  setting) and the highlight colour. Kept in harkscreen-settings.json; the
+  Klipper ones are sent again whenever Klipper restarts. The idle message
+  shows the timeout in force. Audited across 1,188 page/state/box renders.
+
 ## v0.4.13-alpha.1 (2026-11-01)
 
 - Touchscreen clock: `timezone: auto` (new default) uses the printer's own

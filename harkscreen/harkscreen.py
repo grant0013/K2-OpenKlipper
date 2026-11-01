@@ -59,7 +59,8 @@ OBJECTS = {
     "k2_motor_bus": ["motors_ready"],
     "output_pin chamber_led": ["value"],
     "webhooks": ["state", "state_message"],
-    "idle_timeout": ["state"],
+    "idle_timeout": ["state", "idle_timeout"],
+    "gcode_macro _LIGHT_IDLE": ["off_after"],
     "pa_pressure_log": ["last"],
     "hark_calib": ["pending"],
     "gcode_macro _PA_STATIC_SAVE": ["last"],
@@ -80,6 +81,34 @@ UPDATED_MARK = os.path.join(os.path.dirname(SELF), ".just_updated")
 BAD_VERSION_FILE = os.path.join(os.path.dirname(SELF), ".bad_version")
 SYNC_URL = ("https://raw.githubusercontent.com/grant0013/K2-OpenKlipper/"
             "v%s/harkscreen/harkscreen.py")
+
+# Choices made on the Settings page, kept beside harkscreen.cfg (updates
+# keep the config folder). Klipper's own settings are sent again whenever
+# Klipper (re)starts, so no config file needs editing.
+PREFS_FILE = os.path.join(os.path.dirname(os.path.abspath(CFG_PATH)),
+                          "harkscreen-settings.json")
+BRIGHTNESS_SH = "/usr/bin/brightness.sh"   # Creality's backlight control
+BRIGHTNESS = (25, 50, 75, 100)
+LIGHT_OFF = ((0, "Never"), (300, "5 min"), (600, "10 min"), (1800, "30 min"))
+# 99999999 s is stock's "never"
+IDLE_OFF = ((900, "15 min"), (1800, "30 min"), (3600, "1 hour"),
+            (99999999, "Never"))
+ACCENTS = (("", "Theme"), ("#d9434a", "Red"), ("#f39c12", "Orange"),
+           ("#2ecc71", "Green"), ("#3d8bfd", "Blue"), ("#9b59b6", "Purple"))
+ZONES = (("UK", "Europe/London"), ("Ireland", "Europe/Dublin"),
+         ("Central Europe", "Europe/Berlin"),
+         ("Eastern Europe", "Europe/Helsinki"),
+         ("US Eastern", "America/New_York"),
+         ("US Central", "America/Chicago"),
+         ("US Mountain", "America/Denver"),
+         ("US Pacific", "America/Los_Angeles"),
+         ("Canada Atlantic", "America/Halifax"),
+         ("Brazil", "America/Sao_Paulo"), ("India", "Asia/Kolkata"),
+         ("China", "Asia/Shanghai"), ("Japan", "Asia/Tokyo"),
+         ("Australia East", "Australia/Sydney"),
+         ("Australia West", "Australia/Perth"),
+         ("New Zealand", "Pacific/Auckland"), ("UTC", "UTC"))
+ZONEINFO = "/usr/share/zoneinfo"
 
 # The last PA calibration result the user has dismissed (its stamp)
 PA_ACK_FILE = "/mnt/UDISK/harkscreen/.pa_result_ack"
@@ -312,6 +341,72 @@ def install_screen(code, version):
     os.replace(tmp, SELF)
     with open(VERSION_FILE, "w") as f:
         f.write(version + "\n")
+
+
+def load_prefs():
+    try:
+        with open(PREFS_FILE) as f:
+            prefs = json.load(f)
+        return prefs if isinstance(prefs, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_prefs(prefs):
+    tmp = PREFS_FILE + ".new"
+    with open(tmp, "w") as f:
+        json.dump(prefs, f, indent=1, sort_keys=True)
+    os.replace(tmp, PREFS_FILE)
+
+
+def set_brightness(level):
+    if os.path.exists(BRIGHTNESS_SH):
+        try:
+            subprocess.call(["sh", BRIGHTNESS_SH, str(int(level))],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL, timeout=5)
+        except Exception as e:
+            print("brightness: %s" % e, flush=True)
+
+
+def system_zone():
+    """The printer's time zone as set in Creality's settings (uci)."""
+    try:
+        out = subprocess.check_output(
+            ["uci", "-q", "get", "system.@system[0].zonename"],
+            stderr=subprocess.DEVNULL, timeout=3).decode().strip()
+        if out:
+            return out
+    except Exception:
+        pass
+    return time.strftime("%Z")
+
+
+def set_system_zone(name):
+    """Set the printer's own time zone, as Creality's settings screen did."""
+    for cmd in (["uci", "set", "system.@system[0].zonename=%s" % name],
+                ["uci", "commit", "system"],
+                ["/etc/init.d/system", "reload"]):
+        try:
+            subprocess.call(cmd, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL, timeout=10)
+        except Exception as e:
+            print("time zone: %s failed: %s" % (cmd[0], e), flush=True)
+    time.tzset()
+
+
+def klipper_prefs(prefs, idle):
+    """G-code that applies the Settings page's Klipper choices."""
+    lines = []
+    if "light_off" in prefs:
+        lines.append("SET_GCODE_VARIABLE MACRO=_LIGHT_IDLE VARIABLE=off_after"
+                     " VALUE=%d" % int(prefs["light_off"]))
+        if idle:
+            # restart the countdown with the new time
+            lines.append("_LIGHT_IDLE")
+    if "idle" in prefs:
+        lines.append("SET_IDLE_TIMEOUT TIMEOUT=%d" % int(prefs["idle"]))
+    return "\n".join(lines)
 
 
 def restart():
@@ -556,6 +651,7 @@ class DataThread(threading.Thread):
         settings_at = wifi_at = alerts_at = 0
         thumb_file, thumb_tries, thumb_at = None, 0, 0.
         sync_at = 0.
+        was_ready = False
         while True:
             mr = Moonraker(self.cfg.get("screen", "moonraker"))
             st, err = {}, None
@@ -595,6 +691,12 @@ class DataThread(threading.Thread):
                               % (fn, e, thumb_tries), flush=True)
                     self.screen.thumb = (fn, img, height)
                     self.screen.preview_cache = {}
+                ready = st.get("webhooks", {}).get("state") == "ready"
+                if ready and not was_ready:
+                    # Klipper (re)started: its settings went back to the
+                    # config, so send the Settings page's choices again
+                    self.screen.prefs_pending = True
+                was_ready = ready
                 if time.time() - sync_at > 600:
                     if self.sync(mr, st):
                         sync_at = time.time()
@@ -694,6 +796,12 @@ class Screen:
         self.thumb = None
         self.preview_cache = {}
         self.restart_pending = False
+        # Settings page: saved choices, the time zone picker, the zone name
+        self.prefs = load_prefs()
+        self.prefs_pending = False
+        self.last_st = {}
+        self.zone_pick = False
+        self.zone_name = None
         self.modal_on = False
         self.alert_ack = None
         self.error_ack = None
@@ -715,6 +823,8 @@ class Screen:
                                     "accent", "text", "muted", "ok", "warn",
                                     "error")}
         self.c["white"] = (255, 255, 255)
+        if self.prefs.get("accent"):
+            self.c["accent"] = hex_rgb(self.prefs["accent"], self.c["accent"])
         scale = c.num("theme", "font_scale")
         path = c.get("theme", "font")
         self.fonts = {}
@@ -734,7 +844,12 @@ class Screen:
         pages = [p.strip() for p in c.get("screen", "pages").split(",")]
         self.pages = self.all_pages = [
             p for p in pages
-            if p in ("status", "cfs", "controls", "machine", "wifi")]
+            if p in ("status", "cfs", "controls", "machine", "wifi",
+                     "settings")]
+        # Settings is always reachable, also with a harkscreen.cfg written
+        # before it existed
+        if "settings" not in self.pages:
+            self.pages.append("settings")
         if self.page not in self.pages and self.pages:
             self.page = self.pages[0]
         self.tcache, self.glow_cache, self.bg = {}, {}, None
@@ -999,6 +1114,17 @@ class Screen:
             d.polygon([(cx + h * .55, cy - h * .95), (cx + h * .95,
                        cy - h * .35), (cx + h * .25, cy - h * .3)],
                       fill=color)
+        elif name == "settings":
+            import math
+            for k in range(8):
+                a = k * math.pi / 4
+                d.line((cx + math.cos(a) * h * .55, cy + math.sin(a) * h * .55,
+                        cx + math.cos(a) * h, cy + math.sin(a) * h),
+                       fill=color, width=w + 2)
+            d.ellipse((cx - h * .7, cy - h * .7, cx + h * .7, cy + h * .7),
+                      outline=color, width=w)
+            d.ellipse((cx - h * .25, cy - h * .25, cx + h * .25, cy + h * .25),
+                      outline=color, width=w)
         elif name == "warning":
             outline(d, [(cx, cy - h), (cx + h, cy + h * .8),
                         (cx - h, cy + h * .8), (cx, cy - h)], color, w)
@@ -1126,6 +1252,11 @@ class Screen:
             self.track_stage(st), self.console[-2:],
             self.notice_key(st, err),
             bool(self.thumb and self.thumb[1] is not None),
+            self.prefs, self.zone_pick, self.zone_name,
+            (st.get("idle_timeout") or {}).get("idle_timeout"),
+            (st.get("gcode_macro _LIGHT_IDLE") or {}).get("off_after"),
+            # the Settings page shows the time
+            time.strftime("%H:%M") if self.page == "settings" else "",
             # the stage timer ticks every 2 s while a stage runs
             int(time.time() / 2) if self.stage_log and self.stage_log[-1][0]
             else 0],
@@ -1634,8 +1765,7 @@ class Screen:
                 self.text(d, (tx, ly + 38), "%d%%" % round(prog * 100), "xl")
                 if state == "printing" and rem is not None:
                     done = time.strftime("%H:%M", local_time(
-                        time.time() + rem * 60, self.cfg.get("screen",
-                                                              "timezone")))
+                        time.time() + rem * 60, self.zone()))
                     hrs = "%dh %02dm" % (rem // 60, rem % 60) \
                         if rem >= 60 else "%d min" % rem
                     self.text(d, (tx, ly + 124), hrs + " left", "m",
@@ -1648,8 +1778,7 @@ class Screen:
                           "xl")
                 if state == "printing" and rem is not None:
                     done = time.strftime("%H:%M", local_time(
-                        time.time() + rem * 60, self.cfg.get("screen",
-                                                              "timezone")))
+                        time.time() + rem * 60, self.zone()))
                     hrs = "%dh %02dm" % (rem // 60, rem % 60) \
                         if rem >= 60 else "%d min" % rem
                     self.text(d, (left[2] - 18, ly + 58), hrs + " left",
@@ -2174,6 +2303,126 @@ class Screen:
     KB_LETTERS = ("1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm")
     KB_SYMBOLS = ("1234567890", "!@#$%^&*()", "-_=+[]{};:", "'\\|,.<>/?~")
 
+    # --- Settings page ----------------------------------------------------
+    def zone(self):
+        """A time zone picked on the Settings page wins over harkscreen.cfg."""
+        return self.prefs.get("timezone") or self.cfg.get("screen",
+                                                          "timezone")
+
+    def current_prefs(self, st):
+        """What is in force: the saved choice, else what Klipper reports."""
+        light = self.prefs.get("light_off")
+        if light is None:
+            light = (st.get("gcode_macro _LIGHT_IDLE") or {}).get("off_after")
+        idle = self.prefs.get("idle")
+        if idle is None:
+            idle = (st.get("idle_timeout") or {}).get("idle_timeout")
+        return {"brightness": self.prefs.get("brightness", 100),
+                "light_off": int(light or 0), "idle": int(idle or 0),
+                "accent": self.prefs.get("accent", "")}
+
+    def page_settings(self, d, body, st):
+        if self.zone_pick:
+            return self.draw_zone_pick(d, body)
+        x0, y0, x1, y1 = body
+        pad = 14
+        cur = self.current_prefs(st)
+        if self.zone_name is None:
+            self.zone_name = system_zone()
+        label_w = 150
+        rows = [
+            ("Brightness", [("%d%%" % b, ("pref", "brightness", b),
+                             cur["brightness"] == b) for b in BRIGHTNESS]),
+            ("Light off", [(n, ("pref", "light_off", v),
+                            cur["light_off"] == v) for v, n in LIGHT_OFF]),
+            ("Idle off", [(n, ("pref", "idle", v),
+                           cur["idle"] == v) for v, n in IDLE_OFF]),
+        ]
+        rh, gap = 58, 12
+        y = y0 + pad
+        for label, opts in rows:
+            self.text(d, (x0 + pad, y + rh // 2), label, "s", "muted",
+                      anchor="lm")
+            bx = x0 + pad + label_w
+            bw = (x1 - pad - bx - (len(opts) - 1) * 10) // len(opts)
+            for i, (text, action, on) in enumerate(opts):
+                box = (bx + i * (bw + 10), y, bx + i * (bw + 10) + bw, y + rh)
+                self.button(d, box, text, action,
+                            "accent" if on else "muted", True, "s")
+            y += rh + gap
+        # Time zone: the printer's own, with a picker
+        self.text(d, (x0 + pad, y + rh // 2), "Time zone", "s", "muted",
+                  anchor="lm")
+        bx = x0 + pad + label_w
+        names = dict((z, n) for n, z in ZONES)
+        zone = names.get(self.zone_name, self.zone_name)
+        self.panel(d, (bx, y, x1 - pad - 170, y + rh))
+        self.text(d, (bx + 16, y + rh // 2),
+                  "%s · %s" % (zone, time.strftime("%H:%M", time.localtime())),
+                  "s", anchor="lm", width=x1 - pad - 170 - bx - 32)
+        self.button(d, (x1 - pad - 160, y, x1 - pad, y + rh), "Change",
+                    ("zone_pick",), "accent", True, "s")
+        y += rh + gap
+        # Highlight colour
+        self.text(d, (x0 + pad, y + rh // 2), "Highlight", "s", "muted",
+                  anchor="lm")
+        n = len(ACCENTS)
+        bw = (x1 - pad - bx - (n - 1) * 10) // n
+        theme = hex_rgb(self.cfg.get("theme", "accent"))
+        for i, (hexval, name) in enumerate(ACCENTS):
+            box = (bx + i * (bw + 10), y, bx + i * (bw + 10) + bw, y + rh)
+            col = hex_rgb(hexval, theme) if hexval else theme
+            on = cur["accent"] == hexval
+            d.rounded_rectangle(box, radius=14, fill=col,
+                                outline=self.c["text"] if on else
+                                self.c["panel_edge"], width=4 if on else 2)
+            self.text(d, ((box[0] + box[2]) // 2, (box[1] + box[3]) // 2),
+                      name, "xs", (255, 255, 255), anchor="mm",
+                      width=bw - 8)
+            self.buttons.append((*box, ("pref", "accent", hexval)))
+
+    def draw_zone_pick(self, d, body):
+        x0, y0, x1, y1 = body
+        pad = 14
+        if self.zone_name is None:
+            self.zone_name = system_zone()
+        self.text(d, (x0 + pad, y0 + 10), "Time zone (now %s)"
+                  % (self.zone_name or "?"), "s",
+                  width=x1 - x0 - 2 * pad)
+        zones = [(n, z) for n, z in ZONES
+                 if not os.path.isdir(ZONEINFO)
+                 or os.path.exists(os.path.join(ZONEINFO, z))]
+        cols, rh, gap = 3, 50, 8
+        bw = (x1 - x0 - 2 * pad - (cols - 1) * gap) // cols
+        top = y0 + 48
+        for i, (name, zone) in enumerate(zones[:17]):
+            bx = x0 + pad + (i % cols) * (bw + gap)
+            by = top + (i // cols) * (rh + gap)
+            on = zone == self.zone_name
+            self.button(d, (bx, by, bx + bw, by + rh), name,
+                        ("zone_set", zone), "accent" if on else "muted",
+                        True, "xs")
+        i = 17
+        bx = x0 + pad + (i % cols) * (bw + gap)
+        by = top + (i // cols) * (rh + gap)
+        self.button(d, (bx, by, bx + bw, by + rh), "Back", ("zone_back",),
+                    "muted", True, "xs")
+
+    def set_pref(self, key, value, mr, st):
+        self.prefs[key] = value
+        try:
+            save_prefs(self.prefs)
+        except Exception as e:
+            print("settings: could not save: %s" % e, flush=True)
+        if key == "brightness":
+            set_brightness(value)
+        elif key == "accent":
+            self.apply_config()
+        elif key in ("light_off", "idle"):
+            idle = st.get("print_stats", {}).get("state") not in (
+                "printing", "paused")
+            mr.gcode(klipper_prefs({key: value}, idle))
+
     def page_wifi(self, d, body, st):
         x0, y0, x1, y1 = body
         pad = 14
@@ -2279,7 +2528,7 @@ class Screen:
         names = {"status": "Status",
                  "cfs": "Spool" if getattr(self, "no_cfs", False) else "CFS",
                  "controls": "Controls", "machine": "Machine",
-                 "wifi": "Wi-Fi"}
+                 "wifi": "Wi-Fi", "settings": "Settings"}
         n = len(self.pages) or 1
         bh = (H - HEADER_H) // n
         for i, p in enumerate(self.pages):
@@ -2473,6 +2722,9 @@ class Screen:
     def set_sleep(self, asleep):
         if asleep != self.asleep:
             subprocess.call(["/usr/bin/screen.sh", "off" if asleep else "on"])
+            if not asleep and "brightness" in self.prefs:
+                # the panel comes back at the driver's default
+                set_brightness(self.prefs["brightness"])
             self.asleep = asleep
             self.dirty = True
             self.shown = None
@@ -2511,6 +2763,9 @@ class Screen:
                      "CANCEL_PRINT": "Cancel"}
             self.dirty = True
             if kind == "page":
+                self.zone_pick = False
+                if action[1] == "settings":
+                    self.zone_name = None    # read again when shown
                 if action[1] != self.page or self.editor:
                     self.transition = (self.pages.index(self.page)
                                        if self.page in self.pages else 0)
@@ -2523,6 +2778,21 @@ class Screen:
                 mr.gcode(action[1])
             elif kind == "confirm":
                 self.confirm = (action[1], action[2])
+            elif kind == "pref":
+                self.set_pref(action[1], action[2], mr, self.last_st)
+            elif kind == "zone_pick":
+                self.zone_pick = True
+            elif kind == "zone_back":
+                self.zone_pick = False
+            elif kind == "zone_set":
+                set_system_zone(action[1])
+                self.zone_name = action[1]
+                self.prefs["timezone"] = "auto"
+                try:
+                    save_prefs(self.prefs)
+                except Exception:
+                    pass
+                self.zone_pick = False
             elif kind == "notice_ok":
                 self.error_ack, self.alert_ack = action[1]
             elif kind == "notice_later":
@@ -2663,6 +2933,8 @@ def main():
     touch = Touch()
     touch.start()
     screen.set_sleep(False)
+    if "brightness" in screen.prefs:
+        set_brightness(screen.prefs["brightness"])
     seen, last_anim = -1, 0.0
     while True:
         now = time.time()
@@ -2673,6 +2945,13 @@ def main():
         if screen.restart_pending:
             restart()
         st, err = data.st, data.err
+        screen.last_st = st
+        if screen.prefs_pending and not err:
+            screen.prefs_pending = False
+            script = klipper_prefs(screen.prefs, st.get("print_stats", {}).get(
+                "state") not in ("printing", "paused"))
+            if script:
+                mr.gcode(script)
         printing = st.get("print_stats", {}).get("state") in (
             "printing", "paused")
         taps = touch.pop()
