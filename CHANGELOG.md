@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.4.8-alpha.1 (2026-11-01)
 
 - Fixed: every K2 Plus warned "Motor check: ... calibration param 19 is 0.15
   ... may not be calibrated" for all four motors at start-up. K2 Plus motors
