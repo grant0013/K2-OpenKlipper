@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.4.13-alpha.1 (2026-11-01)
 
 - Touchscreen clock: `timezone: auto` (new default) uses the printer's own
   time zone as set in Creality's settings; it was fixed to UK time. Updating
