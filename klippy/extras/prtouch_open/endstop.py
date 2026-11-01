@@ -52,6 +52,7 @@ from . import step as step_mod
 from . import motion as motion_mod
 from . import zip as zip_mod
 from . import scrub as scrub_mod
+from . import fan_cap as fan_cap_mod
 
 # The nozzle MCU's pressure buffer holds 64 samples (docs/PRTOUCH.md).
 _PRES_BUF_LEN = 64
@@ -173,6 +174,10 @@ class PRTouchEndstopWrapper:
         self.cfg = cfg_mod.PrtouchConfig(config)
         self.val = _PrtouchVal()
         self.obj = _PrtouchObj(config)
+        # Hotend fans down while the gauge is armed (prth_min_fans)
+        self.fan_cap = fan_cap_mod.ProbeFanCap(
+            self.obj.printer, self.cfg.prth_min_fans,
+            self.cfg.prth_fan_settle, self.cfg.prth_fan_hold)
 
         # ---- Parse pin specs and resolve MCUs at __init__ time -----------
         # CRITICAL: Klipper processes register_config_callback callbacks
@@ -527,6 +532,9 @@ class PRTouchEndstopWrapper:
                 "K2-PRTouch pressure session already active")
         self.last_no_trigger = False
         self.last_cleanup_ok = False
+        # Slow the hotend fans before the baseline is taken: their
+        # vibration alone can trip the gauge (stock prth_min_fans)
+        self.fan_cap.acquire()
         min_hold, max_hold, add_hold = scrub_mod.scaled_holds(
             self.cfg.min_hold, self.cfg.max_hold, self.cfg.add_hold,
             self.hold_ratio)
@@ -585,6 +593,7 @@ class PRTouchEndstopWrapper:
         finally:
             self.step.stop_capture()
             self._probe_active = False
+            self.fan_cap.release()
         self.last_cleanup_ok = True
         # The next probe refuses to start on a stuck line anyway, so a line
         # that does not release is reported rather than failing a probe that
