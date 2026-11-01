@@ -137,11 +137,15 @@ min_temp: -30
 max_temp: 120
 """),
     # --- fans ---------------------------------------------------------
-    ("hotend fan: two fans (nozzle PB7 + PB1)",
+    ("hotend fan: two fans, toolhead PB7 + MAIN board PB1 (stock\n"
+     "heater_fans pins: nozzle_mcu:PB7,PB1; an unprefixed pin is the main\n"
+     "MCU). The toolhead's own PB1 is stock's extruder_fan, off by default:\n"
+     "running it with the hotend made the nozzle strain gauge false-trigger\n"
+     "on hot taps (nur00, 10-31)",
      """[heater_fan hotend_fan]
 pin: nozzle_mcu:PB7
 """, """[multi_pin hotend_fan_pins]
-pins: nozzle_mcu:PB7, nozzle_mcu:PB1
+pins: nozzle_mcu:PB7, PB1
 
 [heater_fan hotend_fan]
 pin: multi_pin:hotend_fan_pins
