@@ -7,7 +7,9 @@
 # the hotend fans to prth_min_fans while it probes, on every K2 model.
 #
 # acquire() at each tap caps every [heater_fan] that serves the extruder
-# and, if that changed a running fan, waits settle_time for it to slow.
+# and, if that changed a running fan, waits settle_time for it to slow
+# (8 s: on the K2 Plus 3 s left the first two taps of PROBE_ACCURACY false
+# while the fans were still slowing; 8 s gave five taps within 0.0025 mm).
 # The cap holds while a tap runs and while taps keep coming, and is lifted
 # hold_time after the last one ends, so a whole mesh pays one spin-down.
 # (The countdown runs only between taps: started at acquire() it ran out
@@ -21,7 +23,7 @@ import logging
 
 
 class ProbeFanCap:
-    def __init__(self, printer, cap, settle_time=3., hold_time=5.):
+    def __init__(self, printer, cap, settle_time=8., hold_time=5.):
         self.printer = printer
         self.cap = cap
         self.settle_time = settle_time
