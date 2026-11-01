@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.4.5-alpha.1 (2026-11-01)
 
 - **Touchscreen notices:** a pending update shows a box with **Update now**
   and **Later** (Later puts that version off for 24 h; the Machine page row
