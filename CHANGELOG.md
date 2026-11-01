@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.4.11-alpha.1 (2026-11-01)
 
 - **K2 driven by a separate PC: the touchscreen now updates itself.** A host
   update replaced Klipper's files on the PC only; the touchscreen program on
