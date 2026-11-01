@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.4.14-alpha.1 (2026-11-01)
 
 - **USB drive: plug in and go.** The touchscreen asks once per drive whether
   to use a newly plugged drive for storage, and offers to format one the
