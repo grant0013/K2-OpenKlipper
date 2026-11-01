@@ -4,7 +4,11 @@
 # written for mainline bed_mesh. Checks the probed points, not the
 # interpolated mesh, so one bad tap shows at its real size.
 #
-#   BED_MESH_CHECK [MAX_DEVIATION=<mm>] [MAX_SLOPE=<mm per mm>]
+#   BED_MESH_CHECK [MAX_DEVIATION=<mm>] [MAX_SLOPE=<mm per mm>] [REPORT=1]
+#
+# REPORT=1 does not raise on a failed check: it warns and leaves the result
+# in printer.hark_mesh_check (ok, summary) for a macro to act on, e.g. clean
+# the nozzle and measure again.
 #
 # Copyright (C) 2026  Hark Tech
 #
@@ -55,6 +59,7 @@ class HarkMeshCheck:
     def cmd_BED_MESH_CHECK(self, gcmd):
         max_dev = gcmd.get_float('MAX_DEVIATION', None, above=0.)
         max_slope = gcmd.get_float('MAX_SLOPE', None, above=0.)
+        report = gcmd.get_int('REPORT', 0, minval=0, maxval=1)
         bed_mesh = self.printer.lookup_object('bed_mesh', None)
         z_mesh = bed_mesh.get_mesh() if bed_mesh is not None else None
         if z_mesh is None:
@@ -72,15 +77,25 @@ class HarkMeshCheck:
                   res['slope'],
                   " (max %.4f)" % max_slope if max_slope else "", where))
         failed = []
+        summary = []
         if max_dev is not None and res['deviation'] > max_dev:
             failed.append("deviation")
+            summary.append("deviation %.3fmm (max %.3f)"
+                           % (res['deviation'], max_dev))
         if max_slope is not None and res['slope'] > max_slope:
             failed.append("slope")
+            summary.append("slope %.4f mm/mm (max %.4f)%s"
+                           % (res['slope'], max_slope, where))
+        self.last['summary'] = ", ".join(summary)
         if failed:
             self.last['ok'] = False
-            raise gcmd.error("%s\nBed mesh %s over the limit: check the "
-                             "nozzle tip and the plate, then re-run"
-                             % (msg, " and ".join(failed)))
+            text = ("%s\nBed mesh %s over the limit: check the nozzle tip "
+                    "and the plate, then re-run"
+                    % (msg, " and ".join(failed)))
+            if report:
+                gcmd.respond_raw("!! " + text.replace("\n", "\n!! "))
+                return
+            raise gcmd.error(text)
         gcmd.respond_info(msg)
 
     def get_status(self, eventtime):
