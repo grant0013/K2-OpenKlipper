@@ -204,6 +204,30 @@ If anything smells hot, the fan is silent or the console shows
 `!! Chamber heater off`, run `CHAMBER_HEAT TARGET=0` (or switch off) and send
 the output.
 
+## Between prints
+
+- **Cancel** works like stock: heaters off, the nozzle lifts and parks, and
+  the motors stay on. Only the safety watch (after a motor fault) stops
+  without moving and switches the motors off.
+- **Warm start:** after a print that finished or was cancelled normally,
+  the next print skips the trip to the bottom switches and the X/Y homing
+  (the Z tap and Z tilt still run). A restart, motors off or the idle
+  timeout homes in full.
+- **Idle settings**, in printer-overrides.cfg (seconds):
+
+      [gcode_macro _LIGHT_IDLE]
+      variable_off_after: 600
+
+      [idle_timeout]
+      timeout: 3600
+
+  The first switches the chamber light off 10 minutes after a print (0 =
+  stays on). The second is how long the printer sits idle before heaters
+  and motors go off, which lets the bed drop (default 1800 = 30 minutes).
+- **Network:** Mainsail, Mobileraker and other Klipper apps find the
+  printer on the network by name. The printer's IP is on the touchscreen's
+  Wi-Fi page.
+
 ## What to send back after each step
 
 - the console output of the step
