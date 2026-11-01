@@ -17,6 +17,24 @@
 #
 #   [input_shaper]
 #   shaper_freq_x: 52.0
+#
+# Idle settings. Chamber light off this many seconds after a print ends or
+# is cancelled (0 = stays on):
+#
+#   [gcode_macro _LIGHT_IDLE]
+#   variable_off_after: 600
+#
+# Heaters and motors off (the bed is released and the next print homes in
+# full) after this long idle, in seconds (default 1800):
+#
+#   [idle_timeout]
+#   timeout: 3600
+#
+# Always home in full at print start, even when still homed from the last
+# print:
+#
+#   [gcode_macro START_PRINT]
+#   variable_warm_start: False
 
 # Extruder, set by the installer (stock Creality extruder or Phaetus DXC2):
 # cut depth and the pull-back after each cut. See docs/INSTALL.md.

@@ -206,7 +206,7 @@ class SafetyWatchTest(unittest.TestCase):
         w._check_motors(3.)
         self.assertTrue(w.tripped)
         self.assertIn("excessive position tracking error", w.last['event'])
-        self.assertEqual(w.gcode.scripts, ["CANCEL_PRINT\nTURN_OFF_HEATERS"])
+        self.assertEqual(w.gcode.scripts, ["CANCEL_PRINT SAFE=1\nTURN_OFF_HEATERS"])
 
     def test_warning_reports_once_and_never_trips(self):
         w = make_watch({'x': HEALTHY, 'y': WARNED}, fail_count=1)
