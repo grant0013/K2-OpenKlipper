@@ -390,6 +390,20 @@ scrub_y_max: 356.5
 """, """        {% if not z_was_homed and not z_from_bottom %}
             # Stock G28 Z: raise the bed at homing_speed until the strain
 """),
+    # --- first layer: Creality's K2 Plus hot-nozzle correction ---------
+    ("first-layer correction: stock K2 Plus temp_non_linaer_c 0.017316 +\n"
+     "temp_non_linaer_a 5.1e-6 x (print - tap temp)^2 (the F008 config sets\n"
+     "neither, so prtouch_v3's built-in defaults apply; read from the module:\n"
+     "get_temp_compensate(220, 140) = 0.049956)",
+     """variable_hot_z_comp: 0.04
+""", """# K2 Plus: Creality's own correction, 0.050 mm at 220 C and 0.079 at
+# 250 C (tapped at 140 C), with hot_z_quad below.
+variable_hot_z_comp: 0.017316
+"""),
+    ("first-layer correction: stock K2 Plus temperature term",
+     """variable_hot_z_quad: 0
+""", """variable_hot_z_quad: 0.0000051
+"""),
 ]
 
 # Several identical lines: replace them all, but check the count
