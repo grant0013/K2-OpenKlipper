@@ -9,6 +9,21 @@
 - Touchscreen: messages from while the printer was idle (start-up lines,
   console typos) no longer pop up when the next print starts; the heating
   rings and spinners of the page underneath no longer draw over a box.
+- Touchscreen: only one box shows at a time (a question, then an error or
+  safety message, a calibration result or pick, the slot menu, an update
+  offer). A PA calibration result clears when a print starts, or after 10
+  minutes.
+
+## v0.4.7-alpha.1 (2026-11-01)
+
+- **Fix: colour changes low in a print stopped the print.** A CFS change
+  below about Z 2.5 mm failed with "CFS move requires Z >= 4.500 (current
+  4.461)". The change lifts to `purge_min_z` before the cut, but it sent
+  that height as G-code Z while the purge gate checks the real toolhead
+  height. The hot-nozzle first-layer offset (about -0.04 mm for PETG at
+  250C) left the nozzle just under the gate. The lift, and the
+  filament-path retry's lift and return, now allow for the G-code offset.
+  New test: tests/test_cfs_toolchange_lift.py.
 
 ## v0.4.6-alpha.1 (2026-11-01)
 
