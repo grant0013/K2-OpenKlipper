@@ -445,6 +445,8 @@ esac
 
 # Touchscreen and camera
 cp -a "$BUILD/harkscreen" /mnt/UDISK/harkscreen
+# The screen's own version (a host-driven K2 brings its screen in step with it)
+cp "$BUILD/VERSION" /mnt/UDISK/harkscreen/VERSION
 # Default look: Klipper logo and colours. An existing harkscreen.cfg (your own
 # theme) is kept. See docs/SCREEN-CUSTOMISE.md.
 if [ ! -f "$CONF/harkscreen.cfg" ]; then

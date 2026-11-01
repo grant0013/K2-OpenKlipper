@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- **K2 driven by a separate PC: the touchscreen now updates itself.** A host
+  update replaced Klipper's files on the PC only; the touchscreen program on
+  the K2 board stayed on whatever was copied at setup (Grant's was from
+  10-28, missing every screen fix since). While idle, the screen now fetches
+  the release the host runs from GitHub, checks it, keeps the old copy and
+  restarts; a copy that fails to start is rolled back and not fetched again.
+  One manual copy is needed to get this version onto an existing setup
+  (docs/EXTERNAL-HOST.md, K2 side step 6). The installer now writes the
+  screen's VERSION file.
+
 ## v0.4.10-alpha.1 (2026-11-01)
 
 - **Fix: colours bled on multicolour prints.** An OrcaSlicer printer preset

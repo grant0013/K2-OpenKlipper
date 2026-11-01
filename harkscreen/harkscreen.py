@@ -69,6 +69,18 @@ OBJECTS = {
                     "notes"],
 }
 
+# On a K2 driven by a separate PC (moonraker: http://<pc>:7126) an update
+# lands on the PC only. This program runs on the K2 board, so it brings
+# itself in step: while idle it fetches the release the PC runs (sync()).
+SELF = os.path.realpath(__file__)
+VERSION_FILE = os.path.join(os.path.dirname(SELF), "VERSION")
+# Holds the version we updated from until the new copy has drawn a frame
+UPDATED_MARK = os.path.join(os.path.dirname(SELF), ".just_updated")
+# A release whose screen failed to start: not fetched again
+BAD_VERSION_FILE = os.path.join(os.path.dirname(SELF), ".bad_version")
+SYNC_URL = ("https://raw.githubusercontent.com/grant0013/K2-OpenKlipper/"
+            "v%s/harkscreen/harkscreen.py")
+
 # The last PA calibration result the user has dismissed (its stamp)
 PA_ACK_FILE = "/mnt/UDISK/harkscreen/.pa_result_ack"
 # An update offer put off with Later: {"version": tag, "until": epoch}
@@ -243,6 +255,52 @@ class Wifi:
             if on_done:
                 on_done(ok)
         threading.Thread(target=run, daemon=True).start()
+
+
+def read_text(path):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except (OSError, IOError):
+        return ""
+
+
+def own_version():
+    return read_text(VERSION_FILE).lstrip("vV")
+
+
+def remote_moonraker(url):
+    host = urllib.parse.urlparse(url).hostname or ""
+    return host not in ("", "127.0.0.1", "localhost", "::1")
+
+
+def fetch_screen(version):
+    """This program as published in release version, checked to be one."""
+    with urllib.request.urlopen(SYNC_URL % version, timeout=30) as r:
+        code = r.read()
+    if len(code) < 50000 or b"class Screen" not in code:
+        raise ValueError("download is not the screen program")
+    compile(code, "harkscreen.py", "exec")
+    return code
+
+
+def install_screen(code, version):
+    """Swap in the new copy, keeping this one as harkscreen.py.prev."""
+    import shutil
+    shutil.copy2(SELF, SELF + ".prev")
+    tmp = SELF + ".new"
+    with open(tmp, "wb") as f:
+        f.write(code)
+    os.chmod(tmp, 0o755)
+    with open(UPDATED_MARK, "w") as f:
+        f.write(own_version())
+    os.replace(tmp, SELF)
+    with open(VERSION_FILE, "w") as f:
+        f.write(version + "\n")
+
+
+def restart():
+    os.execv(sys.executable, [sys.executable] + sys.argv)
 
 
 class Moonraker:
@@ -479,6 +537,7 @@ class DataThread(threading.Thread):
     def run(self):
         settings_at = wifi_at = alerts_at = 0
         thumb_file, thumb_tries, thumb_at = None, 0, 0.
+        sync_at = 0.
         while True:
             mr = Moonraker(self.cfg.get("screen", "moonraker"))
             st, err = {}, None
@@ -518,6 +577,9 @@ class DataThread(threading.Thread):
                               % (fn, e, thumb_tries), flush=True)
                     self.screen.thumb = (fn, img, height)
                     self.screen.preview_cache = {}
+                if time.time() - sync_at > 600:
+                    if self.sync(mr, st):
+                        sync_at = time.time()
                 # Error lines: every refresh while a print runs, else every 5 s
                 ps = st.get("print_stats", {}).get("state")
                 if (ps in ("printing", "paused", "error")
@@ -535,6 +597,31 @@ class DataThread(threading.Thread):
             self.st, self.err = st, err
             self.version += 1
             time.sleep(self.cfg.num("screen", "refresh"))
+
+
+    def sync(self, mr, st):
+        """K2 board driven by a separate PC: fetch the screen of the release
+        the PC runs, while idle. Returns True when it tried (rate limit)."""
+        want = ((st.get("hark_update") or {}).get("installed")
+                or "").lstrip("vV")
+        state = st.get("print_stats", {}).get("state")
+        if (not remote_moonraker(mr.base) or not want
+                or want == own_version()
+                or want == read_text(BAD_VERSION_FILE)
+                or st.get("webhooks", {}).get("state") != "ready"
+                or state in ("printing", "paused")
+                or self.screen.busy(st)):
+            return False
+        try:
+            code = fetch_screen(want)
+            install_screen(code, want)
+        except Exception as e:
+            print("screen sync to %s failed: %s" % (want, e), flush=True)
+            return True
+        print("screen updated %s -> %s, restarting"
+              % (read_text(UPDATED_MARK) or "?", want), flush=True)
+        self.screen.restart_pending = True
+        return True
 
 
 class Screen:
@@ -585,6 +672,7 @@ class Screen:
         # The print's thumbnail: (filename, RGBA image or None, height)
         self.thumb = None
         self.preview_cache = {}
+        self.restart_pending = False
         self.modal_on = False
         self.alert_ack = None
         self.error_ack = None
@@ -2561,6 +2649,8 @@ def main():
             cfg.reload()
             screen.apply_config()
         mr = Moonraker(cfg.get("screen", "moonraker"))
+        if screen.restart_pending:
+            restart()
         st, err = data.st, data.err
         printing = st.get("print_stats", {}).get("state") in (
             "printing", "paused")
@@ -2614,6 +2704,9 @@ def main():
             if digest != screen.shown:
                 screen.show(screen.base)
                 screen.shown = digest
+                if os.path.exists(UPDATED_MARK):
+                    # A self-update drew its first frame: keep it
+                    os.remove(UPDATED_MARK)
         moving = bool(screen.anims or screen.flash)
         if moving and now - last_anim >= 1.0 / screen.ANIM_FPS:
             screen.animate(now)
@@ -2622,4 +2715,23 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        # A self-update that cannot start goes back to the copy before it,
+        # and that release is not fetched again
+        if (os.path.exists(UPDATED_MARK)
+                and os.path.exists(SELF + ".prev")):
+            import traceback
+            traceback.print_exc()
+            with open(BAD_VERSION_FILE, "w") as f:
+                f.write(own_version())
+            old = read_text(UPDATED_MARK)
+            os.replace(SELF + ".prev", SELF)
+            with open(VERSION_FILE, "w") as f:
+                f.write(old + "\n")
+            os.remove(UPDATED_MARK)
+            print("screen update failed to start; back to %s" % (old or "?"),
+                  flush=True)
+            restart()
+        raise
