@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.4.9-alpha.1 (2026-11-01)
 
 - Touchscreen preview: the thumbnail was asked for once, the moment a print
   started. A file the slicer had just uploaded and started could still be
