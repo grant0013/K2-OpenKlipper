@@ -159,8 +159,18 @@ class PrtouchConfig:
         self.prth_tri_zacc = config.getfloat(
             'prth_tri_zacc', default=100.0, minval=1.0, maxval=10000.0,
         )
+        # Hotend fans (heater_fans serving the extruder) are capped at this
+        # while the gauge is armed, as stock does (0 or 1 = no cap); wired
+        # in fan_cap.py. settle: wait for a capped fan to slow; hold: lift
+        # the cap this long after the last tap.
         self.prth_min_fans = config.getfloat(
             'prth_min_fans', default=0.0, minval=0.0, maxval=1.0,
+        )
+        self.prth_fan_settle = config.getfloat(
+            'prth_fan_settle', default=2.0, minval=0.0, maxval=10.0,
+        )
+        self.prth_fan_hold = config.getfloat(
+            'prth_fan_hold', default=5.0, minval=0.5, maxval=60.0,
         )
         # Bed-zone coordinate triples (consumed as raw strings; parsed lazily
         # if a future macro needs them)
