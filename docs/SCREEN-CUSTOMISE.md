@@ -106,7 +106,7 @@ font_scale: 1.0
 [screen]
 pages: status,cfs,controls,machine,wifi
 sleep_after: 600
-timezone: uk
+timezone: auto
 rotate: 90
 ```
 
@@ -114,8 +114,11 @@ rotate: 90
   hide it, e.g. `status,cfs,controls` hides Machine and Wi-Fi.
 - **sleep_after**: seconds without a touch before the screen turns off (`0` =
   never). It never sleeps while printing, and a tap wakes it.
-- **timezone**: for the "done about" time on the Status page: `uk` (GMT/BST)
-  or hours from UTC, e.g. `+2`.
+- **timezone**: for the "done about" time on the Status page: `auto` (the
+  printer's own time zone, as set in Creality's settings), `uk` (GMT/BST) or
+  hours from UTC, e.g. `+2`. To set the printer's time zone over SSH:
+  `uci set system.@system[0].zonename='Europe/Berlin'; uci commit system;
+  /etc/init.d/system reload` (any name from /usr/share/zoneinfo).
 - **rotate**: `90` is the K2's landscape mounting; leave it.
 - **touch_*** settings: only if taps land in the wrong place.
 - **moonraker**: where the screen gets its data. Leave it as

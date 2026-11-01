@@ -38,7 +38,7 @@ DEFAULTS = {
                "touch_max_x": "480", "touch_max_y": "800",
                "touch_swap_xy": "no", "touch_invert_x": "no",
                "touch_invert_y": "no", "rotate": "90",
-               "timezone": "uk"},
+               "timezone": "auto"},
 }
 
 OBJECTS = {
@@ -495,8 +495,11 @@ def hex_rgb(value, fallback=(255, 255, 255)):
 
 
 def local_time(ts, zone):
-    """UTC timestamp to struct_time in `zone`: "uk" (GMT/BST) or hours."""
+    """UTC timestamp to struct_time in `zone`: "auto" (the printer's own
+    time zone, as set in Creality's settings), "uk" (GMT/BST) or hours."""
     zone = zone.strip().lower()
+    if zone in ("", "auto"):
+        return time.localtime(ts)
     if zone != "uk":
         try:
             return time.gmtime(ts + float(zone) * 3600)

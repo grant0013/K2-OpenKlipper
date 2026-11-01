@@ -477,6 +477,13 @@ if [ ! -f "$CONF/harkscreen.cfg" ]; then
     cp "$BUILD/harkscreen/harkscreen.cfg.example" "$CONF/harkscreen.cfg"
     cp "$BUILD/harkscreen/klipper-logo.png" "$CONF/klipper-logo.png"
 fi
+# Screen clock: the shipped "timezone: uk" becomes "auto" (the time zone set
+# in Creality's settings) when the printer has one set
+if grep -q "^timezone: uk$" "$CONF/harkscreen.cfg" 2>/dev/null \
+        && [ -n "$(uci -q get system.@system[0].zonename 2>/dev/null)" ]; then
+    sed -i 's/^timezone: uk$/timezone: auto/' "$CONF/harkscreen.cfg"
+    echo "    harkscreen.cfg: clock follows the printer's time zone ($(uci -q get system.@system[0].zonename))"
+fi
 cp -a "$BUILD/harkcam" /mnt/UDISK/harkcam
 chmod 755 /mnt/UDISK/harkscreen/start.sh /mnt/UDISK/harkcam/start.sh
 

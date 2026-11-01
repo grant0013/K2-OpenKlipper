@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Touchscreen clock: `timezone: auto` (new default) uses the printer's own
+  time zone as set in Creality's settings; it was fixed to UK time. Updating
+  switches the shipped `timezone: uk` to `auto` when the printer has a time
+  zone set.
 - **Klipper fix: small arcs printed as straight lines.** Klipper's G2/G3
   support cuts every arc into pieces of one fixed length and rounded the
   count down, so any arc shorter than two pieces became a single straight
