@@ -29,8 +29,10 @@ measurement and no ooze on the measured bed.
 8. Reheat over the chute and run the third 90 mm flush block
    (`_CREALITY_FLUSH`), then Creality's own prime line along the front edge
    (`_CREALITY_PRIME_LINE`, Y-1, X105-160).
-9. **First-layer Z offset** `0 - hot_z_comp` (0.04 mm lower), applied
-   after the prime line.
+9. **First-layer Z offset**, applied after the prime line: the model's
+   built-in correction (K2: `hot_z_comp` 0.04 mm lower; K2 Plus: Creality's
+   0.017316 + 5.1e-6 x (print temp - 140)^2, 0.050 mm at 220 C) plus your
+   `variable_z_offset` (Creality's direction: negative = closer).
 
 ### Opt-in variables (default off, test before switching on)
 
@@ -64,6 +66,10 @@ Set them in `printer-overrides.cfg` under `[gcode_macro START_PRINT]`.
   = 0.025 mm). Our tap is always at 140 °C, so only the print temperature
   varies. Set `hot_z_ref_temp` to the print temperature `hot_z_comp` was
   tuned at. A total above 0.3 mm stops the print.
+- `variable_hot_z_quad` (mm/°C², with `variable_hot_z_tap_temp` 140): adds
+  `hot_z_quad * (EXTRUDER_TEMP - hot_z_tap_temp)^2`, stock prtouch's
+  non-linear form. 0 on the K2; the K2 Plus uses Creality's 5.1e-6 with
+  `hot_z_comp` 0.017316.
 
 Without `TOOL` (Creality Print / stock Orca files), the CFS load is deferred
 to the first `T` command and an adaptive heat soak runs instead:

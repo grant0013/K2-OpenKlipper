@@ -6,10 +6,12 @@
 # updates never touch it.
 #
 # To change a setting, repeat its section header here with only the options
-# you want to change. For example, a lower nozzle on the first layer:
+# you want to change. For example, the first-layer height, like Creality's
+# Z offset and Mainsail's live Z offset buttons (negative = nozzle closer to
+# the bed, positive = further away):
 #
 #   [gcode_macro START_PRINT]
-#   variable_hot_z_comp: 0.05
+#   variable_z_offset: -0.02
 #
 # or a different input shaper result:
 #

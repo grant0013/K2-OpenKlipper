@@ -164,10 +164,13 @@ the rear spool (single colour; in OrcaSlicer import
 `orca/Creality K2 Plus OpenKlipper.json` as in docs/INSTALL.md step 6 and
 set your printer's IP). Filament sync works as described there
 ("Filament sync with OrcaSlicer"); without a CFS the rear spool is slot 1. Watch the
-first layer. It starts with the K2's first-layer correction (`hot_z_comp`
-0.04 mm closer when hot; Creality's K2 Plus config does not state its own),
-and we tune it from there: lines sitting apart or not sticking means raise it
-(positive is closer), ridges or a scraped look means lower it.
+first layer. It uses Creality's own K2 Plus first-layer correction (0.050 mm
+closer for PLA at 220 C, a little more for hotter filaments; the console
+prints it as "First-layer Z comp"). Only if the first layer is still off,
+fine-tune it like Creality's Z offset in printer-overrides.cfg:
+`[gcode_macro START_PRINT]` `variable_z_offset: -0.02` (negative = nozzle
+closer to the bed: lines sitting apart or not sticking; positive = further
+away: ridges or a scraped look).
 
 ## Step 9: the chamber heater (stay with the printer)
 

@@ -185,17 +185,19 @@ connection).
    up, homes, loads and purges the slot, cleans the nozzle, measures Z with the
    nozzle strain gauge, scrapes the nozzle on the bed strip, probes the mesh and
    prints a prime line. That takes about 5 minutes, all shown in Mainsail.
-3. Watch the first layer. If it does not stick or looks too squashed, change
-   the first-layer correction in **`printer-overrides.cfg`** (Mainsail >
-   Machine): add
+3. Watch the first layer. The printer already applies its model's own
+   first-layer correction, so this is only for fine-tuning. If the lines do
+   not stick (too high) or look squashed (too low), use Mainsail's **Z
+   offset** buttons during the first layer, then put the total you moved in
+   **`printer-overrides.cfg`** (Mainsail > Machine), like Creality's Z offset:
 
    ```ini
    [gcode_macro START_PRINT]
-   variable_hot_z_comp: 0.05
+   variable_z_offset: -0.02
    ```
 
-   (0.04 mm by default; bigger = nozzle lower), save and restart. See
-   "Your settings" below.
+   (negative = nozzle closer to the bed, positive = further away; keep it to
+   hundredths of a mm), save and restart. See "Your settings" below.
 4. Optional: make the touchscreen your own (name, logo, colours):
    [customising the screen](SCREEN-CUSTOMISE.md).
 5. Optional, per filament slot: pressure advance measured by the nozzle strain
@@ -227,7 +229,7 @@ The configuration is two files in Mainsail's **Machine** page:
 - **`printer-overrides.cfg`**: your printer's own settings, loaded last so they
   win. Updates never touch it. To change a setting, repeat its section header
   with only the options you want to change, for example
-  `[gcode_macro START_PRINT]` and `variable_hot_z_comp: 0.05`. The installer
+  `[gcode_macro START_PRINT]` and `variable_z_offset: -0.02`. The installer
   puts your extruder settings here.
 
 ## Updates
