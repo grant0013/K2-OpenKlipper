@@ -167,7 +167,7 @@ class PrtouchConfig:
             'prth_min_fans', default=0.0, minval=0.0, maxval=1.0,
         )
         self.prth_fan_settle = config.getfloat(
-            'prth_fan_settle', default=3.0, minval=0.0, maxval=10.0,
+            'prth_fan_settle', default=8.0, minval=0.0, maxval=30.0,
         )
         self.prth_fan_hold = config.getfloat(
             'prth_fan_hold', default=5.0, minval=0.5, maxval=60.0,
