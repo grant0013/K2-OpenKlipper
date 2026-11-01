@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- **Print preview on the touchscreen:** the Status page shows the slicer's
+  thumbnail of the print, a faint ghost that fills in with colour from the
+  bottom as Z climbs (Z / model height from Moonraker's metadata), with a
+  shimmering line at the layer being printed. Shown in full when the print
+  completes. Files without a thumbnail keep the old layout.
+- Touchscreen animations: boxes (confirmations, notices, slot menu, results)
+  fade in and out; error notices pulse their warning icon.
+- Touchscreen fit pass on every page with the printer's font: long filament,
+  file and network names end in "…" instead of running off their tile or
+  under buttons, CFS slot names use two lines, button labels shrink to fit,
+  a long print-start step ends in "…".
+
 ## v0.4.5-alpha.1 (2026-11-01)
 
 - **Touchscreen notices:** a pending update shows a box with **Update now**

@@ -298,6 +298,30 @@ class Moonraker:
                 out.append((float(m.get("time") or 0.), line[2:].strip()))
         return out
 
+    def thumbnail(self, filename):
+        """The slicer's largest thumbnail (up to 400 px) of a print file as
+        an RGBA image, and the model height; (None, 0) without one."""
+        q = urllib.parse.quote(filename)
+        with urllib.request.urlopen(
+                self.base + "/server/files/metadata?filename=" + q,
+                timeout=5) as r:
+            meta = json.load(r)["result"]
+        height = float(meta.get("object_height") or 0)
+        thumbs = [t for t in meta.get("thumbnails") or []
+                  if t.get("relative_path") and t.get("width", 0) <= 400]
+        if not thumbs:
+            return None, height
+        best = max(thumbs, key=lambda t: t.get("width", 0))
+        folder = os.path.dirname(filename)
+        path = "/".join(p for p in (folder, best["relative_path"]) if p)
+        import io
+        with urllib.request.urlopen(
+                self.base + "/server/files/gcodes/" + urllib.parse.quote(path),
+                timeout=5) as r:
+            img = Image.open(io.BytesIO(r.read()))
+            img.load()
+        return img.convert("RGBA"), height
+
     def info(self):
         with urllib.request.urlopen(self.base + "/printer/info",
                                     timeout=3) as r:
@@ -467,6 +491,15 @@ class DataThread(threading.Thread):
                 # While the printer reports a stage, follow the console too
                 if (st.get("gcode_macro _STAGE") or {}).get("text"):
                     self.screen.console = mr.console()
+                # The print's thumbnail, once per file
+                fn = st.get("print_stats", {}).get("filename") or ""
+                if fn and (self.screen.thumb or (None,))[0] != fn:
+                    try:
+                        img, height = mr.thumbnail(fn)
+                    except Exception:
+                        img, height = None, 0.
+                    self.screen.thumb = (fn, img, height)
+                    self.screen.preview_cache = {}
                 # Error lines: every refresh while a print runs, else every 5 s
                 ps = st.get("print_stats", {}).get("state")
                 if (ps in ("printing", "paused", "error")
@@ -528,6 +561,10 @@ class Screen:
         # from the first ones seen, so only new ones pop up; an update offer
         # put off with Later stays away for UPDATE_SNOOZE
         self.alerts = []
+        # The print's thumbnail: (filename, RGBA image or None, height)
+        self.thumb = None
+        self.preview_cache = {}
+        self.modal_on = False
         self.alert_ack = None
         self.error_ack = None
         try:
@@ -594,9 +631,13 @@ class Screen:
     def colour(self, color):
         return self.c.get(color, color) if isinstance(color, str) else color
 
-    def text(self, d, xy, s, font="m", color="text", anchor="la"):
-        """Paste cached glyph masks; freetype is slow on the K2."""
+    def text(self, d, xy, s, font="m", color="text", anchor="la",
+             width=None):
+        """Paste cached glyph masks; freetype is slow on the K2. With width,
+        text that would not fit is cut short with an ellipsis."""
         s = str(s)
+        if width:
+            s = self.fit(s, font, width)
         key = (font, s, anchor)
         ent = self.tcache.get(key)
         if ent is None:
@@ -611,6 +652,24 @@ class Screen:
         m, ox, oy = ent
         self.canvas.paste(self.colour(color),
                           (int(xy[0] + ox), int(xy[1] + oy)), m)
+
+    def fit(self, s, font, width):
+        """s, cut short with an ellipsis if wider than width pixels."""
+        f = self.fonts[font]
+        if f.getlength(s) <= width:
+            return s
+        while s and f.getlength(s + "…") > width:
+            s = s[:-1]
+        return s.rstrip() + "…"
+
+    def lines(self, text, font, width, count):
+        """wrap() limited to count lines, the last one ending in an
+        ellipsis if text was left over."""
+        out = self.wrap(text, font, width)
+        if len(out) > count:
+            out = out[:count]
+            out[-1] = self.fit(out[-1] + "…", font, width)
+        return out
 
     def wrap(self, text, font, width):
         """Split text into lines no wider than width pixels."""
@@ -673,11 +732,20 @@ class Screen:
                                 outline=self.c["panel_edge"], width=2)
         cx, cy = (box[0] + box[2]) // 2, (box[1] + box[3]) // 2
         tc = col if enabled else self.c["muted"]
+        room = box[2] - box[0] - 16
+        if icon and box[3] - box[1] > 90:
+            font = "s"
+        sizes = ("xl", "l", "m", "s", "xs", "xxs")
+        for f in sizes[sizes.index(font):]:
+            font = f
+            if self.fonts[f].getlength(label) <= room:
+                break
         if icon and box[3] - box[1] > 90:
             self.icon(d, icon, cx, cy - 18, 34, tc)
-            self.text(d, (cx, cy + 28), label, "s", tc, anchor="mm")
+            self.text(d, (cx, cy + 28), label, font, tc, anchor="mm",
+                      width=room)
         else:
-            self.text(d, (cx, cy), label, font, tc, anchor="mm")
+            self.text(d, (cx, cy), label, font, tc, anchor="mm", width=room)
         if enabled:
             self.buttons.append((*box, action))
 
@@ -961,9 +1029,14 @@ class Screen:
         if pick and not self.confirm and not res:
             self.draw_calib_pick(pick)
         note = self.notice(st, err)
-        if (note and not self.confirm and not res and not pick
-                and not self.slot_menu and not self.editor and not self.kb):
+        shown_note = (note and not self.confirm and not res and not pick
+                      and not self.slot_menu and not self.editor
+                      and not self.kb)
+        if shown_note:
             self.draw_notice(note)
+        # A box over the page: main() fades it in and out
+        self.modal_on = bool(self.confirm or self.slot_menu or res or pick
+                             or shown_note)
         return self.canvas
 
     # --- notices: update offers, print errors, safety messages ------------
@@ -1036,6 +1109,12 @@ class Screen:
         self.panel(d, box, col, True)
         icon = "update" if note["kind"] == "update" else "warning"
         self.icon(d, icon, box[0] + 46, 96, 30, col)
+        if note["kind"] != "update":
+            c = (box[0] + 46, 96)
+            self.anims.append({"kind": "pulse", "center": c, "color": col,
+                               "big": True,
+                               "rect": (c[0] - 34, c[1] - 34, c[0] + 34,
+                                        c[1] + 34)})
         self.text(d, (box[0] + 80, 96), note["title"], "m", col, anchor="lm")
         width = box[2] - box[0] - 60
         rows = []
@@ -1163,7 +1242,8 @@ class Screen:
                   "External spool" if slot == "E" else "Slot %s" % slot, "m")
         self.text(d, (box[0] + 90, box[1] + 70), "%s · %s°C" % (
             rec.get("name", "Empty"), rec.get("nozzle_temp", "-"))
-            if rec.get("loaded") else "Empty", "xs", "muted")
+            if rec.get("loaded") else "Empty", "xs", "muted",
+            width=box[2] - box[0] - 110)
         self.buttons = []
         temp = max(int(rec.get("nozzle_temp") or 0),
                    int(slots.get(active, {}).get("nozzle_temp") or 0)
@@ -1337,29 +1417,57 @@ class Screen:
             lx, ly = left[0] + 18, left[1]
             name = os.path.splitext(os.path.basename(
                 ps.get("filename", "")))[0]
-            self.text(d, (lx, ly + 16), name[:30], "xs", "muted")
             stage = self.stage_log[-1][0] if self.stage_log else ""
+            # During a print start the step timer sits top right
+            self.text(d, (lx, ly + 16), name, "xs", "muted",
+                      width=left[2] - lx - (150 if stage else 18))
             if state in ("printing", "paused") and stage:
                 self.draw_stage(d, left, st)
                 return self.draw_status_side(d, body, st, left, pad)
             prog = st.get("display_status", {}).get("progress") or \
                 st.get("virtual_sdcard", {}).get("progress", 0)
             prog = max(0., min(1., prog))
-            self.text(d, (lx, ly + 44), "%d%%" % round(prog * 100), "xl")
             rem = self.eta.remaining_min(
                 ps.get("filename", ""),
                 st.get("virtual_sdcard", {}).get("file_position", 0))
-            if state == "printing" and rem is not None:
-                done = time.strftime("%H:%M", local_time(
-                    time.time() + rem * 60, self.cfg.get("screen",
-                                                          "timezone")))
-                hrs = "%dh %02dm" % (rem // 60, rem % 60) if rem >= 60 \
-                    else "%d min" % rem
-                self.text(d, (left[2] - 18, ly + 58), hrs + " left", "m",
-                          anchor="ra")
-                self.text(d, (left[2] - 18, ly + 98), "done about " + done,
-                          "xs", "muted", anchor="ra")
-            bar = (lx, ly + 150, left[2] - 18, ly + 180)
+            z = st.get("gcode_move", {}).get("gcode_position", [0, 0, 0])[2]
+            thumb = self.thumb if self.thumb and self.thumb[0] == ps.get(
+                "filename") else None
+            if thumb and thumb[1] is not None:
+                # The model, filled in up to the printed height
+                frac = 1. if state == "complete" else (
+                    z / thumb[2] if thumb[2] > 0 else prog)
+                pbox = (lx, ly + 42, lx + 172, ly + 214)
+                self.draw_preview(d, pbox, thumb, max(0., min(1., frac)),
+                                  state == "printing")
+                tx = pbox[2] + 18
+                self.text(d, (tx, ly + 38), "%d%%" % round(prog * 100), "xl")
+                if state == "printing" and rem is not None:
+                    done = time.strftime("%H:%M", local_time(
+                        time.time() + rem * 60, self.cfg.get("screen",
+                                                              "timezone")))
+                    hrs = "%dh %02dm" % (rem // 60, rem % 60) \
+                        if rem >= 60 else "%d min" % rem
+                    self.text(d, (tx, ly + 124), hrs + " left", "m",
+                              width=left[2] - 18 - tx)
+                    self.text(d, (tx, ly + 166), "done about " + done, "xs",
+                              "muted")
+                bar = (lx, ly + 232, left[2] - 18, ly + 262)
+            else:
+                self.text(d, (lx, ly + 44), "%d%%" % round(prog * 100),
+                          "xl")
+                if state == "printing" and rem is not None:
+                    done = time.strftime("%H:%M", local_time(
+                        time.time() + rem * 60, self.cfg.get("screen",
+                                                              "timezone")))
+                    hrs = "%dh %02dm" % (rem // 60, rem % 60) \
+                        if rem >= 60 else "%d min" % rem
+                    self.text(d, (left[2] - 18, ly + 58), hrs + " left",
+                              "m", anchor="ra")
+                    self.text(d, (left[2] - 18, ly + 98),
+                              "done about " + done, "xs", "muted",
+                              anchor="ra")
+                bar = (lx, ly + 150, left[2] - 18, ly + 180)
             d.rounded_rectangle(bar, radius=15, fill=self.c["background"],
                                 outline=self.c["panel_edge"], width=2)
             fill_x = bar[0] + int((bar[2] - bar[0]) * prog)
@@ -1372,12 +1480,60 @@ class Screen:
                                              self.c["white"], 0.35))
                 if state == "printing":
                     self.anims.append({"kind": "sheen", "rect": fill})
-            z = st.get("gcode_move", {}).get("gcode_position", [0, 0, 0])[2]
-            self.text(d, (lx, left[3] - 30), "Z %.2f mm" % z, "s", "muted",
+            ztxt = "Z %.2f mm" % z
+            if thumb and thumb[2] > 0:
+                ztxt += " of %.1f" % thumb[2]
+            self.text(d, (lx, left[3] - 30), ztxt, "s", "muted",
                       anchor="lm")
         elif self.cfg.flag("brand", "idle_logo"):
             self.paste_logo((left[0], left[1] - 6, left[2], left[3] + 6))
         self.draw_status_side(d, body, st, left, pad)
+
+    def preview(self, img, size, frac):
+        """The thumbnail fitted into size: printed part (below frac of the
+        model's height) in colour, the rest a faint grey ghost. Returns
+        (image, row of the print line or None, silhouette mask)."""
+        key = (id(img), size, round(frac * 200))
+        hit = self.preview_cache.get(key)
+        if hit:
+            return hit
+        alpha = img.getchannel("A")
+        bbox = alpha.getbbox() or (0, 0) + img.size
+        im = img.crop(bbox)
+        im.thumbnail(size, Image.LANCZOS)
+        a = im.getchannel("A")
+        h = im.size[1]
+        line = int(round(h * (1. - frac)))
+        ghost = im.convert("L").convert("RGBA")
+        ghost = Image.blend(ghost, Image.new("RGBA", im.size,
+                                             self.c["panel"] + (255,)), 0.72)
+        ghost.putalpha(a.point(lambda v: v * 0.6))
+        out = ghost
+        if line < h:
+            done = Image.new("L", im.size, 0)
+            ImageDraw.Draw(done).rectangle((0, line, im.size[0], h), fill=255)
+            out = Image.composite(im, ghost, done)
+        hit = (out, line if 0 < line < h else None, a)
+        if len(self.preview_cache) > 40:
+            self.preview_cache.clear()
+        self.preview_cache[key] = hit
+        return hit
+
+    def draw_preview(self, d, box, thumb, frac, live):
+        x0, y0, x1, y1 = box
+        img, line, mask = self.preview(thumb[1], (x1 - x0, y1 - y0), frac)
+        px = x0 + (x1 - x0 - img.size[0]) // 2
+        py = y0 + (y1 - y0 - img.size[1]) // 2
+        self.canvas.paste(img, (px, py), img)
+        if line is not None and live:
+            # The layer being printed: a shimmer along the model's outline
+            strip = mask.crop((0, max(0, line - 3), img.size[0],
+                               min(img.size[1], line + 4)))
+            if strip.getbbox():
+                y = py + max(0, line - 3)
+                self.anims.append({
+                    "kind": "scan", "mask": strip,
+                    "rect": (px, y, px + img.size[0], y + strip.size[1])})
 
     def draw_stage(self, d, left, st):
         """What the print start (or a tool change) is doing: the current
@@ -1391,7 +1547,7 @@ class Screen:
             return "%d:%02d" % (s // 60, s % 60)
 
         text, start = self.stage_log[-1]
-        lines = self.wrap(text, "m", left[2] - lx - 18)[:2]
+        lines = self.lines(text, "m", left[2] - lx - 18, 2)
         for i, line in enumerate(lines):
             self.text(d, (lx, ly + 44 + i * 36), line, "m", "accent")
         self.text(d, (left[2] - 18, ly + 16), mmss(now - start), "s",
@@ -1449,6 +1605,8 @@ class Screen:
             cfs.get("feed_slot") if printing else None)
         rec = slots.get(slot, {}) if slot else {}
         sx = x0 + pad + 32
+        # Room up to the fan icon
+        foot_w = (x1 - pad - 170) - (sx + 28)
         warning = cfs.get("running_out") if printing else None
         self.icon(d, "spool", sx, fy + 27, 30,
                   hex_rgb(rec.get("color"), self.c["muted"]))
@@ -1463,17 +1621,17 @@ class Screen:
             name = rec.get("name") if rec.get("loaded") else ""
             self.text(d, (sx + 28, fy + 27), "External spool · %s" % (
                 (name or "loaded") if loaded else "no filament"),
-                "s", anchor="lm")
+                "s", anchor="lm", width=foot_w)
         elif warning:
             # Early runout warning from the CFS entry sensor
             nxt = cfs.get("runout_next")
             self.text(d, (sx + 28, fy + 27), "Slot %s running out · %s" % (
                 warning, ("%s takes over" % nxt) if nxt else "will pause"),
-                "s", color="accent", anchor="lm")
+                "s", color="accent", anchor="lm", width=foot_w)
         else:
             self.text(d, (sx + 28, fy + 27), "Slot %s · %s" % (
                 slot or "-", rec.get("name", "no filament") if slot else
-                "no filament"), "s", anchor="lm")
+                "no filament"), "s", anchor="lm", width=foot_w)
         fx = x1 - pad - 140
         self.text(d, (x1 - pad - 18, fy + 27), "fan %d%%" % round(fan * 100),
                   "s", anchor="rm")
@@ -1515,7 +1673,8 @@ class Screen:
                       outline=self.c["panel_edge"], width=3)
         tx = sx + r + 28
         if rec.get("loaded"):
-            self.text(d, (tx, sy - 52), rec.get("name", "?")[:22], "m")
+            self.text(d, (tx, sy - 52), rec.get("name", "?"), "m",
+                      width=box[2] - tx - 18)
             self.text(d, (tx, sy - 6), "%s · %s°C · bed %s°C" % (
                 rec.get("type", ""), rec.get("nozzle_temp", "?"),
                 rec.get("bed_temp", "?")), "s", "muted")
@@ -1583,16 +1742,21 @@ class Screen:
             self.text(d, (sx, sy), letter, "s", "text", anchor="mm")
             tx = sx + r + 16
             if rec.get("loaded"):
-                self.text(d, (tx, cy + 18), rec.get("name", "?")[:16], "s")
-                self.text(d, (tx, cy + 56), "%s · %s°C" % (
+                tw = cx + cw - tx - 12
+                names = self.lines(rec.get("name", "?"), "s", tw, 2)
+                for k, line in enumerate(names):
+                    self.text(d, (tx, cy + 18 + k * 28), line, "s")
+                down = 28 * (len(names) - 1)
+                self.text(d, (tx, cy + 56 + down), "%s · %s°C" % (
                     rec.get("type", ""), rec.get("nozzle_temp", "?")), "xs",
-                    "muted")
+                    "muted", width=tw)
                 extras = []
                 if rec.get("pressure_advance"):
                     extras.append("PA %.3f" % rec["pressure_advance"])
                 if rec.get("retract_length"):
                     extras.append("ret %.1f" % rec["retract_length"])
-                self.text(d, (tx, cy + 86), "  ".join(extras), "xs", "accent")
+                self.text(d, (tx, cy + 86 + down), "  ".join(extras), "xs",
+                          "accent", width=tw)
                 if active:
                     self.text(d, (cx + cw - 14, cy + ch - 14), "IN USE", "xxs",
                               "accent", anchor="rs")
@@ -1759,8 +1923,8 @@ class Screen:
                     m.get("id"), m.get("name"))
                 self.panel(d, box, self.c["accent"] if picked else None,
                            picked)
-                self.text(d, (bx + 14, by + ih // 2), m.get("name", "?")[:20],
-                          "xs", anchor="lm")
+                self.text(d, (bx + 14, by + ih // 2), m.get("name", "?"),
+                          "xs", anchor="lm", width=iw - 80)
                 self.text(d, (box[2] - 12, by + ih // 2),
                           m.get("type", ""), "xs", "muted", anchor="rm")
                 self.buttons.append((*box, ("ed_pick", m)))
@@ -1783,7 +1947,8 @@ class Screen:
         else:
             m = ed["material"]
             self.text(d, (x0 + pad, y0 + 8),
-                      "Slot %s: %s colour" % (slot, m.get("name", "")), "s")
+                      "Slot %s: %s colour" % (slot, m.get("name", "")), "s",
+                      width=x1 - x0 - 2 * pad)
             cols = 6
             sw = (x1 - x0 - pad * (cols + 1)) // cols
             sh = 70
@@ -1830,7 +1995,8 @@ class Screen:
                   self.c["accent"] if ws.get("ssid") else self.c["muted"])
         self.text(d, (x0 + pad + 66, y0 + 26),
                   ws.get("ssid") or "Not connected", "m",
-                  "text" if ws.get("ssid") else "warn")
+                  "text" if ws.get("ssid") else "warn",
+                  width=(x1 - pad - 160) - (x0 + pad + 66))
         self.text(d, (x0 + pad + 66, y0 + 64), "%s   %s" % (
             ws.get("ip_address", ""),
             ("%s dBm" % ws["rssi"]) if ws.get("rssi") else ""), "xs",
@@ -1857,7 +2023,7 @@ class Screen:
             current = ssid == ws.get("ssid")
             self.panel(d, (bx, by, bx + iw, by + ih),
                        self.c["accent"] if current else None, current)
-            self.text(d, (bx + 14, by + 18), ssid[:22], "xs")
+            self.text(d, (bx + 14, by + 18), ssid, "xs", width=iw - 28)
             quality = ("strong" if dbm > -55 else "good" if dbm > -65
                        else "fair" if dbm > -75 else "weak")
             self.text(d, (bx + 14, by + 42), "%s · %d dBm · %s" % (
@@ -1877,8 +2043,8 @@ class Screen:
         x0, y0, x1, y1 = body
         pad = 10
         kb = self.kb
-        self.text(d, (x0 + pad, y0 + 6), "Password for %s" % kb["ssid"][:24],
-                  "xs", "muted")
+        self.text(d, (x0 + pad, y0 + 6), "Password for %s" % kb["ssid"],
+                  "xs", "muted", width=x1 - x0 - 2 * pad)
         shown = kb["text"] if kb["show"] else "•" * len(kb["text"])
         self.panel(d, (x0 + pad, y0 + 32, x1 - pad, y0 + 76))
         self.text(d, (x0 + 2 * pad, y0 + 54), shown[-36:] + "|", "s",
@@ -1977,7 +2143,7 @@ class Screen:
         if kind == "pulse":
             s = (t * 1.2) % 1.0
             cx, cy = a["center"][0] - ox, a["center"][1] - oy
-            r = 6 + 11 * s
+            r = (18 + 14 * s) if a.get("big") else 6 + 11 * s
             ring = region.copy()
             ImageDraw.Draw(ring).ellipse((cx - r, cy - r, cx + r, cy + r),
                                          outline=a["color"], width=3)
@@ -2010,6 +2176,27 @@ class Screen:
             self.icon(d, "fan", cx, cy, a["size"],
                       self.c["accent"] if a["speed"] else self.c["muted"],
                       angle)
+        elif kind == "scan":
+            import math
+            w, h = region.size
+            glow = Image.new("RGB", region.size, mix(self.c["accent"],
+                                                     self.c["white"], 0.5))
+            # a bright band runs along the line; the whole line breathes
+            band = Image.new("L", region.size, 0)
+            pos = (t * 90) % (w + 60) - 30
+            bd = ImageDraw.Draw(band)
+            for x in range(w):
+                v = 150 + 50 * math.sin(t * 4)
+                dist = abs(x - pos)
+                if dist < 30:
+                    v += 145 * (1 - dist / 30.)
+                bd.line((x, 0, x, h), fill=int(min(255, v)))
+            m = ImageChops.multiply(band, a["mask"])
+            mid = Image.new("L", region.size, 0)
+            ImageDraw.Draw(mid).rectangle((0, h // 2 - 1, w, h // 2 + 1),
+                                          fill=255)
+            m = ImageChops.multiply(m, mid.filter(ImageFilter.GaussianBlur(1.5)))
+            region.paste(glow, (0, 0), m)
         elif kind == "spin":
             cx, cy, r = a["center"][0] - ox, a["center"][1] - oy, a["r"]
             start = (t * 360) % 360
@@ -2069,6 +2256,12 @@ class Screen:
         for r in range(min(ph, FB_H - fy)):
             os.pwrite(self.fb, raw[r * row:(r + 1) * row],
                       ((fy + r) * FB_W + fx) * 4)
+
+    def fade(self, old, new, frames=5):
+        """Ease a box in over (or out of) the page."""
+        for i in range(1, frames):
+            self.show(Image.blend(old, new, ease_out(i / float(frames))))
+        self.show(new)
 
     def slide(self, old, new, direction):
         """Slide the page body vertically from old to new frame."""
@@ -2321,6 +2514,7 @@ def main():
             screen.dirty = False
             screen.last_key = screen.view_key(st, err)
             old = screen.base
+            was_modal = screen.modal_on
             try:
                 screen.base = screen.render(st, err)
             except Exception:
@@ -2335,6 +2529,9 @@ def main():
                        if screen.page in screen.pages else 0)
                 direction = 1 if new >= screen.transition else -1
                 screen.slide(old, screen.base, direction)
+                screen.shown = None
+            elif old is not None and screen.modal_on != was_modal:
+                screen.fade(old, screen.base)
                 screen.shown = None
             screen.transition = None
             digest = hashlib.md5(screen.base.tobytes()).digest()
