@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Fixed: every K2 Plus warned "Motor check: ... calibration param 19 is 0.15
+  ... may not be calibrated" for all four motors at start-up. K2 Plus motors
+  read 0.15 there with a normal calibration offset (param 09); the warning
+  now needs the offset itself near zero.
+- Touchscreen: messages from while the printer was idle (start-up lines,
+  console typos) no longer pop up when the next print starts; the heating
+  rings and spinners of the page underneath no longer draw over a box.
+
 ## v0.4.6-alpha.1 (2026-11-01)
 
 - **Print preview on the touchscreen:** the Status page shows the slicer's

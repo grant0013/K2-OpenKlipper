@@ -541,6 +541,7 @@ class K2MotorBus:
 
     def _read_params(self, name, addr):
         values = []
+        near_zero = {}
         for pid in PARAM_IDS:
             resp = self.xfer(addr, (0x00, 0x06, 0x02, pid))[1]
             value = None
@@ -548,15 +549,21 @@ class K2MotorBus:
                 value = struct.unpack('<f', resp[5:9])[0]
             values.append("%02x=%s" % (pid, '?' if value is None
                                        else "%g" % value))
-            # Electrical offset and its error: near zero means the motor
-            # was never calibrated (check from Jacob10383's firmware)
-            if (pid in proto.CALIBRATION_PARAM_IDS
-                    and proto.is_near_zero_calibration(value)):
-                self.calibration_warnings.append(
-                    "motor %s (%02x) calibration param %02x is %g (at or "
-                    "below %.2f): it may not be calibrated"
-                    % (name.upper(), addr, pid, value,
-                       proto.CALIBRATION_NEAR_ZERO))
+            if pid in proto.CALIBRATION_PARAM_IDS:
+                near_zero[pid] = proto.is_near_zero_calibration(value)
+        # Electrical offset (09) and its error (19): near zero means the
+        # motor was never calibrated (check from Jacob10383's firmware). The
+        # K2 Plus motors read 19 = 0.15 on all four axes with 09 normal
+        # (137-346) and home and probe to 0.0025 mm (11-01), so 19 alone is
+        # not evidence: warn when the offset itself is near zero.
+        if near_zero.get(0x09):
+            self.calibration_warnings.append(
+                "motor %s (%02x) calibration offset (param 09) is near zero: "
+                "it may not be calibrated" % (name.upper(), addr))
+        elif near_zero.get(0x19):
+            logging.info("k2_motor_bus: motor %s param 19 at or below %.2f "
+                         "with param 09 normal (K2 Plus motors read 0.15)",
+                         name, proto.CALIBRATION_NEAR_ZERO)
         done = self.xfer(addr, END_PARAM_READ)[1]
         logging.info("k2_motor_bus: motor %s params %s, end %s", name,
                      " ".join(values), done.hex(' ') if done else '(none)')

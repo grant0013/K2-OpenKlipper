@@ -1018,6 +1018,8 @@ class Screen:
         self.draw_nav(d)
         if not err and self.busy(st) and not self.editor and not self.kb:
             self.draw_busy(d, body, st)
+        # Animations of the page under a box would draw over the box
+        page_anims = len(self.anims)
         if self.slot_menu and not self.confirm:
             self.draw_slot_menu(st)
         if self.confirm:
@@ -1037,6 +1039,8 @@ class Screen:
         # A box over the page: main() fades it in and out
         self.modal_on = bool(self.confirm or self.slot_menu or res or pick
                              or shown_note)
+        if self.modal_on:
+            self.anims = self.anims[page_anims:]
         return self.canvas
 
     # --- notices: update offers, print errors, safety messages ------------
@@ -1063,6 +1067,10 @@ class Screen:
         fresh = [m for t, m in alerts if t > self.alert_ack
                  and (running or state == "error"
                       or any(k in m for k in IDLE_ALERTS))]
+        if not fresh and not running and state != "error":
+            # Lines from while idle that are not shown (start-up messages,
+            # console typos) must not pop up once a print starts
+            self.alert_ack = max(self.alert_ack, newest)
         if fresh:
             title = {"paused": "Print paused",
                      "error": "Print stopped"}.get(state, "Printer message")
