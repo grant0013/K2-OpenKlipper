@@ -5,7 +5,10 @@
 # closed motor_control module ran MOTOR_CANCEL_PRINT. Both are gone on the
 # open stack, so while a print runs this module
 #   - pauses when the hotend fan or the part fan is commanded on but its
-#     tachometer (fan_feedback) reads zero for fan_fail_time,
+#     tachometer (fan_feedback) reads zero for fan_fail_time. The hotend
+#     fan is only checked at full power (hotend_fan_min): its tachometer
+#     reads zero while PRTouch slows it for probing (K2 Plus 11-01: 12000
+#     rpm at full, 0 at 60%), which paused a print start,
 #   - polls the X/Y motor controllers' status (00 0c 0b, as stock does) and
 #     cancels the print on a fault (stall, tracking error, overcurrent ...),
 #   - polls the extruder controller's status and pauses on a fault: an
@@ -41,6 +44,7 @@ class HarkSafety:
         self.fan_fail_time = config.getfloat('fan_fail_time', 15., above=3.)
         self.fan_spinup_time = config.getfloat('fan_spinup_time', 10., minval=0.)
         self.part_fan_min = config.getfloat('part_fan_min', .3, minval=0., maxval=1.)
+        self.hotend_fan_min = config.getfloat('hotend_fan_min', .99, minval=0., maxval=1.)
         self.motor_fail_count = config.getint('motor_fail_count', 2, minval=1)
         self.start_grace = config.getfloat('start_grace', 10., minval=0.)
         self.fan_action = config.getchoice('fan_action', ACTIONS, 'pause')
@@ -101,8 +105,8 @@ class HarkSafety:
         expect = {}
         if self.hotend_fan is not None:
             expect['hotend fan'] = (
-                self.hotend_fan.get_status(eventtime).get('speed', 0.) > 0.,
-                tach.get('fan1_speed', 0))
+                self.hotend_fan.get_status(eventtime).get('speed', 0.)
+                >= self.hotend_fan_min, tach.get('fan1_speed', 0))
         if self.part_fan is not None:
             expect['part fan'] = (
                 self.part_fan.get_status(eventtime).get('speed', 0.)
