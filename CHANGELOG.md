@@ -16,6 +16,14 @@
   stays paused. The usual 30-minute paused timeout turns the hotend off;
   the retry reheats. `change_pending` / `last_change_error` in
   `printer.k2_cfs`. Tests: tests/test_cfs_change_pause.py.
+- **Print start clears the old filament at its own temperature.** The
+  filament left in the nozzle from the last print was cut and purged at
+  the new print's temperature (PETG left in for a PLA print: cut and
+  pushed out at 220C instead of 250C, a poor cut and a sticky, incomplete
+  clear). CFS_PRINT_START and CFS_CHANGE_SLOT now heat to the old slot's
+  record temperature when it is hotter, wait, cut, load and purge, then
+  go back to the print's temperature, as a mid-print change and Creality
+  and Bambu do. Tests: tests/test_cfs_old_filament_temp.py.
 - **The load retries a slot that did not feed once by itself.** EXTRUDE
   stage 0's STAGE0_ODOMETER_TIMEOUT (0x09, the hub's measuring wheel did
   not turn for 2 s) now rewinds the hub and feeds again once before

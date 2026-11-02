@@ -2608,6 +2608,26 @@ class K2CFS:
         except (TypeError, ValueError):
             return 30
 
+    def _heat_for_old_filament(self, gcmd, old_slot, new_slot):
+        # The filament left in the nozzle from the last print is cut and
+        # cleared at its own temperature when that is hotter than this
+        # print's (PETG left in for a PLA print), as a mid-print change
+        # already does and Creality and Bambu do at a print start. Returns
+        # the temperature to go back to, or None if nothing changed.
+        heater = self.printer.lookup_object('extruder').get_heater()
+        target = heater.get_status(0.).get('target', 0.)
+        old_temp = self._slot_nozzle_temp(old_slot)
+        if not target or old_temp <= target + 1.:
+            return None
+        gcmd.respond_info(
+            "Slot %s's filament is in the nozzle: clearing it at %.0fC, its"
+            " own temperature, before loading slot %s"
+            % (old_slot, old_temp, new_slot))
+        self.gcode.run_script_from_command(
+            "M104 S%.1f\nTEMPERATURE_WAIT SENSOR=extruder MINIMUM=%.1f"
+            % (old_temp, old_temp - self.toolchange_temp_margin))
+        return target
+
     def _slot_nozzle_temp(self, slot):
         slots = self.printer.lookup_object('hark_cfs_slots', None)
         if slots is None:
@@ -3032,6 +3052,7 @@ class K2CFS:
             slot_mask: slot_name
             for slot_name, slot_mask in self.SLOT_MASKS.items()
         }
+        restore_temp = None
         self.print_start_transaction = True
         try:
             hub = None
@@ -3059,6 +3080,8 @@ class K2CFS:
                         " back the slot you fed last by hand, then retry"
                         % (active_mask, hub or 0))
                 if active_mask != mask:
+                    restore_temp = self._heat_for_old_filament(
+                        gcmd, active_slot, slot)
                     self._move_to_cut_start()
                     unload_gcmd = self.gcode.create_gcode_command(
                         "CFS_CUT_UNLOAD", "",
@@ -3103,6 +3126,11 @@ class K2CFS:
             raise
         finally:
             self.print_start_transaction = False
+            if restore_temp is not None:
+                # back to this print's temperature (START_PRINT cools for
+                # the wipe and Z tap next anyway)
+                self.gcode.run_script_from_command(
+                    "M104 S%.1f" % restore_temp)
 
         self.status['last_print_start_slot'] = slot
         gcmd.respond_info(

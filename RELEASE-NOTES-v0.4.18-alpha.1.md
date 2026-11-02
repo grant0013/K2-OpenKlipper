@@ -16,6 +16,14 @@ the change again and carries on printing. If it fails again it simply
 stays paused. A slot that doesn't feed is also retried once automatically
 before it ever comes to that.
 
+## Old filament cleared at its own temperature
+
+If the last print left a hotter filament in the nozzle (PETG before a PLA
+print), the printer now heats to that filament's temperature to cut and
+purge it out, then goes back to the new print's temperature. Before, it
+was pushed out at the cooler temperature and could leave the nozzle
+partly blocked.
+
 ## Faster CFS colour changes
 
 - **Loading the new colour is up to about 10 s quicker per change.** During
