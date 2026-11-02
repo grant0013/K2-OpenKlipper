@@ -26,7 +26,9 @@
   MMU3; replaces the single stage-0 retry.
 - **Per-slot counts** (`hark_cfs_stats.json` next to the config, kept
   across restarts): loads, failed attempts, loads that needed a retry,
-  paused changes, clogs, runouts and cut misses. A warning when a slot
+  paused changes, clogs, runouts and cut misses (counted only once the knife
+  sensor has tripped on a cut since the restart, so a toolhead whose sensor
+  never changes, like the DXC2, logs none). A warning when a slot
   fails 3 of its last 10 load attempts; `CFS_SLOT_STATS [RESET=<slot>|ALL]`;
   the touchscreen's slot menu shows the load record (in warning colour
   when the slot keeps failing).
@@ -37,14 +39,17 @@
   in the file's matrix, which ignores those savings and counted the flush
   multiplier twice. `_CFS_TC` now passes it as `FLUSH=` for a change of
   material too (at least the stock purge, at most 360 mm).
-- **Cutter calibration with the X motor**: `CFS_CUTTER_CALIBRATE
+- **Cutter calibration with the X/Y motors**: `CFS_CUTTER_CALIBRATE
   METHOD=STALL CONFIRM=1` for toolheads whose knife sensor never trips
   (e.g. a Phaetus DXC2). Rams the cutter at the real cut speed 0.1 mm
-  deeper each time from -5 to -11, reads the X motor's stall latch after
-  each ram (homing X again after a hit), and reports the first two hits in
+  deeper each time from -5 to -11, reads both CoreXY motors' stall latches
+  after each ram (homing X again after a hit, then clearing the stall flag
+  homing leaves), and reports the first two hits in
   a row less `cutter_stall_offset` (0.4) as the `cutter_cut_x` to use, as
   stock motor_control and Jacob10383's CALIBRATE_CUT_POS do. Reported
-  only. Not yet run on a printer: stay with it.
+  only. The first run on a K2 (11-02) read only the X motor and missed
+  every hit: the stall latched on the Y motor (0x82). Now reads both; not
+  yet re-run on a printer: stay with it.
 - Touchscreen: long words (file names) wrap instead of running off a box.
 
 - **A failed colour change pauses the print instead of ending it.** Any

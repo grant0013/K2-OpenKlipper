@@ -31,7 +31,7 @@ which includes what Orca already flushes into infill, objects or support.
 ## Cutter calibration without the knife sensor
 
 `CFS_CUTTER_CALIBRATE METHOD=STALL CONFIRM=1` finds the cutter position
-with the X motor, for toolheads whose knife sensor never changes. It rams
+with the X/Y motors, for toolheads whose knife sensor never changes. It rams
 the cutter repeatedly: stay with the printer.
 
 ## A failed colour change no longer ends the print

@@ -16,20 +16,28 @@ class Obj:
 
 
 class FakeBus:
-    """X motor that reports a stall for any ram at or beyond stop_x."""
-    def __init__(self, cfs, stop_x, noisy=()):
+    """CoreXY: a ram at or beyond stop_x latches a stall on stall_motor
+    (the Y motor on a real K2), and stall homing X latches one on Y. A
+    latch stays until clear_faults."""
+    def __init__(self, cfs, stop_x, noisy=(), stall_motor='x'):
         self.cfs, self.stop_x, self.noisy = cfs, stop_x, set(noisy)
+        self.stall_motor = stall_motor
+        self.latched = {'x': False, 'y': False}
         self.cleared = 0
 
+    def ram(self, x):
+        if x <= self.stop_x + 1e-9 or round(x, 2) in self.noisy:
+            self.latched[self.stall_motor] = True
+
+    def homed(self):
+        self.latched['y'] = True
+
     def query_protection(self, name):
-        x = self.cfs.last_ram
-        stalled = x is not None and (x <= self.stop_x + 1e-9
-                                     or round(x, 2) in self.noisy)
-        self.cfs.last_ram = None
-        return {'stalled': stalled, 'has_error': False}
+        return {'stalled': self.latched[name], 'has_error': False}
 
     def clear_faults(self, name):
         self.cleared += 1
+        self.latched[name] = False
 
 
 class FakeGcode:
@@ -41,7 +49,9 @@ class FakeGcode:
         self.scripts.append(script)
         for line in script.splitlines():
             if line.startswith("G1 X") and " Y" in line and "F30000" in line:
-                self.cfs.last_ram = float(line.split()[1][1:])
+                self.cfs.bus.ram(float(line.split()[1][1:]))
+            elif line.startswith("G28 X"):
+                self.cfs.bus.homed()
 
 
 class Cmd:
@@ -66,11 +76,10 @@ class Cmd:
         return RuntimeError(msg)
 
 
-def make_cfs(stop_x, noisy=()):
+def make_cfs(stop_x, noisy=(), stall_motor='x'):
     cfs = cfs_mod.K2CFS.__new__(cfs_mod.K2CFS)
-    cfs.last_ram = None
     cfs.gcode = FakeGcode(cfs)
-    bus = FakeBus(cfs, stop_x, noisy)
+    bus = cfs.bus = FakeBus(cfs, stop_x, noisy, stall_motor)
     objects = {'k2_motor_bus': bus,
                'toolhead': Obj({'max_accel': 12000.})}
 
@@ -105,6 +114,19 @@ class CutterStallTest(unittest.TestCase):
         self.assertIn('cutter_cut_x: -7.70', cmd.info[-1])
         # X re-homed after each hit
         self.assertEqual(sum('G28 X' in s for s in cfs.gcode.scripts), 2)
+
+    def test_a_stall_on_the_y_motor_is_a_hit(self):
+        # 11-02 on a real K2: the ram stalled the Y motor, X read clean
+        cfs, bus = make_cfs(-8.0, stall_motor='y')
+        self.run_cal(cfs)
+        self.assertEqual(cfs.status['cutter_cal_x'], -7.7)
+
+    def test_the_stall_flag_homing_leaves_is_not_a_hit(self):
+        # homing X after the first hit latches a stall on Y; without the
+        # clear after homing, the next ram would read as a hit anyway
+        cfs, bus = make_cfs(-8.0, noisy=(-6.0,), stall_motor='y')
+        self.run_cal(cfs)
+        self.assertEqual(cfs.status['cutter_cal_x'], -7.7)
 
     def test_a_single_noisy_hit_is_not_the_answer(self):
         cfs, bus = make_cfs(-8.0, noisy=(-6.0,))

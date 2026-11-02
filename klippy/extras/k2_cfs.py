@@ -1674,7 +1674,8 @@ class K2CFS:
         # from pre_cut_cal_pos_x until the knife sensor trips, and stores
         # that X (cut_pos_x, -6.10 on this printer under stock firmware).
         # Same here, reported only: set cutter_cut_x from the result.
-        # METHOD=STALL finds the cutter's end stop with the X motor instead.
+        # METHOD=STALL finds the cutter's end stop with the X/Y motors
+        # instead.
         method = gcmd.get('METHOD', 'SENSOR').upper()
         if method not in ('SENSOR', 'STALL'):
             raise gcmd.error("METHOD must be SENSOR or STALL")
@@ -1732,7 +1733,7 @@ class K2CFS:
                 "Knife sensor never tripped between X%.2f and X%.2f. If"
                 " your toolhead's knife sensor never changes (e.g. a"
                 " Phaetus DXC2), use CFS_CUTTER_CALIBRATE METHOD=STALL"
-                " CONFIRM=1, which finds the cutter with the X motor"
+                " CONFIRM=1, which finds the cutter with the motors"
                 % (start, stop))
         in_range = self.cutter_cal_min_x <= trip <= self.cutter_cal_max_x
         gcmd.respond_info(
@@ -1747,7 +1748,7 @@ class K2CFS:
     def _cutter_calibrate_stall(self, gcmd):
         # Stock's cutter calibration (and Jacob10383's CALIBRATE_CUT_POS):
         # ram the cutter from its staging point at the real cut speed, a
-        # little deeper each time, and read the X motor's protection latch
+        # little deeper each time, and read the X/Y motors' protection latch
         # after each ram. The first two rams in a row that hit the end
         # stop give the cut position, less cutter_stall_offset. A hit can
         # cost the closed-loop motor its position, so X is homed again
@@ -1764,7 +1765,7 @@ class K2CFS:
                 " first")
         bus = self.printer.lookup_object('k2_motor_bus', None)
         if bus is None:
-            raise gcmd.error("No k2_motor_bus: the X motor cannot be read")
+            raise gcmd.error("No k2_motor_bus: the X/Y motors cannot be read")
         start = gcmd.get_float('START', self.cutter_cal_start_x, maxval=0.)
         stop = gcmd.get_float('STOP', -11., minval=-11., below=start)
         step = gcmd.get_float('STEP', .1, minval=.05, maxval=.5)
@@ -1774,14 +1775,27 @@ class K2CFS:
         stage = ("G90\nG1 Y%.3f F%.3f\nG1 X%.3f F%.3f\nM400"
                  % (self.cutter_y, travel, self.cutter_x, travel))
 
-        def hit():
-            detail = bus.query_protection('x')
-            if detail is None:
-                raise gcmd.error("The X motor did not answer its status"
-                                 " query; calibration stopped")
-            return bool(detail.get('stalled') or detail.get('has_error'))
+        # CoreXY: a ram along X drives both belt motors, and on a real K2
+        # the stall latched on the Y motor (0x82) while X read clean
+        # (11-02), so a hit is either motor stalling
+        motors = ('x', 'y')
 
-        bus.clear_faults('x')
+        def hit():
+            for name in motors:
+                detail = bus.query_protection(name)
+                if detail is None:
+                    raise gcmd.error("The %s motor did not answer its status"
+                                     " query; calibration stopped"
+                                     % name.upper())
+                if detail.get('stalled') or detail.get('has_error'):
+                    return True
+            return False
+
+        def clear():
+            for name in motors:
+                bus.clear_faults(name)
+
+        clear()
         self.gcode.run_script_from_command(
             "SAVE_GCODE_STATE NAME=K2_CUT_STALL")
         hits = []
@@ -1791,8 +1805,8 @@ class K2CFS:
             self.gcode.run_script_from_command(stage)
             if hit():
                 raise gcmd.error(
-                    "The X motor reports a stall before any ram; clear the"
-                    " cutter area and home X")
+                    "The X or Y motor reports a stall before any ram; clear"
+                    " the cutter area and home X")
             while x >= stop - 1e-6:
                 gcmd.respond_info("Cutter calibration: ram to X%.2f" % x)
                 self.gcode.run_script_from_command(
@@ -1806,9 +1820,10 @@ class K2CFS:
                 now_hit = hit()
                 if now_hit:
                     hits.append(x)
-                    bus.clear_faults('x')
-                    # back to a known X before the next ram
+                    # back to a known X before the next ram; stall homing
+                    # leaves its own stall flag, so clear after it
                     self.gcode.run_script_from_command("G28 X\n" + stage)
+                    clear()
                     if previous:
                         break
                 previous = now_hit
@@ -2246,7 +2261,10 @@ class K2CFS:
             self.status['last_cut_sensor_pressed'] = pressed
             key = 'cut_sensor_hits' if pressed else 'cut_sensor_misses'
             self.status[key] = self.status.get(key, 0) + 1
-            if not pressed:
+            if not pressed and self.status.get('cut_sensor_hits'):
+                # Only once the sensor has tripped on a cut since the
+                # restart: on a toolhead whose sensor never changes (DXC2)
+                # every cut would count as a miss
                 self._count(slot, 'cut_misses')
             if not pressed:
                 # With the DXC2 the sensor has never changed during a cut
