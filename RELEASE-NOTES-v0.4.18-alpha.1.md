@@ -29,6 +29,13 @@ in printer-overrides.cfg (0-255, matched on the start of the material):
     variable_default: 30
     variable_material: {'PETG': 0, 'PCTG': 0, 'ABS': 0, 'ASA': 0, 'PC': 0}
 
+## K2 Plus
+
+- Three settings back to Creality's K2 Plus values, after nur00's review
+  of the beta against his printer: the hotend PID, the bed heater's
+  warm-up check (120 s) and the Z tilt travel speed. If you tuned your own
+  PID with PID_CALIBRATE and saved it, yours is kept.
+
 ## Tip: shorter purges
 
 The printer now purges what OrcaSlicer's flush volumes ask for. If you

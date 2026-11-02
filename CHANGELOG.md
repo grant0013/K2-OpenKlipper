@@ -22,6 +22,14 @@
   purge (lowest of the old and new slot's materials) and START_PRINT's
   flush. The 5 s full blast that snaps the strand off is unchanged.
   Tests: tests/test_cfs_purge_fan.py.
+- **K2 Plus config: three values back to stock** (from nur00's read-only
+  review of the beta against his printer's own F008 config, 11-02): the
+  extruder PID is Creality's K2 Plus set (14.296 / 1.271 / 40.206, its
+  below-280C set; it was the K2's tuned values), the bed heater check is
+  120 s (stock K2 Plus; the K2 uses 180) and Z_TILT_ADJUST travels at
+  300 mm/s (was 200).
+- OPEN-STACK.md: upgrade-server is disabled too (since 10-24), and the
+  camera is Hark Cam MJPEG on 8080, not WebRTC on 8000.
 
 ## v0.4.17-alpha.1 (2026-11-01)
 

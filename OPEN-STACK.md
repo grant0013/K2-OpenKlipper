@@ -8,12 +8,17 @@
 - Dedicated Moonraker: port 7126
 - Mainsail 2.18.2: port 4409
 - Legacy Fluidd/Moonraker remain available on 4408/7125 for rollback
-- Camera/WebRTC: port 8000
+- Camera: Hark Cam MJPEG on port 8080 (`/dev/video0`, the chamber camera);
+  Creality's WebRTC (port 8000) and cam_app are stopped. On a K2 Plus the
+  nozzle camera (`/dev/video1`) is not used yet
 - Open K2 drivers: PRTouch, Z alignment, motor RS485, and CFS
 
-Creality `master-server` and `Monitor` are disabled in `/etc/init.d/app`.
-Both have direct printer-control paths; `Monitor` respawns `master-server`.
-Passive Creality audio, Wi-Fi, app, upgrade, and web services remain enabled.
+Creality `master-server`, `Monitor` and `upgrade-server` are disabled in
+`/etc/init.d/app` (install.sh). `master-server` and `Monitor` have direct
+printer-control paths (`Monitor` respawns `master-server`); `upgrade-server`
+would let a Creality OTA wipe the install. Creality's audio, Wi-Fi, app
+and web services remain enabled; Hark Screen stops `display-server` when it
+starts.
 The stock touchscreen control plane is not available without `master-server`.
 
 ## v62 PRTouch architecture

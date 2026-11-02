@@ -108,7 +108,7 @@ z_positions:
 points:
     5, 175
     345, 175
-speed: 200
+speed: 300
 horizontal_move_z: 5
 retries: 10
 retry_tolerance: 0.1
@@ -116,7 +116,23 @@ retry_tolerance: 0.1
     ("Z speeds: keep the K2 limits for the beta (stock Plus allows 30)",
      "max_z_velocity: 20  # stock K2\n",
      "max_z_velocity: 20  # stock K2 Plus allows 30; K2 limit kept for the beta\n"),
+    ("extruder PID: stock K2 Plus (its below-280C set; mainline Klipper has\n"
+     "one set, Creality switches to 16.443/1.370/49.329 above 280C).\n"
+     "Reviewed against a live K2 Plus by nur00's Claude, 11-02",
+     """# PID_CALIBRATE at 250C with the part fan at 40% (PETG print level), 2026-10-25.
+pid_kp: 16.523
+pid_ki: 1.360
+pid_kd: 50.187
+""", """# Stock K2 Plus PID (its set below 280C; above that Creality switched to
+# 16.443 / 1.370 / 49.329). PID_CALIBRATE at your usual temperature to tune it.
+pid_kp: 14.296
+pid_ki: 1.271
+pid_kd: 40.206
+"""),
     # --- bed ----------------------------------------------------------
+    ("bed heater check: stock K2 Plus gives it 120 s to warm (K2: 180)",
+     "check_gain_time: 180\n",
+     "check_gain_time: 120\n"),
     ("bed heater: EPCOS thermistor, full power, stock K2 Plus PID",
      """sensor_type: k2_bed_thermistor
 sensor_pin: PC4
