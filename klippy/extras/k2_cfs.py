@@ -2305,6 +2305,15 @@ class K2CFS:
                     "internal safety gate: rewind requested before cut")
             self._cmd_CFS_UNLOAD_AFTER_CUT(gcmd)
         except Exception as exc:
+            if cut_completed:
+                # The cut relieves the nozzle and it oozes; the success
+                # paths purge and wipe, so wipe here too before the error
+                # stops things, or it hardens on the tip as it cools
+                try:
+                    self.gcode.run_script_from_command(
+                        "NOZZLE_WIPE CONFIRM=1 PARK=0")
+                except Exception:
+                    logging.exception("k2_cfs: wipe after a failed unload")
             raise gcmd.error("CFS cut/unload failed: %s" % exc)
         finally:
             try:

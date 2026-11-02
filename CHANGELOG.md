@@ -50,6 +50,9 @@
   only. The first run on a K2 (11-02) read only the X motor and missed
   every hit: the stall latched on the Y motor (0x82). Now reads both; not
   yet re-run on a printer: stay with it.
+- A CFS unload that fails after the cut (filament still at the nozzle
+  sensor, hub blocked) wipes the nozzle at the chute before stopping: the
+  cut lets the nozzle ooze, and it used to harden on the tip.
 - Touchscreen: long words (file names) wrap instead of running off a box.
 
 - **A failed colour change pauses the print instead of ending it.** Any
