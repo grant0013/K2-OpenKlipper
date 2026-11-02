@@ -453,6 +453,13 @@ class K2CFS:
             'unload_clear_length', 30., above=0., maxval=60.)
         self.unload_clear_speed = config.getfloat(
             'unload_clear_speed', 3., above=0., maxval=6.)
+        # Quick swings over the chute to free a filament sensor pin that a
+        # weak spring leaves in (DXC2, 11-02) before pushing a loose piece
+        # through (0 = off)
+        self.unload_shake_moves = config.getint(
+            'unload_shake_moves', 6, minval=0, maxval=20)
+        self.unload_shake_distance = config.getfloat(
+            'unload_shake_distance', 8., above=0., maxval=20.)
         self.sensor_poll_interval = config.getfloat(
             'sensor_poll_interval', .1, minval=.05, maxval=1.)
         self.load_bus_timeout = config.getfloat(
@@ -2060,6 +2067,7 @@ class K2CFS:
         # clear instead of reporting a false failure immediately.
         if not self._wait_nozzle_filament(
                 False, self.unload_sensor_timeout) \
+                and not self._shake_sensor_pin(gcmd) \
                 and not self._clear_nozzle_stub(gcmd):
             raise gcmd.error(
                 "CFS unload finished but the nozzle sensor still "
@@ -2078,18 +2086,53 @@ class K2CFS:
         gcmd.respond_info(
             "CFS slot %s unload complete; nozzle sensor is clear" % slot)
 
+    def _at_chute(self):
+        position = self.printer.lookup_object('toolhead').get_position()
+        tolerance = self.purge_position_tolerance
+        return (abs(position[0] - self.purge_x) <= tolerance
+                and abs(position[1] - self.purge_y) <= tolerance)
+
+    def _shake_sensor_pin(self, gcmd):
+        # The filament is out but the sensor still reads it: on Grant's
+        # DXC2 the pin's spring is weak and the pin can stay in. Jolt it
+        # with quick swings along the chute (the wipe's own path, purge_x
+        # towards clean_right_x) and look again. Nothing is extruded.
+        if not self.unload_shake_moves or not self._at_chute():
+            return False
+        far = min(self.purge_x + self.unload_shake_distance,
+                  self.clean_right_x)
+        if far <= self.purge_x:
+            return False
+        feedrate = self.clean_speed * 60.
+        toolhead = self.printer.lookup_object('toolhead')
+        prior_accel = toolhead.get_status(0.).get('max_accel')
+        lines = ["SET_VELOCITY_LIMIT ACCEL=%.3f" % self.clean_accel, "G90"]
+        for unused in range(self.unload_shake_moves):
+            lines.append("G1 X%.3f Y%.3f F%.3f"
+                         % (far, self.purge_y, feedrate))
+            lines.append("G1 X%.3f Y%.3f F%.3f"
+                         % (self.purge_x, self.purge_y, feedrate))
+        lines.append("M400")
+        try:
+            self.gcode.run_script_from_command("\n".join(lines))
+        finally:
+            if prior_accel is not None:
+                self.gcode.run_script_from_command(
+                    "SET_VELOCITY_LIMIT ACCEL=%.3f" % prior_accel)
+        if self._wait_nozzle_filament(False, 1.):
+            gcmd.respond_info(
+                "CFS unload: the nozzle sensor stayed on with the filament"
+                " out; shaking the toolhead freed it")
+            return True
+        return False
+
     def _clear_nozzle_stub(self, gcmd):
         # Brittle filament can snap during the unload pulls and leave a
         # short loose piece under the nozzle sensor while the CFS rewinds
         # the rest (twice on white Hyper PLA, 10-25). The unload runs over
         # the chute with a hot nozzle, so push the piece through the melt
         # zone a little at a time until the sensor clears.
-        if not self.unload_clear_tries:
-            return False
-        position = self.printer.lookup_object('toolhead').get_position()
-        tolerance = self.purge_position_tolerance
-        if (abs(position[0] - self.purge_x) > tolerance
-                or abs(position[1] - self.purge_y) > tolerance):
+        if not self.unload_clear_tries or not self._at_chute():
             return False
         heater = self.printer.lookup_object('extruder').get_heater()
         if not heater.can_extrude:

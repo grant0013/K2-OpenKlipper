@@ -250,7 +250,12 @@ print:
   loose piece under the nozzle filament sensor. Three prints stopped with
   "nozzle sensor still detects filament". The rewind time is a good cut
   health signal: about 13-17 s for a clean cut, 24 s or more for a dragged one.
-- **Auto-clear.** If the sensor still sees filament after an unload, the
+- **Pin shake.** On the DXC2 the sensor pin's spring is weak and the pin can
+  stay in with the filament gone (11-02). Before anything is pushed, the
+  toolhead swings 6 times between purge_x and purge_x + 8 mm over the chute
+  at the wipe's speed and acceleration, then looks again
+  (`unload_shake_moves`, 0 = off; `unload_shake_distance`).
+- **Auto-clear.** If the sensor still sees filament after that, the
   module pushes up to 3 x 30 mm through the hot nozzle over the chute and
   carries on (`unload_clear_tries`, 0 = stop the print as before).
 - **Knife sensor.** PB9 never changed with the DXC2, not during cuts or slow
