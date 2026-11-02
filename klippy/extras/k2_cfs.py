@@ -462,6 +462,12 @@ class K2CFS:
             'load_sensor_grace', 3., minval=0.)
         self.load_poll_interval = config.getfloat(
             'load_poll_interval', 1., minval=0.1, maxval=5.)
+        # How long one stage-5 send waits for a reply. CFS firmware 1.5.0
+        # does not answer stage 5 while it feeds (11-01: no reply in 15 s on
+        # every change), so a long wait only delays the load after the
+        # filament has arrived. Jacob10383 waits 1 s and sends again.
+        self.load_stage5_timeout = config.getfloat(
+            'load_stage5_timeout', 1., minval=.2, maxval=30.)
         # Between stage-5 sends, check the nozzle sensor this often. The
         # sensor is local (no bus traffic), so the stage-5 rate is
         # unchanged; stock reacts on the sensor callback, Jacob10383 polls
@@ -2235,39 +2241,48 @@ class K2CFS:
             flexed = False
             while True:
                 try:
-                    self._load_stage('EXTRUDE STAGE 5', mask, 5)
+                    self._run_actuation(
+                        'EXTRUDE STAGE 5', [0xff, 0x10, mask, 5, 0],
+                        timeout=self.load_stage5_timeout)
                 except Exception as exc:
-                    # Firmware 1.5.0 may advance while the nozzle-sensor
-                    # callback is arriving, then reject the in-flight stage-5
-                    # retry with state 0x0c. The asserted physical sensor
-                    # makes that response terminal success. The filament can
-                    # still be a moment short of the sensor when the CFS
-                    # advances (seen live 10-24: sensor tripped after the
-                    # load had been failed), so give it a few seconds.
-                    if self._wait_nozzle_filament(
-                            True, self.load_sensor_grace):
-                        break
-                    if (getattr(exc, 'status', None)
-                            == STATUS_ODOMETER_STALLED
-                            and err8_retries < 2):
-                        # EXTRUDE_ERR8 has no user message in stock; its
-                        # wrapper retries instead of failing the load.
-                        err8_retries += 1
-                        moved = False
-                        if self.stall_retry_motion and not flexed:
-                            moved = flexed = self._flex_filament_path(
-                                gcmd, "CFS hub wheel stopped during the load"
-                                " (EXTRUDE_ERR8); moving the toolhead to free"
-                                " the tube, then retrying")
-                        if not moved:
-                            gcmd.respond_info(
-                                "CFS stage 5 returned EXTRUDE_ERR8; re-sending"
-                                " stage 4 (retry %d/2)" % err8_retries)
-                        self._load_stage('EXTRUDE STAGE 4', mask, 4)
-                        reactor.pause(reactor.monotonic()
-                                      + self.load_poll_interval)
-                        continue
-                    raise
+                    if (self.last_resp
+                            or isinstance(exc, CFSStatusError)):
+                        # Firmware 1.5.0 may advance while the nozzle
+                        # sensor callback is arriving, then reject the
+                        # in-flight stage-5 retry with state 0x0c. The
+                        # asserted physical sensor makes that response
+                        # terminal success. The filament can still be a
+                        # moment short of the sensor when the CFS advances
+                        # (seen live 10-24: sensor tripped after the load
+                        # had been failed), so give it a few seconds.
+                        if self._wait_nozzle_filament(
+                                True, self.load_sensor_grace):
+                            break
+                        if (getattr(exc, 'status', None)
+                                == STATUS_ODOMETER_STALLED
+                                and err8_retries < 2):
+                            # EXTRUDE_ERR8 has no user message in stock;
+                            # its wrapper retries instead of failing.
+                            err8_retries += 1
+                            moved = False
+                            if self.stall_retry_motion and not flexed:
+                                moved = flexed = self._flex_filament_path(
+                                    gcmd, "CFS hub wheel stopped during the"
+                                    " load (EXTRUDE_ERR8); moving the"
+                                    " toolhead to free the tube, then"
+                                    " retrying")
+                            if not moved:
+                                gcmd.respond_info(
+                                    "CFS stage 5 returned EXTRUDE_ERR8;"
+                                    " re-sending stage 4 (retry %d/2)"
+                                    % err8_retries)
+                            self._load_stage('EXTRUDE STAGE 4', mask, 4)
+                            reactor.pause(reactor.monotonic()
+                                          + self.load_poll_interval)
+                            continue
+                        raise
+                    # No reply: the box is still feeding (it does not
+                    # answer stage 5 until it is done). Send it again.
                 if self._nozzle_has_filament() is True:
                     break
                 now = reactor.monotonic()

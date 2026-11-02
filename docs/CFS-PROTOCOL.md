@@ -276,6 +276,13 @@ Options in `[k2_cfs]`; defaults in brackets.
 - **Load arrival** (`load_arrival_poll_interval` [0.1]). The nozzle sensor
   is watched between stage-5 sends instead of once per send (up to 2 s
   late with `load_poll_interval: 2`). The stage-5 bus rate is unchanged.
+- **Stage-5 reply wait** (`load_stage5_timeout` [1], since v0.4.18). CFS
+  firmware 1.5.0 does not answer stage 5 while it feeds: every change on
+  11-01 waited the full 15 s for a reply, after the filament had already
+  arrived, and a feed slower than 15 s + 3 s failed the load. Like his
+  driver, a send now waits 1 s; no reply means still feeding, and the
+  nozzle sensor (or `load_timeout`) ends the wait. A reply with an error
+  status is handled as before.
 - **Stall retry motion** (`stall_retry_motion` [off],
   `stall_retry_moves` [`Y255, X220, Y40, X40`]). His
   `filament_retry_motion` sweeps the head (K2 Plus: Y350 X300 Y50 X50) to

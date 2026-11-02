@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.4.18-alpha.1 (2026-11-02)
+
+- **CFS loads up to ~10 s faster per colour change, and a slow feed no
+  longer fails.** The load sends EXTRUDE stage 5 and waited up to 15 s for
+  the box to answer. CFS firmware 1.5.0 does not answer stage 5 while it
+  feeds: on 11-01 every change waited the full 15 s after the filament had
+  already reached the nozzle sensor, and a feed taking longer than 15 s +
+  3 s grace failed the load. Each send now waits `load_stage5_timeout`
+  (1 s, as Jacob10383's driver does); no reply means still feeding, the
+  nozzle sensor ends the wait (checked every 0.1 s) and `load_timeout`
+  (90 s) still bounds it. Error replies (EXTRUDE_ERR8 retry etc.) are
+  handled as before. Tests: tests/test_cfs_load_stage5.py.
+
 ## v0.4.17-alpha.1 (2026-11-01)
 
 - **Touchscreen froze on the time zone picker** (K2 Plus report). Choosing a
