@@ -2,6 +2,24 @@
 
 ## v0.4.18-alpha.1 (2026-11-02)
 
+- **A failed colour change pauses the print instead of ending it.** Any
+  error in CFS_TOOLCHANGE (cut, unload, load or purge) used to end the
+  print (HT-P-2026-0416, 11-02: slot A did not feed at the 3-hour mark).
+  Now, as stock does, the CFS is put idle, the print pauses at the chute
+  with the nozzle hot and the fans back on, and the console and
+  touchscreen say which slot failed and why. RESUME runs the new
+  CFS_CHANGE_RETRY first: it reheats, works out what is left from the
+  nozzle sensor (load and purge if the nozzle is clear; purge only if the
+  new slot was loaded by hand; a full change if the old slot is still
+  in), goes back over the print at the lifted height, comes straight down
+  and saves that as the resume position. If the retry fails the print
+  stays paused. The usual 30-minute paused timeout turns the hotend off;
+  the retry reheats. `change_pending` / `last_change_error` in
+  `printer.k2_cfs`. Tests: tests/test_cfs_change_pause.py.
+- **The load retries a slot that did not feed once by itself.** EXTRUDE
+  stage 0's STAGE0_ODOMETER_TIMEOUT (0x09, the hub's measuring wheel did
+  not turn for 2 s) now rewinds the hub and feeds again once before
+  failing.
 - **CFS loads up to ~10 s faster per colour change, and a slow feed no
   longer fails.** The load sends EXTRUDE stage 5 and waited up to 15 s for
   the box to answer. CFS firmware 1.5.0 does not answer stage 5 while it

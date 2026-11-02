@@ -55,6 +55,7 @@ import logging
 # his plain-English text (box_protocol.py STATUS_NAMES / STATUS_TEXT).
 STATUS_OK = 0x00
 STATUS_BUSY = 0x03
+STATUS_STAGE0_ODOMETER_TIMEOUT = 0x09
 STATUS_ODOMETER_STALLED = 0x0c
 STATUS_STAGE7_NO_MOTION = 0x0e
 STATUS_UNLOAD_MOTOR_BLOCKED = 0x19
@@ -536,6 +537,8 @@ class K2CFS:
         self.manage_runout_sensor = config.getboolean(
             'manage_runout_sensor', True)
         self.print_start_transaction = False
+        # A colour change that failed mid-print: what RESUME retries
+        self.pending_change = None
         # Background environment poll (temperature/humidity + selected slot).
         # Stock master-server polls the same query every ~4 s; we poll less
         # often and stay quiet while an actuation sequence is in progress.
@@ -568,7 +571,8 @@ class K2CFS:
                        'feed_enabled': None,
                        'feed_slot': None, 'last_loaded_slot': None,
                        'running_out': None, 'runout_next': '',
-                       'runout_warning': ''}
+                       'runout_warning': '', 'change_pending': None,
+                       'last_change_error': ''}
         buttons = self.printer.load_object(config, 'buttons')
         buttons.register_buttons(
             [self.cutter_switch_pin], self._handle_cutter_switch)
@@ -631,6 +635,10 @@ class K2CFS:
         self.gcode.register_command(
             'CFS_TOOLCHANGE', self.cmd_CFS_TOOLCHANGE,
             desc="Change to another CFS slot during a print")
+        self.gcode.register_command(
+            'CFS_CHANGE_RETRY', self.cmd_CFS_CHANGE_RETRY,
+            desc="From a failed colour change's pause: try the change again"
+                 " and go back to the print (RESUME runs it)")
         self.gcode.register_command(
             'CFS_RUNOUT_REFILL', self.cmd_CFS_RUNOUT_REFILL,
             desc="From a runout pause: load SLOT (same filament) and resume")
@@ -2232,7 +2240,27 @@ class K2CFS:
             self.gcode.run_script_from_command(
                 "SAVE_GCODE_STATE NAME=K2_CFS_LOAD")
             saved = True
-            self._load_stage('EXTRUDE STAGE 0', mask, 0)
+            try:
+                self._load_stage('EXTRUDE STAGE 0', mask, 0)
+            except CFSStatusError as exc:
+                if exc.status != STATUS_STAGE0_ODOMETER_TIMEOUT:
+                    raise
+                # The slot pushed but the hub's measuring wheel did not
+                # turn (HT-P-2026-0416, 11-02: a snag that ended the
+                # print). Rewind what reached the hub and feed once more.
+                gcmd.respond_info(
+                    "CFS slot %s did not feed (the hub's measuring wheel"
+                    " did not turn); rewinding and trying once more" % slot)
+                self._clear_hub(gcmd)
+                self._run_actuation(
+                    'SET_BOX_MODE IDLE',
+                    [0xff, 0x04, 0x00, self.MODE_IDLE])
+                self._run_actuation(
+                    'TIGHTEN_UP DISABLE',
+                    [0xff, 0x0f, self.TENSION_DISABLE])
+                self.printer.get_reactor().pause(
+                    self.printer.get_reactor().monotonic() + 1.)
+                self._load_stage('EXTRUDE STAGE 0', mask, 0)
             self._load_stage('EXTRUDE STAGE 4', mask, 4)
 
             reactor = self.printer.get_reactor()
@@ -2669,21 +2697,44 @@ class K2CFS:
         # purge_min_z and the change aborts (HT-P-2026-0416, 2026-11-01)
         lift_z = self._gcode_z(
             max(start[2] + self.toolchange_lift, self.purge_min_z))
-        fan_speeds = self._fan_speeds()
-        self._set_fans({name: 0. for name in fan_speeds})
-        reactor = self.printer.get_reactor()
-        timings = [reactor.monotonic()]
+        ctx = {'slot': slot, 'old_slot': old_slot, 'start': start,
+               'purge_length': purge_length, 'full_length': full_length,
+               'new_temp': new_temp, 'purge_temp': purge_temp}
         self.gcode.run_script_from_command(
             "SAVE_GCODE_STATE NAME=K2_CFS_TOOLCHANGE\n"
             "G90\n"
             "G1 Z%.3f F600\n"
             "M104 S%.1f" % (lift_z, purge_temp))
+        try:
+            timings = self._change_steps(ctx, unload=True, load=True)
+        except Exception as exc:
+            self._pause_failed_change(gcmd, ctx, exc)
+            return
+        self._change_return(gcmd, ctx, timings)
+
+    def _change_steps(self, ctx, unload, load):
+        # The cut/unload, load and purge of a colour change, at the chute
+        # with the print's fans off. Returns the step end times.
+        slot, mask = ctx['slot'], self.SLOT_MASKS[ctx['slot']]
+        purge_length = ctx['purge_length']
+        full_length = ctx['full_length']
+        purge_temp = ctx['purge_temp']
+        fan_speeds = self._fan_speeds()
+        self._set_fans({name: 0. for name in fan_speeds})
+        reactor = self.printer.get_reactor()
+        timings = [reactor.monotonic()]
         self.print_start_transaction = True
         try:
-            self._move_to_cut_start()
-            unload_gcmd = self.gcode.create_gcode_command(
-                "CFS_CUT_UNLOAD", "", {"SLOT": old_slot, "CONFIRM": "1"})
-            self.cmd_CFS_CUT_UNLOAD(unload_gcmd)
+            if unload:
+                self._move_to_cut_start()
+                unload_gcmd = self.gcode.create_gcode_command(
+                    "CFS_CUT_UNLOAD", "",
+                    {"SLOT": ctx['old_slot'], "CONFIRM": "1"})
+                self.cmd_CFS_CUT_UNLOAD(unload_gcmd)
+            else:
+                self._ensure_purge_position(
+                    self.gcode.create_gcode_command(
+                        "CFS_PURGE_POSITION", "", {"CONFIRM": "1"}))
             timings.append(reactor.monotonic())
             # M109 waits for the PID to settle within 1C, which cost up to
             # 45s per change at an unchanged temperature (10-25). The load
@@ -2699,7 +2750,8 @@ class K2CFS:
                 load_params.update(LENGTH="%.1f" % full_length)
             load_gcmd = self.gcode.create_gcode_command(
                 "CFS_LOAD", "", load_params)
-            self.cmd_CFS_LOAD(load_gcmd)
+            if load:
+                self.cmd_CFS_LOAD(load_gcmd)
             timings.append(reactor.monotonic())
             self.cmd_CFS_PURGE(load_gcmd)
             timings.append(reactor.monotonic())
@@ -2714,8 +2766,13 @@ class K2CFS:
         finally:
             self.print_start_transaction = False
             self._set_fans(fan_speeds)
+        return timings
 
+    def _change_return(self, gcmd, ctx, timings):
         # Over the print at the lifted height, then straight down.
+        slot, old_slot, start = ctx['slot'], ctx['old_slot'], ctx['start']
+        new_temp = ctx['new_temp']
+        reactor = self.printer.get_reactor()
         self.gcode.run_script_from_command(
             "M104 S%.1f\n"
             "G90\n"
@@ -2729,6 +2786,84 @@ class K2CFS:
             "(cut/unload %.0fs, load %.0fs, purge %.0fs, return %.0fs)"
             % ((old_slot, slot, timings[-1] - timings[0])
                + tuple(b - a for a, b in zip(timings, timings[1:]))))
+
+    def _pause_failed_change(self, gcmd, ctx, exc):
+        # Stock pauses on a CFS error instead of ending the print: pause
+        # here at the chute with the nozzle hot, so the slot can be sorted
+        # out and RESUME (CFS_CHANGE_RETRY) tries the change again
+        # (HT-P-2026-0416, 11-02: a load error ended a 3 h print).
+        self.pending_change = ctx
+        self.status['change_pending'] = "%s>%s" % (ctx['old_slot'],
+                                                    ctx['slot'])
+        reason = str(exc)
+        for prefix in ("CFS load failed: ", "CFS purge failed: "):
+            if reason.startswith(prefix):
+                reason = reason[len(prefix):]
+        self.status['last_change_error'] = reason[:200]
+        logging.info("k2_cfs: colour change %s failed, pausing: %s",
+                     self.status['change_pending'], reason)
+        self.gcode.run_script_from_command("PAUSE_BASE")
+        gcmd.respond_raw(
+            "!! Colour change to slot %s failed: %s Print paused at the"
+            " chute with the nozzle hot. Check slot %s (a tangle, the spool"
+            " turning freely, a clean cut filament end), then Resume to try"
+            " the change again." % (ctx['slot'], reason.rstrip('.') + '.',
+                                     ctx['slot']))
+
+    def cmd_CFS_CHANGE_RETRY(self, gcmd):
+        # RESUME after a failed colour change: try it again from where it
+        # stopped, go back over the print and leave RESUME to carry on.
+        ctx = self.pending_change
+        if ctx is None:
+            return
+        self._require_cfs(gcmd)
+        self._require_actuation(gcmd)
+        print_stats = self.printer.lookup_object('print_stats', None)
+        state = print_stats.get_status(0.).get('state', '') \
+            if print_stats is not None else ''
+        if state != 'paused':
+            self._clear_pending_change()
+            return
+        if self.print_start_transaction:
+            raise gcmd.error("A CFS transaction is already active")
+        mask = self.SLOT_MASKS[ctx['slot']]
+        loaded = self._nozzle_has_filament() is True
+        active = self._path_mask(self._measuring())
+        unload = load = True
+        if not loaded:
+            unload = False
+        elif active == mask:
+            # loaded by hand: purge only
+            unload = load = False
+        else:
+            old = {m: s for s, m in self.SLOT_MASKS.items()}.get(active)
+            if old is None:
+                raise gcmd.error(
+                    "The nozzle has filament but the CFS selects mask"
+                    " 0x%02x. Unload it, then Resume." % active)
+            ctx['old_slot'] = old
+        gcmd.respond_info(
+            "Trying the colour change to slot %s again" % ctx['slot'])
+        self.gcode.run_script_from_command(
+            "M104 S%.1f" % ctx['purge_temp'])
+        try:
+            timings = self._change_steps(ctx, unload=unload, load=load)
+        except Exception as exc:
+            self.status['last_change_error'] = str(exc)[:200]
+            raise gcmd.error(
+                "Colour change to slot %s failed again: %s Still paused:"
+                " sort out slot %s, then Resume." % (
+                    ctx['slot'], str(exc).rstrip('.') + '.', ctx['slot']))
+        self._clear_pending_change()
+        self._change_return(gcmd, ctx, timings)
+        # RESUME_BASE restores PAUSE_STATE: make that here, over the print,
+        # not the chute where the pause happened
+        self.gcode.run_script_from_command(
+            "SAVE_GCODE_STATE NAME=PAUSE_STATE")
+
+    def _clear_pending_change(self):
+        self.pending_change = None
+        self.status['change_pending'] = None
 
     def _flush_matrix(self):
         # The print file's flush matrix, read once per file
@@ -2862,6 +2997,7 @@ class K2CFS:
     def cmd_CFS_PRINT_START(self, gcmd):
         self._require_cfs(gcmd)
         self._require_print_start(gcmd)
+        self._clear_pending_change()
         self._load_and_purge(gcmd, "CFS_PRINT_START")
 
     def cmd_CFS_CHANGE_SLOT(self, gcmd):

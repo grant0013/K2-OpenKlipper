@@ -6,6 +6,16 @@ button in Mainsail or on the touchscreen (your `printer-overrides.cfg` is
 kept), or install with the one-line installer in
 [docs/INSTALL.md](docs/INSTALL.md).
 
+## A failed colour change no longer ends the print
+
+If a CFS colour change fails (a tangle, a spool that won't turn, a chewed
+filament end), the print now pauses at the purge chute with the nozzle hot,
+like stock firmware, instead of stopping. The screen and console say which
+slot and why. Sort the slot out, then press **Resume**: the printer tries
+the change again and carries on printing. If it fails again it simply
+stays paused. A slot that doesn't feed is also retried once automatically
+before it ever comes to that.
+
 ## Faster CFS colour changes
 
 - **Loading the new colour is up to about 10 s quicker per change.** During
