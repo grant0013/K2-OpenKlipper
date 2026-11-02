@@ -12,6 +12,16 @@
   nozzle sensor ends the wait (checked every 0.1 s) and `load_timeout`
   (90 s) still bounds it. Error replies (EXTRUDE_ERR8 retry etc.) are
   handled as before. Tests: tests/test_cfs_load_stage5.py.
+- **PETG purge no longer curls back into the nozzle.** Creality flushes
+  with the part fan at 30/255; the K2's part fan blows from one side, so a
+  PETG strand cooled unevenly while it came out, curled up, stuck to the
+  nozzle and blocked the chute (Grant's K2, 11-02). New `_PURGE_FAN` macro
+  (`variable_material`, matched on the start of the slot's type like
+  `_SOFT_FILAMENT`): PETG, PCTG, ABS, ASA and PC flush with the fan off,
+  everything else keeps 30 (`variable_default`). Used by the colour-change
+  purge (lowest of the old and new slot's materials) and START_PRINT's
+  flush. The 5 s full blast that snaps the strand off is unchanged.
+  Tests: tests/test_cfs_purge_fan.py.
 
 ## v0.4.17-alpha.1 (2026-11-01)
 

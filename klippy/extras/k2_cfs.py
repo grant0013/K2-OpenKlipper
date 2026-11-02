@@ -2466,6 +2466,12 @@ class K2CFS:
             above=0., maxval=9.58)
         actual_length, segments = self._purge_segments(
             length, clamp=not short)
+        slot = [s for s, m in self.SLOT_MASKS.items() if m == mask][0]
+        slots = [slot]
+        if change and self.status.get('last_unloaded_slot'):
+            # the old colour comes out first
+            slots.append(self.status['last_unloaded_slot'])
+        flush_fan = self._purge_fan(slots)
         # Creality Print's K2 FLUSH block: fast pushes broken by 1 mm/s
         # pauses so the strand comes out in pieces, part fan low while
         # flushing, a full blast so the strand sets and snaps off, then the
@@ -2476,7 +2482,7 @@ class K2CFS:
         scripts = []
         for index, chunk in enumerate(segments):
             final = index == len(segments) - 1
-            lines = ["M83", "M106 S30"]
+            lines = ["M83", "M106 S%d" % flush_fan]
             if change and index == 0 and chunk > 36.:
                 rest = chunk - 36.
                 lines.append("G1 E36.000 F%.3f" % rate)
@@ -2495,7 +2501,7 @@ class K2CFS:
                 lines.extend([
                     "M106 S%d" % round(self.purge_cool_fan * 255.),
                     "G4 P%d" % (self.purge_cool_time * 1000.),
-                    "M106 S30",
+                    "M106 S%d" % flush_fan,
                 ])
             if retract:
                 lines.append("G1 E-%.3f F%.3f"
@@ -2548,6 +2554,31 @@ class K2CFS:
         gcmd.respond_info(
             "CFS purge complete: requested %.3fmm, stock-clamped %.3fmm "
             "at %.3fmm/s" % (length, actual_length, speed))
+
+    def _purge_fan(self, slots):
+        # Part fan (0-255) while the purge comes out: the lowest that
+        # _PURGE_FAN gives these slots' materials (Creality's 30 without it)
+        macro = self.printer.lookup_object('gcode_macro _PURGE_FAN', None)
+        if macro is None:
+            return 30
+        variables = macro.variables
+        materials = variables.get('material') or {}
+        records = {}
+        cfs_slots = self.printer.lookup_object('hark_cfs_slots', None)
+        if cfs_slots is not None:
+            records = cfs_slots.get_status(0.)['slots']
+        fans = []
+        for slot in slots:
+            kind = (records.get(slot, {}).get('type') or '').upper()
+            fan = variables.get('default', 30)
+            for key, value in materials.items():
+                if kind.startswith(str(key).upper()):
+                    fan = value
+            fans.append(fan)
+        try:
+            return max(0, min(255, int(min(fans))))
+        except (TypeError, ValueError):
+            return 30
 
     def _slot_nozzle_temp(self, slot):
         slots = self.printer.lookup_object('hark_cfs_slots', None)

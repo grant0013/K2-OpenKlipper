@@ -16,6 +16,19 @@ kept), or install with the one-line installer in
   than about 18 s to reach the toolhead (long or tight PTFE tube, a heavy
   spool), the load failed. It now waits up to the normal 90 s limit.
 
+## PETG purge no longer curls into the nozzle
+
+While purge filament came out, the part fan ran low (as on stock). The
+K2's part fan blows from one side, so PETG cooled unevenly, curled back
+up, stuck to the nozzle and could block the chute. PETG, PCTG, ABS, ASA
+and PC now flush with the fan off; PLA and the rest are unchanged. The
+short full-fan blast that snaps the strand off still runs. To change it,
+in printer-overrides.cfg (0-255, matched on the start of the material):
+
+    [gcode_macro _PURGE_FAN]
+    variable_default: 30
+    variable_material: {'PETG': 0, 'PCTG': 0, 'ABS': 0, 'ASA': 0, 'PC': 0}
+
 ## Tip: shorter purges
 
 The printer now purges what OrcaSlicer's flush volumes ask for. If you
