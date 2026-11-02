@@ -43,6 +43,7 @@
 # retry motion, the measuring-wheel clog check, the flush matrix purge and
 # the RFID record decode.
 
+import json
 import math
 import os
 import re
@@ -55,7 +56,6 @@ import logging
 # his plain-English text (box_protocol.py STATUS_NAMES / STATUS_TEXT).
 STATUS_OK = 0x00
 STATUS_BUSY = 0x03
-STATUS_STAGE0_ODOMETER_TIMEOUT = 0x09
 STATUS_ODOMETER_STALLED = 0x0c
 STATUS_STAGE7_NO_MOTION = 0x0e
 STATUS_UNLOAD_MOTOR_BLOCKED = 0x19
@@ -469,6 +469,20 @@ class K2CFS:
         # filament has arrived. Jacob10383 waits 1 s and sends again.
         self.load_stage5_timeout = config.getfloat(
             'load_stage5_timeout', 1., minval=.2, maxval=30.)
+        # A load that fails (a snag, a missed grip, the hub wheel not
+        # turning) is rewound and tried again this many times before a
+        # colour change pauses the print, as Prusa's MMU3 retries silently
+        self.load_retries = config.getint(
+            'load_retries', 2, minval=0, maxval=5)
+        # Per-slot counts (loads, failed attempts, paused changes, clogs,
+        # runouts, cut misses), kept across restarts
+        config_file = self.printer.get_start_args().get('config_file', '')
+        self.stats_path = config.get(
+            'stats_path',
+            os.path.join(os.path.dirname(config_file)
+                         or '/mnt/UDISK/printer_data_mainline/config',
+                         'hark_cfs_stats.json'))
+        self.slot_stats = self._load_stats()
         # Between stage-5 sends, check the nozzle sensor this often. The
         # sensor is local (no bus traffic), so the stage-5 rate is
         # unchanged; stock reacts on the sensor callback, Jacob10383 polls
@@ -560,6 +574,13 @@ class K2CFS:
         # check_cut_pos_x_min/max)
         self.cutter_cal_start_x = config.getfloat(
             'cutter_cal_start_x', -5., maxval=0.)
+        # METHOD=STALL (toolheads whose knife sensor never trips, e.g. a
+        # Phaetus DXC2): the cut position is this far short of where the X
+        # motor first reports hitting the cutter's end stop twice running
+        # (stock motor_control cut_pos_offset, Jacob10383's
+        # CALIBRATE_CUT_POS)
+        self.cutter_stall_offset = config.getfloat(
+            'cutter_stall_offset', .4, minval=0., maxval=2.)
         self.cutter_cal_min_x = config.getfloat(
             'cutter_cal_min_x', -9.5, minval=-11.)
         self.cutter_cal_max_x = config.getfloat(
@@ -573,6 +594,7 @@ class K2CFS:
                        'running_out': None, 'runout_next': '',
                        'runout_warning': '', 'change_pending': None,
                        'last_change_error': ''}
+        self.status['slot_stats'] = self._stats_summary()
         buttons = self.printer.load_object(config, 'buttons')
         buttons.register_buttons(
             [self.cutter_switch_pin], self._handle_cutter_switch)
@@ -635,6 +657,10 @@ class K2CFS:
         self.gcode.register_command(
             'CFS_TOOLCHANGE', self.cmd_CFS_TOOLCHANGE,
             desc="Change to another CFS slot during a print")
+        self.gcode.register_command(
+            'CFS_SLOT_STATS', self.cmd_CFS_SLOT_STATS,
+            desc="Per-slot load, failure, clog and runout counts"
+                 " (RESET=<slot>|ALL)")
         self.gcode.register_command(
             'CFS_CHANGE_RETRY', self.cmd_CFS_CHANGE_RETRY,
             desc="From a failed colour change's pause: try the change again"
@@ -884,6 +910,8 @@ class K2CFS:
                " RESUME." % (extruded, abs(wheel - base[1]),
                              self.status.get('feed_slot')))
         self.status['last_clog'] = msg
+        if self.status.get('feed_slot') in self.slot_stats:
+            self._count(self.status['feed_slot'], 'clogs')
         logging.info("k2_cfs: %s", msg)
         pause_resume = self.printer.lookup_object('pause_resume', None)
         if pause_resume is None:
@@ -1069,6 +1097,8 @@ class K2CFS:
         if 'box_state' in m:
             if m['box_runout'] and not self.status.get('box_runout'):
                 logging.info("k2_cfs: the box reports a runout (0x50)")
+                if self.status.get('feed_slot') in self.slot_stats:
+                    self._count(self.status['feed_slot'], 'runouts')
             for key in ('box_state', 'box_state_name', 'box_runout'):
                 self.status[key] = m[key]
             self.status['box_status_code'] = m['status']
@@ -1644,6 +1674,12 @@ class K2CFS:
         # from pre_cut_cal_pos_x until the knife sensor trips, and stores
         # that X (cut_pos_x, -6.10 on this printer under stock firmware).
         # Same here, reported only: set cutter_cut_x from the result.
+        # METHOD=STALL finds the cutter's end stop with the X motor instead.
+        method = gcmd.get('METHOD', 'SENSOR').upper()
+        if method not in ('SENSOR', 'STALL'):
+            raise gcmd.error("METHOD must be SENSOR or STALL")
+        if method == 'STALL':
+            return self._cutter_calibrate_stall(gcmd)
         self._require_idle(gcmd)
         self._require_safe_motion(gcmd, "CFS_CUTTER_CALIBRATE")
         if (self._nozzle_has_filament() is True
@@ -1693,7 +1729,10 @@ class K2CFS:
         self.status['cutter_cal_x'] = trip
         if trip is None:
             raise gcmd.error(
-                "Knife sensor never tripped between X%.2f and X%.2f"
+                "Knife sensor never tripped between X%.2f and X%.2f. If"
+                " your toolhead's knife sensor never changes (e.g. a"
+                " Phaetus DXC2), use CFS_CUTTER_CALIBRATE METHOD=STALL"
+                " CONFIRM=1, which finds the cutter with the X motor"
                 % (start, stop))
         in_range = self.cutter_cal_min_x <= trip <= self.cutter_cal_max_x
         gcmd.respond_info(
@@ -1704,6 +1743,96 @@ class K2CFS:
                "OK" if in_range else "OUT OF RANGE", self.cutter_cut_x,
                trip - self.cutter_cut_x,
                "returned" if returned else "DID NOT RETURN"))
+
+    def _cutter_calibrate_stall(self, gcmd):
+        # Stock's cutter calibration (and Jacob10383's CALIBRATE_CUT_POS):
+        # ram the cutter from its staging point at the real cut speed, a
+        # little deeper each time, and read the X motor's protection latch
+        # after each ram. The first two rams in a row that hit the end
+        # stop give the cut position, less cutter_stall_offset. A hit can
+        # cost the closed-loop motor its position, so X is homed again
+        # after each one. Reported only, like the sensor method.
+        self._require_idle(gcmd)
+        self._require_safe_motion(gcmd, "CFS_CUTTER_CALIBRATE")
+        if gcmd.get_int('CONFIRM', 0, minval=0, maxval=1) != 1:
+            raise gcmd.error(
+                "CFS_CUTTER_CALIBRATE METHOD=STALL rams the cutter up to"
+                " 60 times: stay with the printer and run it with CONFIRM=1")
+        if self._nozzle_has_filament() is True:
+            raise gcmd.error(
+                "Filament is at the nozzle: the rams would cut it. Unload"
+                " first")
+        bus = self.printer.lookup_object('k2_motor_bus', None)
+        if bus is None:
+            raise gcmd.error("No k2_motor_bus: the X motor cannot be read")
+        start = gcmd.get_float('START', self.cutter_cal_start_x, maxval=0.)
+        stop = gcmd.get_float('STOP', -11., minval=-11., below=start)
+        step = gcmd.get_float('STEP', .1, minval=.05, maxval=.5)
+        toolhead = self.printer.lookup_object('toolhead')
+        prior_accel = toolhead.get_status(0.).get('max_accel')
+        travel = self.cutter_speed * 60.
+        stage = ("G90\nG1 Y%.3f F%.3f\nG1 X%.3f F%.3f\nM400"
+                 % (self.cutter_y, travel, self.cutter_x, travel))
+
+        def hit():
+            detail = bus.query_protection('x')
+            if detail is None:
+                raise gcmd.error("The X motor did not answer its status"
+                                 " query; calibration stopped")
+            return bool(detail.get('stalled') or detail.get('has_error'))
+
+        bus.clear_faults('x')
+        self.gcode.run_script_from_command(
+            "SAVE_GCODE_STATE NAME=K2_CUT_STALL")
+        hits = []
+        previous = False
+        x = start
+        try:
+            self.gcode.run_script_from_command(stage)
+            if hit():
+                raise gcmd.error(
+                    "The X motor reports a stall before any ram; clear the"
+                    " cutter area and home X")
+            while x >= stop - 1e-6:
+                gcmd.respond_info("Cutter calibration: ram to X%.2f" % x)
+                self.gcode.run_script_from_command(
+                    "SET_VELOCITY_LIMIT ACCEL=%.3f\n"
+                    "G1 X%.3f Y%.3f F%.3f\nM400\n"
+                    "G1 X%.3f F%.3f\nM400\n"
+                    "SET_VELOCITY_LIMIT ACCEL=%.3f"
+                    % (self.cutter_ram_accel, x, self.cutter_y,
+                       self.cutter_ram_speed * 60., self.cutter_x, travel,
+                       prior_accel))
+                now_hit = hit()
+                if now_hit:
+                    hits.append(x)
+                    bus.clear_faults('x')
+                    # back to a known X before the next ram
+                    self.gcode.run_script_from_command("G28 X\n" + stage)
+                    if previous:
+                        break
+                previous = now_hit
+                x = round(x - step, 4)
+        finally:
+            self.gcode.run_script_from_command(
+                "SET_VELOCITY_LIMIT ACCEL=%.3f\n"
+                "RESTORE_GCODE_STATE NAME=K2_CUT_STALL" % prior_accel)
+        if len(hits) < 2 or hits[-1] != round(hits[-2] - step, 4):
+            self.status['cutter_cal_x'] = None
+            raise gcmd.error(
+                "No two rams in a row hit the cutter end stop between X%.2f"
+                " and X%.2f (hits: %s). The cut position is unchanged."
+                % (start, stop, ", ".join("%.2f" % h for h in hits)
+                   or "none"))
+        result = round(hits[-1] + self.cutter_stall_offset, 2)
+        self.status['cutter_cal_x'] = result
+        gcmd.respond_info(
+            "CFS cutter (motor stall): end stop hit at X%.2f and X%.2f;"
+            " cut position X%.2f (%.1f mm short of it). Current cut"
+            " position X%.2f. To use it, in printer-overrides.cfg:\n"
+            "[k2_cfs]\ncutter_cut_x: %.2f"
+            % (hits[-2], hits[-1], result, self.cutter_stall_offset,
+               self.cutter_cut_x, result))
 
     def cmd_CFS_CUTTER_SENSOR(self, gcmd):
         state = ("unknown" if self.cutter_switch_state is None else
@@ -2118,6 +2247,8 @@ class K2CFS:
             key = 'cut_sensor_hits' if pressed else 'cut_sensor_misses'
             self.status[key] = self.status.get(key, 0) + 1
             if not pressed:
+                self._count(slot, 'cut_misses')
+            if not pressed:
                 # With the DXC2 the sensor has never changed during a cut
                 # (10-25), so this is a log line, not a warning
                 logging.info("k2_cfs: knife sensor did not change during "
@@ -2240,27 +2371,7 @@ class K2CFS:
             self.gcode.run_script_from_command(
                 "SAVE_GCODE_STATE NAME=K2_CFS_LOAD")
             saved = True
-            try:
-                self._load_stage('EXTRUDE STAGE 0', mask, 0)
-            except CFSStatusError as exc:
-                if exc.status != STATUS_STAGE0_ODOMETER_TIMEOUT:
-                    raise
-                # The slot pushed but the hub's measuring wheel did not
-                # turn (HT-P-2026-0416, 11-02: a snag that ended the
-                # print). Rewind what reached the hub and feed once more.
-                gcmd.respond_info(
-                    "CFS slot %s did not feed (the hub's measuring wheel"
-                    " did not turn); rewinding and trying once more" % slot)
-                self._clear_hub(gcmd)
-                self._run_actuation(
-                    'SET_BOX_MODE IDLE',
-                    [0xff, 0x04, 0x00, self.MODE_IDLE])
-                self._run_actuation(
-                    'TIGHTEN_UP DISABLE',
-                    [0xff, 0x0f, self.TENSION_DISABLE])
-                self.printer.get_reactor().pause(
-                    self.printer.get_reactor().monotonic() + 1.)
-                self._load_stage('EXTRUDE STAGE 0', mask, 0)
+            self._load_stage('EXTRUDE STAGE 0', mask, 0)
             self._load_stage('EXTRUDE STAGE 4', mask, 4)
 
             reactor = self.printer.get_reactor()
@@ -2608,6 +2719,127 @@ class K2CFS:
         except (TypeError, ValueError):
             return 30
 
+    def _load_with_retries(self, gcmd):
+        # CFS_LOAD, tried again after a failure: a failed load leaves the
+        # box idle and the hub rewound, so a fresh load can follow. Only a
+        # load that fails every time is passed on (a print change then
+        # pauses). Counted per slot.
+        slot = gcmd.get('SLOT').upper()
+        reactor = self.printer.get_reactor()
+        attempts = 1 + self.load_retries
+        for attempt in range(1, attempts + 1):
+            try:
+                self.cmd_CFS_LOAD(gcmd)
+            except Exception as exc:
+                self._count(slot, 'load_failures', ok=False)
+                if (attempt == attempts
+                        or self._nozzle_has_filament() is True):
+                    raise
+                gcmd.respond_info(
+                    "CFS slot %s did not load (%s); trying again (%d/%d)"
+                    % (slot, str(exc).replace("CFS load failed: ", "")
+                       [:120], attempt, attempts - 1))
+                reactor.pause(reactor.monotonic() + 2.)
+                continue
+            self._count(slot, 'loads', ok=True)
+            if attempt > 1:
+                self._count(slot, 'retried_loads')
+            return
+
+    # --- per-slot counts ---------------------------------------------
+
+    STAT_KEYS = ('loads', 'load_failures', 'retried_loads',
+                 'changes_paused', 'clogs', 'runouts', 'cut_misses')
+    RECENT_LOADS = 10
+    RECENT_WARN = 3
+
+    def _load_stats(self):
+        try:
+            with open(self.stats_path, encoding='utf-8') as f:
+                data = json.load(f)
+            stats = data.get('slots', {})
+        except (OSError, IOError, ValueError):
+            stats = {}
+        out = {}
+        for slot in 'ABCD':
+            rec = stats.get(slot) or {}
+            out[slot] = {k: int(rec.get(k) or 0) for k in self.STAT_KEYS}
+            out[slot]['recent'] = [bool(x) for x in
+                                   (rec.get('recent') or [])][
+                                       -self.RECENT_LOADS:]
+        return out
+
+    def _save_stats(self):
+        tmp = self.stats_path + '.tmp'
+        try:
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump({'slots': self.slot_stats}, f, indent=1,
+                          sort_keys=True)
+            os.replace(tmp, self.stats_path)
+        except (OSError, IOError):
+            logging.exception("k2_cfs: saving slot counts failed")
+
+    def _count(self, slot, key, ok=None):
+        # Bookkeeping only: never let it replace the error being handled
+        try:
+            self._count_event(slot, key, ok)
+        except Exception:
+            logging.exception("k2_cfs: counting %s for slot %s", key, slot)
+
+    def _count_event(self, slot, key, ok):
+        # One event for a slot. ok=True/False also records a load attempt
+        # in the slot's recent history, which warns about a slot that
+        # keeps failing (a worn feeder, a bad spool, a tangle-prone reel).
+        rec = self.slot_stats.get(slot)
+        if rec is None:
+            return
+        rec[key] = rec.get(key, 0) + 1
+        if ok is not None:
+            rec['recent'] = (rec.get('recent', []) + [ok])[
+                -self.RECENT_LOADS:]
+            failed = rec['recent'].count(False)
+            if not ok and failed >= self.RECENT_WARN:
+                self.gcode.respond_info(
+                    "CFS slot %s has failed %d of its last %d load"
+                    " attempts. Check its spool turns freely, the filament"
+                    " end is cut clean and its path to the hub is clear."
+                    % (slot, failed, len(rec['recent'])))
+        self.status['slot_stats'] = self._stats_summary()
+        self._save_stats()
+
+    def _stats_summary(self):
+        return {slot: {'loads': rec['loads'],
+                       'load_failures': rec['load_failures'],
+                       'recent_failures': rec['recent'].count(False),
+                       'recent': len(rec['recent'])}
+                for slot, rec in self.slot_stats.items()}
+
+    def cmd_CFS_SLOT_STATS(self, gcmd):
+        reset = gcmd.get('RESET', None)
+        if reset is not None:
+            slots = 'ABCD' if reset.upper() == 'ALL' else reset.upper()
+            for slot in slots:
+                if slot in self.slot_stats:
+                    self.slot_stats[slot] = dict(
+                        {k: 0 for k in self.STAT_KEYS}, recent=[])
+            self.status['slot_stats'] = self._stats_summary()
+            self._save_stats()
+            gcmd.respond_info("CFS slot counts reset: %s" % slots)
+            return
+        lines = ["CFS slot counts (recent = last %d load attempts):"
+                 % self.RECENT_LOADS]
+        for slot in 'ABCD':
+            rec = self.slot_stats[slot]
+            lines.append(
+                "%s: %d loads, %d failed attempts (%d of the last %d),"
+                " %d loaded on a retry, %d changes paused, %d clogs,"
+                " %d runouts, %d cut misses"
+                % (slot, rec['loads'], rec['load_failures'],
+                   rec['recent'].count(False), len(rec['recent']),
+                   rec['retried_loads'], rec['changes_paused'],
+                   rec['clogs'], rec['runouts'], rec['cut_misses']))
+        gcmd.respond_info("\n".join(lines))
+
     def _heat_for_old_filament(self, gcmd, old_slot, new_slot):
         # The filament left in the nozzle from the last print is cut and
         # cleared at its own temperature when that is hotter than this
@@ -2669,6 +2901,9 @@ class K2CFS:
         purge_length = gcmd.get_float('PURGE', None, minval=30., maxval=360.)
         purge_fallback = gcmd.get_float(
             'PURGE_FALLBACK', None, minval=30., maxval=360.)
+        # FLUSH=<mm>: the slicer's own length for a change of material
+        # (Orca's {flush_length}); the full purge, at least the stock one
+        slicer_flush = gcmd.get_float('FLUSH', None, minval=0., maxval=360.)
         self._require_actuation(gcmd)
         print_stats = self.printer.lookup_object('print_stats', None)
         state = print_stats.get_status(0.).get('state', '') \
@@ -2699,7 +2934,14 @@ class K2CFS:
                 "(nozzle sensor %s, active mask 0x%02x)"
                 % (nozzle_loaded, active_mask))
         full_length = None
-        if purge_length is None and self.toolchange_purge_from_file:
+        if purge_length is None and slicer_flush:
+            full_length = min(max(slicer_flush, self.purge_extrude_length,
+                                  140.), 360.)
+            gcmd.respond_info(
+                "CFS tool change purge from the slicer: %.0f mm, purging"
+                " %.0f mm" % (slicer_flush, full_length))
+        if (purge_length is None and full_length is None
+                and self.toolchange_purge_from_file):
             purge_length, full_length = self._file_purge(
                 gcmd, old_slot, slot)
         if purge_length is None and full_length is None:
@@ -2771,7 +3013,7 @@ class K2CFS:
             load_gcmd = self.gcode.create_gcode_command(
                 "CFS_LOAD", "", load_params)
             if load:
-                self.cmd_CFS_LOAD(load_gcmd)
+                self._load_with_retries(load_gcmd)
             timings.append(reactor.monotonic())
             self.cmd_CFS_PURGE(load_gcmd)
             timings.append(reactor.monotonic())
@@ -2815,6 +3057,7 @@ class K2CFS:
         self.pending_change = ctx
         self.status['change_pending'] = "%s>%s" % (ctx['old_slot'],
                                                     ctx['slot'])
+        self._count(ctx['slot'], 'changes_paused')
         reason = str(exc)
         for prefix in ("CFS load failed: ", "CFS purge failed: "):
             if reason.startswith(prefix):
@@ -3087,7 +3330,7 @@ class K2CFS:
                         "CFS_CUT_UNLOAD", "",
                         {"SLOT": active_slot, "CONFIRM": "1"})
                     self.cmd_CFS_CUT_UNLOAD(unload_gcmd)
-                    self.cmd_CFS_LOAD(gcmd)
+                    self._load_with_retries(gcmd)
                 else:
                     self._start_feed(
                         gcmd, slot, require_confirm=False,
@@ -3113,7 +3356,7 @@ class K2CFS:
                             "CFS still selects mask 0x%02x after a rewind; "
                             "pull that slot's filament back by hand" % left)
                 self._ensure_purge_position(gcmd)
-                self.cmd_CFS_LOAD(gcmd)
+                self._load_with_retries(gcmd)
 
             self.cmd_CFS_PURGE(gcmd)
         except Exception:

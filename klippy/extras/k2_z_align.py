@@ -40,6 +40,7 @@ class K2ZAlign:
         self.timeout = config.getfloat("timeout", 60.0, above=0.0)
         self.position_endstop = config.getfloat(
             "position_endstop", 263.12734375)
+        self.bottom_mcu = None
         self.retract_dist = config.getfloat(
             "retract_dist", 10.0, minval=0.0)
         self.retract_speed = config.getfloat(
@@ -354,6 +355,11 @@ class K2ZAlign:
             now = toolhead.get_position()
             now[2] = self.position_endstop
             toolhead.set_position(now, homing_axes="z")
+            # Each Z motor's step count at the switches: hark_plr maps it
+            # into the nozzle-tap frame to find Z again after a power cut
+            self.bottom_mcu = dict(
+                (s.get_name(), s.get_mcu_position()) for s in
+                toolhead.get_kinematics().rails[2].get_steppers())
             if self.retract_dist:
                 target = list(now)
                 target[2] -= self.retract_dist

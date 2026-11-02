@@ -2,6 +2,51 @@
 
 ## v0.4.18-alpha.1 (2026-11-02)
 
+- **Power-loss recovery** (new `klippy/extras/hark_plr.py`, `[hark_plr]`,
+  after Jacob10383's power_loss_recovery and Prusa's power panic). While
+  printing, right after a plain move line (G0-G3, never inside a macro
+  such as a colour change) the file position and the print's state are
+  noted; a note counts once the toolhead has made its moves, and the
+  newest is written to `hark_plr.json` in the config folder every 10 s.
+  Finished, cancelled or failed prints delete it; a shutdown (the MCUs
+  lost power) keeps it. After a restart the console and the touchscreen
+  ("Print interrupted": Discard / Resume) offer `PLR_RESUME CONFIRM=1`:
+  Z from the bottom switches mapped into the print's nozzle-tap frame
+  (k2_z_align now notes each Z motor's step count at the switches), home
+  X/Y, heat the bed, raise it clear with the nozzle over the chute, heat,
+  load and purge the slot (or prime the rear spool), restore PA, limits,
+  mesh, excluded objects, G-code offsets and fans, go back over the part
+  and down, then M23/M26/M24 from the saved byte. Up to 10 s is printed
+  twice. K2 Plus: a Z tilt made after the switches is kept on average
+  (warned over 0.05 mm). `PLR_STATUS`, `PLR_DISCARD`. Not yet tried on a
+  real power cut. Tests: tests/test_hark_plr.py; the line watch was
+  checked in real Klipper.
+- **Silent load retries.** A CFS load that fails is rewound and tried
+  again (`load_retries`, 2) before a colour change pauses, like Prusa's
+  MMU3; replaces the single stage-0 retry.
+- **Per-slot counts** (`hark_cfs_stats.json` next to the config, kept
+  across restarts): loads, failed attempts, loads that needed a retry,
+  paused changes, clogs, runouts and cut misses. A warning when a slot
+  fails 3 of its last 10 load attempts; `CFS_SLOT_STATS [RESET=<slot>|ALL]`;
+  the touchscreen's slot menu shows the load record (in warning colour
+  when the slot keeps failing).
+- **Orca's own purge length for every colour change.** Orca's
+  `{flush_length}` (the matrix times the flush multiplier, less what is
+  flushed into infill, objects or support) was only used between two
+  slots of the same material; a change of material looked the length up
+  in the file's matrix, which ignores those savings and counted the flush
+  multiplier twice. `_CFS_TC` now passes it as `FLUSH=` for a change of
+  material too (at least the stock purge, at most 360 mm).
+- **Cutter calibration with the X motor**: `CFS_CUTTER_CALIBRATE
+  METHOD=STALL CONFIRM=1` for toolheads whose knife sensor never trips
+  (e.g. a Phaetus DXC2). Rams the cutter at the real cut speed 0.1 mm
+  deeper each time from -5 to -11, reads the X motor's stall latch after
+  each ram (homing X again after a hit), and reports the first two hits in
+  a row less `cutter_stall_offset` (0.4) as the `cutter_cut_x` to use, as
+  stock motor_control and Jacob10383's CALIBRATE_CUT_POS do. Reported
+  only. Not yet run on a printer: stay with it.
+- Touchscreen: long words (file names) wrap instead of running off a box.
+
 - **A failed colour change pauses the print instead of ending it.** Any
   error in CFS_TOOLCHANGE (cut, unload, load or purge) used to end the
   print (HT-P-2026-0416, 11-02: slot A did not feed at the 3-hour mark).

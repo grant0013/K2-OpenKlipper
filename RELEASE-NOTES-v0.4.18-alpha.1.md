@@ -6,6 +6,34 @@ button in Mainsail or on the touchscreen (your `printer-overrides.cfg` is
 kept), or install with the one-line installer in
 [docs/INSTALL.md](docs/INSTALL.md).
 
+## Power-loss recovery
+
+If the power goes off mid-print, the printer can carry on when it comes
+back, as stock firmware could. The touchscreen shows **Print interrupted**
+with **Resume** and **Discard**. Resume finds Z again from the bottom
+switches (it never taps the nozzle on your part), heats up, raises the bed
+clear, purges at the chute and continues from the last checkpoint (up to
+10 seconds may print twice). Check the part is still stuck down first.
+This is new: stay with the printer for your first resume.
+
+## The CFS tries a failed load again
+
+A load that fails (a snag, a missed grip) is now rewound and retried up to
+twice by itself before a colour change pauses. Each slot keeps a record of
+its loads and failures, shown in the slot's menu on the touchscreen, and
+the printer warns you when one slot keeps failing.
+
+## Less purge waste
+
+The printer now uses OrcaSlicer's own purge length for every colour change,
+which includes what Orca already flushes into infill, objects or support.
+
+## Cutter calibration without the knife sensor
+
+`CFS_CUTTER_CALIBRATE METHOD=STALL CONFIRM=1` finds the cutter position
+with the X motor, for toolheads whose knife sensor never changes. It rams
+the cutter repeatedly: stay with the printer.
+
 ## A failed colour change no longer ends the print
 
 If a CFS colour change fails (a tangle, a spool that won't turn, a chewed

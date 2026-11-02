@@ -44,6 +44,9 @@ class FakeGcode:
     def run_script_from_command(self, script):
         self.scripts.append(script)
 
+    def respond_info(self, msg):
+        pass
+
     def create_gcode_command(self, name, line, params):
         return Cmd(params)
 
@@ -76,6 +79,10 @@ def make_cfs(target, in_nozzle, temps=TEMPS):
     cfs.toolchange_temp_margin = 3.
     cfs.print_start_transaction = False
     cfs.status = {}
+    cfs.load_retries = 0
+    cfs.stats_path = '/nonexistent/hark_cfs_stats.json'
+    cfs.slot_stats = cfs._load_stats()
+    cfs._save_stats = lambda: None
     cfs.calls = calls = []
     cfs._require_actuation = cfs._require_safe_motion = \
         cfs._require_hot_extruder = lambda *a: None

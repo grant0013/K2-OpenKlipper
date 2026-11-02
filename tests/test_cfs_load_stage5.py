@@ -25,6 +25,9 @@ class FakeGcode:
     def run_script_from_command(self, script):
         self.scripts.append(script)
 
+    def respond_info(self, msg):
+        pass
+
 
 class FakeGcmd:
     def __init__(self, params):
@@ -151,26 +154,7 @@ class LoadStage5Test(unittest.TestCase):
             self.load(cfs)
         self.assertIn("box status", str(ctx.exception))
 
-    def test_stage0_wheel_timeout_is_retried_once(self):
-        cfs, reactor = make_cfs(5.)
-        orig = cfs._load_stage
-        fails = [1]
-        cleared = []
-
-        def stage(name, mask, stage, value=0, report_error=True):
-            if stage == 0 and fails[0]:
-                fails[0] -= 1
-                raise cfs_mod.CFSStatusError(
-                    "EXTRUDE STAGE 0 failed: box status 0x09", 0x09)
-            return orig(name, mask, stage, value)
-        cfs._load_stage = stage
-        cfs._clear_hub = lambda gcmd: cleared.append(True)
-        self.load(cfs)
-        # once before the load (as always), once for the retry
-        self.assertEqual(cleared, [True, True])
-        self.assertTrue(any(s[1] == 'EXTRUDE STAGE 7' for s in cfs.sent))
-
-    def test_stage0_wheel_timeout_twice_fails(self):
+    def test_stage0_wheel_timeout_fails_the_load(self):
         cfs, reactor = make_cfs(5.)
 
         def stage(name, mask, stage, value=0, report_error=True):

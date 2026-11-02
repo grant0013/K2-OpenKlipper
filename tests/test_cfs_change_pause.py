@@ -47,6 +47,9 @@ class FakeGcode:
     def run_script_from_command(self, script):
         self.scripts.append(script)
 
+    def respond_info(self, msg):
+        pass
+
     def create_gcode_command(self, name, line, params):
         cmd = FakeCmd(params)
         cmd.name = name
@@ -91,6 +94,11 @@ def make_cfs(load_errors=0, state='printing'):
     cfs.printer = FakePrinter(state)
     cfs.gcode = FakeGcode()
     cfs.status = {'change_pending': None}
+    cfs.load_retries = 2
+    cfs.purge_extrude_length = 180.
+    cfs.stats_path = '/nonexistent/hark_cfs_stats.json'
+    cfs.slot_stats = cfs._load_stats()
+    cfs._save_stats = lambda: None
     cfs.pending_change = None
     cfs.print_start_transaction = False
     cfs.toolchange_purge_from_file = False
@@ -134,6 +142,44 @@ def make_cfs(load_errors=0, state='printing'):
 
 
 class ChangePauseTest(unittest.TestCase):
+    def test_one_failed_load_is_retried_silently(self):
+        cfs = make_cfs(load_errors=1)
+        cmd = FakeCmd({'SLOT': 'B'})
+        cfs.cmd_CFS_TOOLCHANGE(cmd)
+        self.assertNotIn('PAUSE_BASE', cfs.gcode.scripts)
+        self.assertEqual([c[0] for c in cfs.calls].count('load'), 2)
+        rec = cfs.slot_stats['B']
+        self.assertEqual((rec['loads'], rec['load_failures'],
+                          rec['retried_loads']), (1, 1, 1))
+        self.assertEqual(rec['recent'], [False, True])
+
+    def test_slot_that_keeps_failing_warns(self):
+        cfs = make_cfs(load_errors=3)
+        warnings = []
+        cfs.gcode.respond_info = warnings.append
+        cfs.cmd_CFS_TOOLCHANGE(FakeCmd({'SLOT': 'B'}))
+        self.assertEqual(cfs.slot_stats['B']['changes_paused'], 1)
+        self.assertTrue(any('failed 3 of its last 3' in w
+                            for w in warnings))
+
+    def test_slicer_flush_sets_a_material_change_purge(self):
+        cfs = make_cfs()
+        loads = []
+        cfs.cmd_CFS_LOAD = lambda g: (loads.append(dict(g.params)),
+                                      setattr(cfs, 'nozzle', True),
+                                      setattr(cfs, 'active', 2))
+        cfs.cmd_CFS_TOOLCHANGE(FakeCmd({'SLOT': 'B', 'FLUSH': '250'}))
+        self.assertEqual(loads[0].get('LENGTH'), '250.0')
+        self.assertNotIn('SHORT', loads[0])
+        cfs = make_cfs()
+        loads[:] = []
+        cfs.cmd_CFS_LOAD = lambda g: (loads.append(dict(g.params)),
+                                      setattr(cfs, 'nozzle', True),
+                                      setattr(cfs, 'active', 2))
+        cfs.cmd_CFS_TOOLCHANGE(FakeCmd({'SLOT': 'B', 'FLUSH': '90'}))
+        # at least the stock purge for a change of material
+        self.assertEqual(loads[0].get('LENGTH'), '180.0')
+
     def test_success_is_unchanged(self):
         cfs = make_cfs()
         cfs.cmd_CFS_TOOLCHANGE(FakeCmd({'SLOT': 'B'}))
@@ -146,7 +192,7 @@ class ChangePauseTest(unittest.TestCase):
                             for s in cfs.gcode.scripts))
 
     def test_failed_load_pauses_instead_of_ending_the_print(self):
-        cfs = make_cfs(load_errors=1)
+        cfs = make_cfs(load_errors=3)
         cmd = FakeCmd({'SLOT': 'B'})
         cfs.cmd_CFS_TOOLCHANGE(cmd)          # no exception: print not ended
         self.assertIn('PAUSE_BASE', cfs.gcode.scripts)
@@ -162,7 +208,7 @@ class ChangePauseTest(unittest.TestCase):
                              for s in cfs.gcode.scripts))
 
     def test_resume_retries_the_load_and_returns_over_the_print(self):
-        cfs = make_cfs(load_errors=1)
+        cfs = make_cfs(load_errors=3)
         cfs.cmd_CFS_TOOLCHANGE(FakeCmd({'SLOT': 'B'}))
         cfs.printer.print_stats.status['state'] = 'paused'
         del cfs.calls[:]
@@ -182,19 +228,19 @@ class ChangePauseTest(unittest.TestCase):
                          'SAVE_GCODE_STATE NAME=PAUSE_STATE')
 
     def test_retry_that_fails_again_stays_paused(self):
-        cfs = make_cfs(load_errors=2)
+        cfs = make_cfs(load_errors=6)
         cfs.cmd_CFS_TOOLCHANGE(FakeCmd({'SLOT': 'B'}))
         cfs.printer.print_stats.status['state'] = 'paused'
         with self.assertRaises(RuntimeError) as ctx:
             cfs.cmd_CFS_CHANGE_RETRY(FakeCmd())
         self.assertIn('failed again', str(ctx.exception))
         self.assertEqual(cfs.status['change_pending'], 'A>B')
-        # a third try (next Resume) works
+        # the next Resume works
         cfs.cmd_CFS_CHANGE_RETRY(FakeCmd())
         self.assertIsNone(cfs.pending_change)
 
     def test_loaded_by_hand_only_purges(self):
-        cfs = make_cfs(load_errors=1)
+        cfs = make_cfs(load_errors=3)
         cfs.cmd_CFS_TOOLCHANGE(FakeCmd({'SLOT': 'B'}))
         cfs.printer.print_stats.status['state'] = 'paused'
         cfs.nozzle, cfs.active = True, cfs.SLOT_MASKS['B']
@@ -205,7 +251,7 @@ class ChangePauseTest(unittest.TestCase):
         self.assertEqual(steps, ['purge'])
 
     def test_old_slot_still_in_nozzle_does_a_full_change(self):
-        cfs = make_cfs(load_errors=1)
+        cfs = make_cfs(load_errors=3)
         cfs.cmd_CFS_TOOLCHANGE(FakeCmd({'SLOT': 'B'}))
         cfs.printer.print_stats.status['state'] = 'paused'
         cfs.nozzle, cfs.active = True, cfs.SLOT_MASKS['C']
@@ -222,7 +268,7 @@ class ChangePauseTest(unittest.TestCase):
         self.assertEqual(cfs.gcode.scripts, [])
 
     def test_not_paused_any_more_drops_the_pending_change(self):
-        cfs = make_cfs(load_errors=1)
+        cfs = make_cfs(load_errors=3)
         cfs.cmd_CFS_TOOLCHANGE(FakeCmd({'SLOT': 'B'}))
         cfs.printer.print_stats.status['state'] = 'cancelled'
         cfs.cmd_CFS_CHANGE_RETRY(FakeCmd())

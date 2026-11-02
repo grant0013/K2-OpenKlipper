@@ -58,8 +58,9 @@ OBJECTS = {
     "gcode_macro START_PRINT": ["z_offset"],
     "k2_cfs": ["fitted", "online", "active_slot", "feed_slot", "running_out",
                "runout_next",
-               "temperature", "humidity"],
+               "temperature", "humidity", "slot_stats", "change_pending"],
     "hark_cfs_slots": ["slots"],
+    "hark_plr": ["available", "filename", "z"],
     "filament_switch_sensor filament_sensor": ["filament_detected"],
     "k2_motor_bus": ["motors_ready"],
     "output_pin chamber_led": ["value"],
@@ -158,7 +159,7 @@ PA_RESULT_TIMEOUT = 600
 # Error lines shown while idle; while printing or paused every one is shown
 IDLE_ALERTS = ("Safety watch", "Chamber heater", "safety watch")
 # Notices that wait their turn (no waking the screen, not over other boxes)
-QUIET_NOTICES = ("update", "usb_new", "usb_unreadable", "usb_busy",
+QUIET_NOTICES = ("update", "plr", "usb_new", "usb_unreadable", "usb_busy",
                  "usb_done")
 
 
@@ -1176,7 +1177,17 @@ class Screen:
         lines = []
         for para in text.split("\n"):
             line = ""
+            words = []
             for word in para.split():
+                # A word wider than the line (a long file name) is broken
+                while f.getbbox(word)[2] > width and len(word) > 1:
+                    cut = len(word) - 1
+                    while cut > 1 and f.getbbox(word[:cut])[2] > width:
+                        cut -= 1
+                    words.append(word[:cut])
+                    word = word[cut:]
+                words.append(word)
+            for word in words:
                 trial = (line + " " + word).strip()
                 if line and f.getbbox(trial)[2] > width:
                     lines.append(line)
@@ -1664,6 +1675,18 @@ class Screen:
             return {"kind": "alert", "title": title, "lines": fresh[-3:],
                     "color": "warn" if state == "printing" else "error",
                     "ack": (self.error_ack, newest)}
+        plr = st.get("hark_plr") or {}
+        if plr.get("available") and not running and not self.busy(st):
+            # A print a power cut stopped: resume or forget it
+            name = os.path.basename(plr.get("filename") or "")
+            return {"kind": "plr", "title": "Print interrupted",
+                    "lines": ["%s stopped at Z %.2f mm when the power went."
+                              % (name, plr.get("z") or 0),
+                              "Resume heats up, finds Z from the bottom"
+                              " switches, purges at the chute and carries on"
+                              " from where it stopped. The part must still"
+                              " be stuck down."],
+                    "color": "warn"}
         upd = st.get("hark_update", {})
         latest = upd.get("latest")
         snooze = self.update_snooze or {}
@@ -1762,7 +1785,14 @@ class Screen:
                "usb_new": (("Not now", ("usb_later", note.get("id"))),
                            ("Use it", ("usb_use", note.get("id")))),
                "usb_unreadable": (("Not now", ("usb_later", note.get("id"))),
-                                  ("Format", ("usb_format_ask",)))}
+                                  ("Format", ("usb_format_ask",))),
+               "plr": (("Discard", ("confirm",
+                                    "Forget the interrupted print?",
+                                    "PLR_DISCARD")),
+                       ("Resume", ("confirm",
+                                   "Resume the print?\nThe part must still"
+                                   " be stuck down, the bed around it"
+                                   " clear.", "PLR_RESUME CONFIRM=1")))}
         if note["kind"] in two:
             (l1, a1), (l2, a2) = two[note["kind"]]
             self.button(d, (box[0] + 30, 350, W // 2 - 10, 410), l1, a1,
@@ -1885,6 +1915,16 @@ class Screen:
         self.icon(d, "spool", box[0] + 50, box[1] + 50, 46, col)
         self.text(d, (box[0] + 90, box[1] + 32),
                   "External spool" if slot == "E" else "Slot %s" % slot, "m")
+        stats = (st.get("k2_cfs", {}).get("slot_stats") or {}).get(slot)
+        if stats and stats.get("recent"):
+            # The slot's record: a slot that keeps failing shows in warn
+            bad = stats.get("recent_failures", 0)
+            self.text(d, (box[2] - 24, box[1] + 32),
+                      "%d loads · %d of last %d failed"
+                      % (stats.get("loads", 0), bad, stats["recent"])
+                      if bad else "%d loads, none failed lately"
+                      % stats.get("loads", 0),
+                      "xs", "warn" if bad >= 3 else "muted", anchor="rm")
         self.text(d, (box[0] + 90, box[1] + 70), "%s · %s°C" % (
             rec.get("name", "Empty"), rec.get("nozzle_temp", "-"))
             if rec.get("loaded") else "Empty", "xs", "muted",
