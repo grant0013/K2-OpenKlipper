@@ -29,6 +29,8 @@ class ZAdjustHelper:
     def adjust_steppers(self, adjustments, speed):
         toolhead = self.printer.lookup_object('toolhead')
         gcode = self.printer.lookup_object('gcode')
+        # K2 OpenKlipper: kept so the result can be saved and reapplied
+        self.last_adjustments = list(adjustments)
         curpos = toolhead.get_position()
         # Report on movements
         stepstrs = ["%s = %.6f" % (s.get_name(), a)
@@ -138,11 +140,60 @@ class ZTilt:
         gcode = self.printer.lookup_object('gcode')
         gcode.register_command('Z_TILT_ADJUST', self.cmd_Z_TILT_ADJUST,
                                desc=self.cmd_Z_TILT_ADJUST_help)
+        # K2 OpenKlipper: the adjustments of the last run are kept (as
+        # Creality's stepper_adjustment.json) and Z_TILT_APPLY_SAVED puts
+        # them back without probing, for print starts that skip the tilt
+        import os
+        config_file = self.printer.get_start_args().get('config_file', '')
+        self.saved_path = config.get(
+            'saved_path', os.path.join(os.path.dirname(config_file)
+                                       or '/mnt/UDISK/printer_data_mainline'
+                                       '/config', 'hark_z_tilt.json'))
+        self.run_total = None
+        gcode.register_command('Z_TILT_APPLY_SAVED',
+                               self.cmd_Z_TILT_APPLY_SAVED,
+                               desc="Apply the last Z_TILT_ADJUST result "
+                                    "again without probing")
     cmd_Z_TILT_ADJUST_help = "Adjust the Z tilt"
     def cmd_Z_TILT_ADJUST(self, gcmd):
         self.z_status.reset()
+        self.run_total = [0.] * len(self.z_positions)
         self.retry_helper.start(gcmd)
         self.probe_helper.start_probe(gcmd)
+    def _save_run(self):
+        import json, os
+        try:
+            tmp = self.saved_path + '.tmp'
+            with open(tmp, 'w') as f:
+                json.dump({'adjustments': [round(a, 5)
+                                           for a in self.run_total]}, f)
+            os.replace(tmp, self.saved_path)
+        except OSError:
+            logging.exception("z_tilt: could not save %s", self.saved_path)
+    def load_saved(self):
+        import json
+        try:
+            with open(self.saved_path) as f:
+                data = json.load(f)
+            adj = data.get('adjustments')
+            if (isinstance(adj, list) and len(adj) == len(self.z_positions)
+                    and all(isinstance(a, (int, float)) for a in adj)):
+                return [float(a) for a in adj]
+        except (OSError, ValueError):
+            pass
+        return None
+    def cmd_Z_TILT_APPLY_SAVED(self, gcmd):
+        adj = self.load_saved()
+        if adj is None:
+            raise gcmd.error("No saved Z tilt (run Z_TILT_ADJUST first)")
+        limit = gcmd.get_float('MAX', 2., above=0.)
+        if max(abs(a) for a in adj) > limit:
+            raise gcmd.error("Saved Z tilt %s is over %.2f mm: run "
+                             "Z_TILT_ADJUST instead" % (adj, limit))
+        self.z_helper.adjust_steppers(adj, self.probe_helper.get_lift_speed())
+        self.z_status.reset()
+        gcmd.respond_info("Z tilt from the last Z_TILT_ADJUST applied: %s"
+                          % (", ".join("%.4f" % a for a in adj),))
     def probe_finalize(self, positions):
         logging.info("Calculating bed tilt with: %s", positions)
         # Find best fit for: a + b*bed_x + c*bed_y = bed_z
@@ -164,10 +215,20 @@ class ZTilt:
         adjustments = [x*x_adjust + y*y_adjust + z_adjust
                        for x, y in self.z_positions]
         self.z_helper.adjust_steppers(adjustments, speed)
-        return self.z_status.check_retry_result(
+        if self.run_total is not None:
+            self.run_total = [t + a for t, a in zip(self.run_total,
+                                                    adjustments)]
+        result = self.z_status.check_retry_result(
             self.retry_helper.check_retry([p[2] for p in positions]))
+        if result != "retry" and self.run_total is not None:
+            # The run is over (done, or out of retries): keep the whole
+            # correction it made
+            self._save_run()
+        return result
     def get_status(self, eventtime):
-            return self.z_status.get_status(eventtime)
+        st = dict(self.z_status.get_status(eventtime))
+        st['saved'] = self.load_saved() is not None
+        return st
 
 def load_config(config):
     return ZTilt(config)

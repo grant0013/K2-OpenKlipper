@@ -196,6 +196,16 @@ class ControlPID:
         self.Kp = config.getfloat('pid_Kp') / PID_PARAM_BASE
         self.Ki = config.getfloat('pid_Ki') / PID_PARAM_BASE
         self.Kd = config.getfloat('pid_Kd') / PID_PARAM_BASE
+        # K2 OpenKlipper: a second set of gains above high_temp_value, as
+        # Creality's firmware switches to pid_*_high_temp (stock K2: 280 C)
+        self.high_temp_value = config.getfloat('high_temp_value', 280.)
+        kp_high = config.getfloat('pid_Kp_high_temp', None)
+        self.high_gains = None
+        if kp_high is not None:
+            self.high_gains = (
+                kp_high / PID_PARAM_BASE,
+                config.getfloat('pid_Ki_high_temp') / PID_PARAM_BASE,
+                config.getfloat('pid_Kd_high_temp') / PID_PARAM_BASE)
         self.min_deriv_time = heater.get_smooth_time()
         self.temp_integ_max = 0.
         if self.Ki:
@@ -218,7 +228,10 @@ class ControlPID:
         temp_integ = self.prev_temp_integ + temp_err * time_diff
         temp_integ = max(0., min(self.temp_integ_max, temp_integ))
         # Calculate output
-        co = self.Kp*temp_err + self.Ki*temp_integ - self.Kd*temp_deriv
+        kp, ki, kd = self.Kp, self.Ki, self.Kd
+        if self.high_gains is not None and target_temp > self.high_temp_value:
+            kp, ki, kd = self.high_gains
+        co = kp*temp_err + ki*temp_integ - kd*temp_deriv
         #logging.debug("pid: %f@%.3f -> diff=%f deriv=%f err=%f integ=%f co=%d",
         #    temp, read_time, temp_diff, temp_deriv, temp_err, temp_integ, co)
         bounded_co = max(0., min(self.heater_max_power, co))

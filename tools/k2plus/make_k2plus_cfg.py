@@ -406,7 +406,7 @@ scrub_y_max: 356.5
     # K2 Plus: level the two Z motors on two taps across X, then measure
     # Z again on the levelled bed
     _STAGE TEXT="Levelling the bed (Z tilt)"
-    Z_TILT_ADJUST
+    _Z_TILT_START
     G28 Z
     SET_GCODE_VARIABLE MACRO=START_PRINT VARIABLE=skip_home_wipe VALUE=0
 """),
@@ -549,6 +549,20 @@ enable: True
 [k2_belt_tension]
 #target: 140
 #tolerance: 0.15
+
+# Z tilt at print start: "probe" taps both sides every print (about 30 s);
+# "saved" puts back the last Z_TILT_ADJUST result without probing (as
+# Creality's ADJUST_STEPPERS does), and probes when there is none saved.
+# Re-run Z_TILT_ADJUST after moving the printer or working on the bed.
+[gcode_macro _Z_TILT_START]
+variable_mode: "probe"
+gcode:
+    {% set zt = printer.z_tilt %}
+    {% if printer["gcode_macro _Z_TILT_START"].mode == "saved" and zt.saved %}
+        Z_TILT_APPLY_SAVED
+    {% else %}
+        Z_TILT_ADJUST
+    {% endif %}
 
 # K2 Plus beta: visit the chute, brush, cutter and strip positions slowly
 # (20 mm/s, 3 s at each) and say where the nozzle is. Nothing extrudes, wipes
