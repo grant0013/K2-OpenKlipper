@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.4.18-alpha.2 (2026-11-03)
+
+- **Fix: a CFS print start shut Klipper down on v0.4.18-alpha.1.** Applying
+  a slot's hotend PID profile (`CFS_SLOT_APPLY`, part of every CFS print
+  start) built the heater control with a stand-in config that did not
+  know the new optional high-temperature PID options and raised, which
+  Klipper treats as an internal error and a shutdown. Found on the first
+  real print after the release; the stand-in now returns the defaults.
+  Regression test. If you updated to alpha.1, update again before printing.
+- **Console messages in words.** `MOTOR_STALL_MODE` says which motors
+  confirmed and what the mode means; `MOTOR_FAULTS` shows the status codes
+  only when a motor has any; `CFS_FEED_START/STOP` and a failed box
+  command no longer print bus frames. The frames still go to klippy.log,
+  and `console_frames: True` in `[k2_motor_bus]` or `[k2_cfs]` shows them
+  in the console again.
+
 ## v0.4.18-alpha.1 (2026-11-03)
 
 - **The melt limit is measured at print start and the print is held to
