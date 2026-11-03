@@ -187,13 +187,30 @@ class PrinterExtruder:
             toolhead.set_extruder(self, 0.)
             gcode.register_command("M104", self.cmd_M104)
             gcode.register_command("M109", self.cmd_M109)
+        # K2 OpenKlipper: per-print volumetric cap (0 = none)
+        self.max_flow = 0.
+        gcode.register_mux_command("SET_MAX_FLOW", "EXTRUDER", self.name,
+                                   self.cmd_SET_MAX_FLOW,
+                                   desc=self.cmd_SET_MAX_FLOW_help)
+        if extruder_num == 0:
+            gcode.register_mux_command("SET_MAX_FLOW", "EXTRUDER", None,
+                                       self.cmd_SET_MAX_FLOW,
+                                       desc=self.cmd_SET_MAX_FLOW_help)
         gcode.register_mux_command("ACTIVATE_EXTRUDER", "EXTRUDER",
                                    self.name, self.cmd_ACTIVATE_EXTRUDER,
                                    desc=self.cmd_ACTIVATE_EXTRUDER_help)
+    cmd_SET_MAX_FLOW_help = ("Cap the volumetric flow of print moves"
+                             " (FLOW= mm^3/s, 0 = no cap)")
+    def cmd_SET_MAX_FLOW(self, gcmd):
+        self.max_flow = gcmd.get_float('FLOW', self.max_flow, minval=0.)
+        gcmd.respond_info("%s max flow: %s" % (
+            self.name, ("%.1f mm^3/s" % self.max_flow) if self.max_flow
+            else "no cap"))
     def get_status(self, eventtime):
         sts = self.heater.get_status(eventtime)
         sts['can_extrude'] = self.heater.can_extrude
         sts['filament_diameter'] = self.filament_diameter
+        sts['max_flow'] = self.max_flow
         if self.extruder_stepper is not None:
             sts.update(self.extruder_stepper.get_status(eventtime))
         return sts
@@ -232,17 +249,26 @@ class PrinterExtruder:
             inv_extrude_r = 1. / abs(axis_r)
             move.limit_speed(self.max_e_velocity * inv_extrude_r,
                              self.max_e_accel * inv_extrude_r)
-        elif axis_r > self.max_extrude_ratio:
-            if axis_d <= self.nozzle_diameter * self.max_extrude_ratio:
-                # Permit extrusion if amount extruded is tiny
-                return
-            area = axis_r * self.filament_area
-            logging.debug("Overextrude: %s vs %s (area=%.3f dist=%.3f)",
-                          axis_r, self.max_extrude_ratio, area, move.move_d)
-            raise self.printer.command_error(
-                "Move exceeds maximum extrusion (%.3fmm^2 vs %.3fmm^2)\n"
-                "See the 'max_extrude_cross_section' config option for details"
-                % (area, self.max_extrude_ratio * self.filament_area))
+        else:
+            if self.max_flow > 0.:
+                # K2 OpenKlipper: volumetric cap for print moves
+                # (SET_MAX_FLOW, mm^3/s). Purges and primes are extrude-only
+                # moves and are not held to it.
+                move.limit_speed(
+                    self.max_flow / (axis_r * self.filament_area), move.accel)
+            if axis_r > self.max_extrude_ratio:
+                if axis_d <= self.nozzle_diameter * self.max_extrude_ratio:
+                    # Permit extrusion if amount extruded is tiny
+                    return
+                area = axis_r * self.filament_area
+                logging.debug("Overextrude: %s vs %s (area=%.3f dist=%.3f)",
+                              axis_r, self.max_extrude_ratio, area,
+                              move.move_d)
+                raise self.printer.command_error(
+                    "Move exceeds maximum extrusion (%.3fmm^2 vs %.3fmm^2)\n"
+                    "See the 'max_extrude_cross_section' config option"
+                    " for details"
+                    % (area, self.max_extrude_ratio * self.filament_area))
     def calc_junction(self, prev_move, move, ea_index):
         diff_r = move.axes_r[ea_index] - prev_move.axes_r[ea_index]
         if diff_r:
