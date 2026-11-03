@@ -2943,7 +2943,7 @@ class Screen:
                 x = bx + i * (bw + 8)
                 self.button(d, (x, y, x + bw, y + 52), text, action,
                             "accent" if on else "muted", True, "xs")
-            y += 64
+            y += 60
         # The hotend fan runs itself (on above 50C, slowed while probing):
         # its rpm and health only
         hot = st.get("heater_fan hotend_fan") or {}
@@ -2955,10 +2955,10 @@ class Screen:
         text, color = self.fan_rpm_text(hot, health.get("hotend"))
         self.text(d, (box[0] + 190, y + 10), "%s · %s" % (state, text),
                   "xs", color, anchor="lm")
-        y += 36
-        self.text(d, (W // 2, y + 10), "The slicer may change them again"
+        y += 34
+        self.text(d, (W // 2, y + 8), "The slicer may change them again"
                   " at its next fan command", "xs", "muted", anchor="mm")
-        self.button(d, (W // 2 - 110, 352, W // 2 + 110, 416), "Done",
+        self.button(d, (W // 2 - 110, 366, W // 2 + 110, 428), "Done",
                     ("box_close",), "accent", True, "m")
 
     @staticmethod
