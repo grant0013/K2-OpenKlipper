@@ -209,11 +209,14 @@ class HarkFans:
                 continue
             usual = usual_rpm(rec['rpm'], self.baseline_count)
             last = rec.get('last') or {}
+            under = last.get('under')
+            diff = ""
+            if under:
+                diff = ", %.0f%% %s usual" % (abs(under),
+                                             "under" if under > 0 else "over")
             lines.append("%s fan: usual %s rpm, last %s (%s%s), %d readings%s"
                          % (key, "%.0f" % usual if usual else "?",
-                            last.get('rpm'), last.get('verdict'),
-                            (", %.0f%% under" % last['under'])
-                            if last.get('under') else "",
+                            last.get('rpm'), last.get('verdict'), diff,
                             len(rec['rpm']),
                             (", minimum %.0f%%" % (rec['min_duty'] * 100.))
                             if rec.get('min_duty') else ""))
