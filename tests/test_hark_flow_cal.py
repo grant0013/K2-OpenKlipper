@@ -21,24 +21,45 @@ RAMP_250_3S = [(6, 93806), (8, 118382), (10, 147518), (12, 175206),
                (14, 210173), (16, 259539), (18, 290065), (20, 335929)]
 
 
+# The first automatic run (FLOW_CAL_STATIC 11-03): the rest level was read
+# 0.6 s after the prime, so every force is understated; the module now
+# relaxes 3 s first. Kept as the "slowly steepening, no clean knee" case.
+AUTO_RUN_1 = [(8, 117829), (10, 145003), (12, 168514), (14, 204682),
+              (16, 234911), (18, 272316), (20, 313170), (22, 353247),
+              (24, 391882)]
+
+KNEE = 7.   # module default knee_percent
+
+
+def from8(ramp):
+    """The ramp as the module runs it by default: from 8 mm^3/s."""
+    return [p for p in ramp if p[0] >= 8]
+
+
 class PickCapTest(unittest.TestCase):
     def test_petg_250_caps_at_13(self):
-        cap, knee, rows = fc.pick_cap(RAMP_250)
+        cap, knee, rows = fc.pick_cap(from8(RAMP_250), KNEE)
         self.assertEqual((cap, knee), (13.0, 16))
 
     def test_petg_260_caps_at_13_too(self):
         # 10 C more lowers the force but not where the line bends
-        cap, knee, rows = fc.pick_cap(RAMP_260)
+        cap, knee, rows = fc.pick_cap(from8(RAMP_260), KNEE)
         self.assertEqual((cap, knee), (13.0, 16))
 
     def test_first_ramp_agrees(self):
-        cap, knee, rows = fc.pick_cap(RAMP_250_3S)
+        cap, knee, rows = fc.pick_cap(from8(RAMP_250_3S), KNEE)
         self.assertEqual((cap, knee), (13.0, 16))
 
-    def test_excess_is_relative_to_the_low_flow_line(self):
-        rows = fc.excess_percent(RAMP_250, 12.)
+    def test_biased_auto_run_still_caps_near_the_bend(self):
+        cap, knee, rows = fc.pick_cap(AUTO_RUN_1, KNEE)
+        self.assertEqual((cap, knee), (15.0, 18))
+
+    def test_excess_is_relative_to_the_earlier_low_flow_line(self):
+        rows = fc.excess_percent(from8(RAMP_250), 12.)
         by_flow = {f: ex for f, v, ex in rows}
-        self.assertLess(abs(by_flow[8]), 2.)
+        self.assertEqual(by_flow[8], 0.)
+        self.assertEqual(by_flow[10], 0.)
+        self.assertLess(abs(by_flow[12]), 3.)
         self.assertGreater(by_flow[16], 10.)
         self.assertGreater(by_flow[22], by_flow[16])
 

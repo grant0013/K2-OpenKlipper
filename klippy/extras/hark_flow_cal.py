@@ -81,14 +81,19 @@ class HarkFlowCal:
         self.printer = config.get_printer()
         self.reactor = self.printer.get_reactor()
         self.gcode = self.printer.lookup_object('gcode')
+        # From 8: the first auto run (11-03) read 6 low because the prime's
+        # pressure had not relaxed, and a 2 s step is short for 6 mm^3/s
         self.flows = config.getfloatlist(
-            'flows', (6., 8., 10., 12., 14., 16., 18., 20., 22., 24.))
+            'flows', (8., 10., 12., 14., 16., 18., 20., 22., 24.))
         self.step_time = config.getfloat('step_time', 2., minval=0.8,
                                          maxval=10.)
         # Gauge window: from settle after the step starts to just before it
         # ends
         self.settle = config.getfloat('settle', 0.9, minval=0.2)
-        self.knee_pct = config.getfloat('knee_percent', 8., above=0.)
+        # Pause before the rest level is read (the prime that comes first
+        # leaves pressure in the nozzle), and again after the ramp
+        self.relax = config.getfloat('relax', 3., minval=0.6)
+        self.knee_pct = config.getfloat('knee_percent', 7., above=0.)
         self.margin = config.getfloat('margin', 1., minval=0.)
         self.fit_max = config.getfloat('fit_max_flow', 12., above=0.)
         self.min_cap = config.getfloat('min_cap', 4., above=0.)
@@ -127,6 +132,14 @@ class HarkFlowCal:
     def _window(samples, start, end):
         return [v for t, v in samples if start <= t < end]
 
+    def _rest_level(self, toolhead, state, relax):
+        """Median gauge level over the last 0.6 s of a relax pause."""
+        toolhead.wait_moves()
+        self.reactor.pause(self.reactor.monotonic() + relax)
+        end = toolhead.get_last_move_time()
+        self._wait_samples(state, end - 0.1)
+        return median(self._window(state['samples'], end - 0.7, end - 0.05))
+
     def cmd_FLOW_CAL_RUN(self, gcmd):
         flows_param = gcmd.get('FLOWS', None)
         flows = ([float(f) for f in flows_param.split(',')] if flows_param
@@ -136,6 +149,7 @@ class HarkFlowCal:
         knee_pct = gcmd.get_float('KNEE', self.knee_pct, above=0.)
         margin = gcmd.get_float('MARGIN', self.margin, minval=0.)
         settle = gcmd.get_float('SETTLE', self.settle, minval=0.2)
+        relax = gcmd.get_float('RELAX', self.relax, minval=0.6)
         apply = gcmd.get_int('APPLY', 0, minval=0, maxval=1)
         if settle >= step_time - 0.2:
             raise gcmd.error("SETTLE must leave at least 0.2 s of the step")
@@ -154,15 +168,11 @@ class HarkFlowCal:
         gauge.get_load_cell().add_client(on_data)
         prev_accel = extruder.set_extrude_only_accel_limit(self.e_accel)
         points = []
-        rest = None
+        rest = rest_end = None
         stopped_early = False
         try:
-            # Rest level before anything moves
-            toolhead.wait_moves()
-            t0 = toolhead.get_last_move_time()
-            self.reactor.pause(self.reactor.monotonic() + 0.6)
-            self._wait_samples(state, t0 + 0.5)
-            rest = median(self._window(state['samples'], t0, t0 + 0.6))
+            # Rest level once the prime's pressure has relaxed
+            rest = self._rest_level(toolhead, state, relax)
             if rest is None:
                 raise gcmd.error("No gauge samples: is the strain gauge "
                                  "streaming?")
@@ -187,6 +197,8 @@ class HarkFlowCal:
                 if knee is not None:
                     stopped_early = flow != flows[-1]
                     break
+            # Rest again: how far the hot gauge drifted over the ramp
+            rest_end = self._rest_level(toolhead, state, relax)
         finally:
             state['on'] = False
             extruder.set_extrude_only_accel_limit(prev_accel)
@@ -210,13 +222,20 @@ class HarkFlowCal:
         self.last = {'cap': cap, 'knee': knee, 'knee_percent': knee_pct,
                      'points': [(f, round(v)) for f, v in points],
                      'excess': [round(ex, 1) for f, v, ex in rows],
-                     'rest': rest, 'applied': 0, 'stamp': stamp,
+                     'rest': rest, 'rest_end': rest_end, 'applied': 0,
+                     'stamp': stamp,
                      'temperature': round(
                          extruder.get_heater().get_status(
                              self.reactor.monotonic()).get('target', 0.))}
-        gcmd.respond_info("Flow calibration: %s\n%s%s" % (
+        drift = ""
+        if rest is not None and rest_end is not None and points:
+            drift = "\nrest level moved %+.0f over the ramp (%.0f%% of the" \
+                    " last step's force)" % (
+                        rest_end - rest,
+                        100. * abs(rest_end - rest) / max(1., points[-1][1]))
+        gcmd.respond_info("Flow calibration: %s\n%s%s%s" % (
             verdict, "\n".join(lines),
-            "\n(stopped early at the knee)" if stopped_early else ""))
+            "\n(stopped early at the knee)" if stopped_early else "", drift))
         if apply and cap is not None:
             self.gcode.run_script_from_command("SET_MAX_FLOW FLOW=%.1f"
                                                % (cap,))
