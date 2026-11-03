@@ -28,7 +28,7 @@ AUTO_RUN_1 = [(8, 117829), (10, 145003), (12, 168514), (14, 204682),
               (16, 234911), (18, 272316), (20, 313170), (22, 353247),
               (24, 391882)]
 
-KNEE = 5.   # module default knee_percent
+KNEE = 4.   # module default knee_percent
 
 
 def from8(ramp):
@@ -47,6 +47,9 @@ AUTO_RUN_4 = [(8, 122518), (10, 155378), (12, 187618), (14, 222508),
 # +5.0% and the ramp stopped at 12 with a cap of 8.5. Three points are
 # needed before anything is judged.
 AUTO_RUN_5 = [(8, 124846), (10, 152935), (12, 190112)]
+# Sixth run: a gentle bend, 3.6 / 4.3 / 4.8% at 14 / 16 / 18
+AUTO_RUN_6 = [(8, 110208), (10, 144887), (12, 179792), (14, 222324),
+              (16, 259973), (18, 297826)]
 
 MARGIN = 3.  # module default
 
@@ -57,9 +60,20 @@ class PickCapTest(unittest.TestCase):
         # filament together; at whole steps they were a step apart
         cap3, knee3, rows = fc.pick_cap(AUTO_RUN_3, KNEE, MARGIN)
         cap4, knee4, rows = fc.pick_cap(AUTO_RUN_4, KNEE, MARGIN)
-        self.assertEqual((cap3, cap4), (13.5, 14.0))
-        self.assertAlmostEqual(knee3, 16.8, places=1)
-        self.assertAlmostEqual(knee4, 17.2, places=1)
+        cap6, knee6, rows = fc.pick_cap(AUTO_RUN_6, KNEE, MARGIN)
+        self.assertEqual((cap3, cap4, cap6), (13.0, 13.5, 12.0))
+        self.assertAlmostEqual(knee3, 16.2, delta=0.15)
+        self.assertAlmostEqual(knee4, 16.6, delta=0.15)
+        self.assertAlmostEqual(knee6, 15.2, delta=0.15)
+
+    def test_live_ramp_does_not_stop_on_its_newest_step(self):
+        # While the ramp runs the newest step cannot confirm itself
+        cap, knee, rows = fc.pick_cap(AUTO_RUN_6[:5], KNEE, MARGIN,
+                                      final=False)
+        self.assertIsNone(knee)
+        cap, knee, rows = fc.pick_cap(AUTO_RUN_6[:5], KNEE, MARGIN,
+                                      final=True)
+        self.assertIsNotNone(knee)
 
     def test_manual_ramps_bend_earlier(self):
         # 4 s steps with a dwell between them read the high flows higher,
@@ -94,11 +108,15 @@ class PickCapTest(unittest.TestCase):
     def test_forces_follow_a_drifting_rest(self):
         levels = [(8, 10., -1000.), (10, 20., -1100.), (12, 30., -1200.)]
         # Rest drifts -100 over 0..40 s: at t=20 it is -50 lower
-        pts = fc.HarkFlowCal._forces(levels, (0., 0.), (40., -100.))
+        pts = fc.HarkFlowCal._forces(levels, [(0., 0.), (40., -100.)])
         self.assertEqual([round(v) for f, v in pts], [975, 1050, 1125])
-        # No end reading: flat rest
-        pts = fc.HarkFlowCal._forces(levels, (0., 0.), (0., None))
+        # One reading only: flat rest
+        pts = fc.HarkFlowCal._forces(levels, [(0., 0.)])
         self.assertEqual([round(v) for f, v in pts], [1000, 1100, 1200])
+        # Flat beyond the last reading, and a failed reading is skipped
+        pts = fc.HarkFlowCal._forces(levels, [(0., 0.), (15., -60.),
+                                              (16., None)])
+        self.assertEqual([round(v) for f, v in pts], [960, 1040, 1140])
 
     def test_excess_is_relative_to_the_earlier_low_flow_line(self):
         rows = fc.excess_percent(from8(RAMP_250), 12.)

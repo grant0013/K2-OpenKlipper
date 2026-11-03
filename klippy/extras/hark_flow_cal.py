@@ -61,7 +61,8 @@ def excess_percent(points, fit_max):
     return out
 
 
-def pick_cap(points, knee_pct=5., margin=3., fit_max=12., min_cap=4.):
+def pick_cap(points, knee_pct=4., margin=3., fit_max=12., min_cap=4.,
+             final=True):
     """From [(flow, force)] in ramp order: (cap, knee_flow, rows).
 
     knee_flow is where the force passes knee_pct above the low-flow line,
@@ -70,15 +71,17 @@ def pick_cap(points, knee_pct=5., margin=3., fit_max=12., min_cap=4.):
     two runs on the same filament, 11-03); None when the ramp never bent.
     cap is knee_flow less margin, down to the half, or None without a knee
     (no limit found in the ramp). A single step over the line is not a
-    knee until the step after it is over as well (or the ramp ends there),
-    so one noisy step does not stop the ramp."""
+    knee until the step after it is over as well, so one noisy step does
+    not stop the ramp; with final=True (the ramp is over) a last step over
+    the line counts on its own."""
     rows = excess_percent(points, fit_max)
     knee = None
     prev = None
     for i, (f, v, ex) in enumerate(rows):
         if ex > knee_pct and prev is not None:
-            confirmed = (i + 1 >= len(rows)
-                         or rows[i + 1][2] > knee_pct)
+            confirmed = ((final and i + 1 >= len(rows))
+                         or (i + 1 < len(rows)
+                             and rows[i + 1][2] > knee_pct))
             if not confirmed:
                 prev = (f, ex)
                 continue
@@ -121,8 +124,10 @@ class HarkFlowCal:
         # leaves pressure in the nozzle), and again after the ramp
         self.relax = config.getfloat('relax', 3., minval=0.6)
         # Where the force leaves the line by this much, between steps. The
-        # steps under 14 scatter about 1% around their line (11-03 runs)
-        self.knee_pct = config.getfloat('knee_percent', 5., above=0.)
+        # steps under 14 scatter about 1% around their line; CR-PETG at
+        # 250 C bends gently (14: 1-4%, 16: 3-4%, 18: 5-7%) and 4% put
+        # three runs within 12-13.5 after the margin (11-03)
+        self.knee_pct = config.getfloat('knee_percent', 4., above=0.)
         # Under the knee (mm^3/s): walls print with PA bursts and corners
         # above their steady flow, and K2 CR-PETG at 250 C printed gaps in
         # inner walls at 16 while its ramps pass 5% at 16.8-17.3 (11-03)
@@ -175,18 +180,20 @@ class HarkFlowCal:
                                         end - 0.05))
 
     @staticmethod
-    def _forces(levels, rest, rest_end):
-        """Force per step: the step's gauge level less the rest level, with
-        the rest drifting linearly from the start reading to the end one
-        (the hot gauge moved 2-5% of a step's force over a ramp, 11-03)."""
-        (t0, r0), (t1, r1) = rest, (rest_end if rest_end[1] is not None
-                                    else rest)
+    def _forces(levels, rests):
+        """Force per step: the step's gauge level less the rest level, the
+        rest taken as drifting linearly between the readings in `rests`
+        [(print time, level)] and flat beyond the last one (the hot gauge
+        moved 2-5% of a step's force over a ramp, 11-03)."""
+        rests = [(t, r) for t, r in rests if r is not None]
         out = []
         for flow, t, level in levels:
-            if t1 > t0:
-                r = r0 + (r1 - r0) * min(1., max(0., (t - t0) / (t1 - t0)))
-            else:
-                r = r0
+            r = rests[0][1]
+            for (t0, r0), (t1, r1) in zip(rests, rests[1:]):
+                if t <= t0:
+                    break
+                r = r1 if t >= t1 or t1 <= t0 else \
+                    r0 + (r1 - r0) * (t - t0) / (t1 - t0)
             out.append((flow, abs(level - r)))
         return out
 
@@ -219,49 +226,65 @@ class HarkFlowCal:
         prev_accel = extruder.set_extrude_only_accel_limit(self.e_accel)
         points = []
         levels = []             # (flow, window mid print time, level)
-        rest = rest_end = (0., None)
+        rests = []              # (print time, level) rest readings
+        cap = knee = None
+        rows = []
         stopped_early = False
         try:
             # Rest level once the prime's pressure has relaxed
-            rest = self._rest_level(toolhead, state, relax)
-            if rest[1] is None:
+            rests.append(self._rest_level(toolhead, state, relax))
+            if rests[0][1] is None:
                 raise gcmd.error("No gauge samples: is the strain gauge "
                                  "streaming?")
-            for i, flow in enumerate(flows):
-                velocity = flow / area
-                extra = self.first_step_extra if i == 0 else 0.
-                start = toolhead.get_last_move_time()
-                E += velocity * (step_time + extra)
-                toolhead.move([X, Y, Z, E], velocity)
-                toolhead.wait_moves()
-                end = toolhead.get_last_move_time()
-                self._wait_samples(state, end)
-                window = self._window(state['samples'],
-                                      start + settle + extra, end - 0.05)
-                level = median(window)
-                if level is None:
-                    gcmd.respond_info("Flow %.0f: no gauge samples in the "
-                                      "window, skipped" % (flow,))
-                    continue
-                levels.append((flow, 0.5 * (start + settle + extra + end),
-                               level))
-                points = self._forces(levels, rest, rest_end)
+            idx = 0
+            while True:
+                # Step up until a confirmed knee (two steps over the line)
+                # or the end of the ramp
+                while idx < len(flows):
+                    flow = flows[idx]
+                    velocity = flow / area
+                    extra = self.first_step_extra if idx == 0 else 0.
+                    idx += 1
+                    start = toolhead.get_last_move_time()
+                    E += velocity * (step_time + extra)
+                    toolhead.move([X, Y, Z, E], velocity)
+                    toolhead.wait_moves()
+                    end = toolhead.get_last_move_time()
+                    self._wait_samples(state, end)
+                    window = self._window(state['samples'],
+                                          start + settle + extra, end - 0.05)
+                    level = median(window)
+                    if level is None:
+                        gcmd.respond_info("Flow %.0f: no gauge samples in "
+                                          "the window, skipped" % (flow,))
+                        continue
+                    levels.append((flow, 0.5 * (start + settle + extra + end),
+                                   level))
+                    points = self._forces(levels, rests)
+                    cap, knee, rows = pick_cap(points, knee_pct, margin,
+                                               self.fit_max, self.min_cap,
+                                               final=False)
+                    if knee is not None:
+                        break
+                # Rest again: the hot gauge drifts, and the forces are
+                # taken against a rest that moves linearly between readings.
+                # If that takes the knee away and steps remain, carry on.
+                rests.append(self._rest_level(toolhead, state, relax))
+                points = self._forces(levels, rests)
+                done = idx >= len(flows)
                 cap, knee, rows = pick_cap(points, knee_pct, margin,
-                                           self.fit_max, self.min_cap)
-                if knee is not None:
-                    stopped_early = flow != flows[-1]
+                                           self.fit_max, self.min_cap,
+                                           final=done)
+                if knee is not None or done:
+                    stopped_early = not done
                     break
-            # Rest again: how far the hot gauge drifted over the ramp; the
-            # forces are then taken against a rest that drifts linearly
-            rest_end = self._rest_level(toolhead, state, relax)
-            points = self._forces(levels, rest, rest_end)
         finally:
             state['on'] = False
             extruder.set_extrude_only_accel_limit(prev_accel)
             toolhead.wait_moves()
             toolhead.set_position(tpos)
-        cap, knee, rows = pick_cap(points, knee_pct, margin, self.fit_max,
-                                   self.min_cap)
+        rest = rests[0][1] if rests else None
+        rest_end = rests[-1][1] if len(rests) > 1 else None
         stamp = round(toolhead.get_last_move_time(), 1)
         lines = ["flow  force   above the %g-and-under line" % (self.fit_max,)]
         for f, v, ex in rows:
@@ -277,18 +300,17 @@ class HarkFlowCal:
         self.last = {'cap': cap, 'knee': knee, 'knee_percent': knee_pct,
                      'points': [(f, round(v)) for f, v in points],
                      'excess': [round(ex, 1) for f, v, ex in rows],
-                     'rest': rest[1], 'rest_end': rest_end[1], 'applied': 0,
+                     'rest': rest, 'rest_end': rest_end, 'applied': 0,
                      'stamp': stamp,
                      'temperature': round(
                          extruder.get_heater().get_status(
                              self.reactor.monotonic()).get('target', 0.))}
         drift = ""
-        if rest[1] is not None and rest_end[1] is not None and points:
+        if rest is not None and rest_end is not None and points:
             drift = "\nrest level moved %+.0f over the ramp (%.0f%% of the" \
                     " last step's force; the forces above allow for it)" % (
-                        rest_end[1] - rest[1],
-                        100. * abs(rest_end[1] - rest[1])
-                        / max(1., points[-1][1]))
+                        rest_end - rest,
+                        100. * abs(rest_end - rest) / max(1., points[-1][1]))
         gcmd.respond_info("Flow calibration: %s\n%s%s%s" % (
             verdict, "\n".join(lines),
             "\n(stopped early at the knee)" if stopped_early else "", drift))
