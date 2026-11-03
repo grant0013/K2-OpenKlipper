@@ -101,7 +101,10 @@ class HarkFlowCal:
         # leaves pressure in the nozzle), and again after the ramp
         self.relax = config.getfloat('relax', 3., minval=0.6)
         self.knee_pct = config.getfloat('knee_percent', 7., above=0.)
-        self.margin = config.getfloat('margin', 1., minval=0.)
+        # Two steps under the knee: the bend starts a step before the line
+        # test calls it (K2 CR-PETG 250 C: 16 at +3.6%, 18 at +7.2%, and 16
+        # printed gaps in inner walls)
+        self.margin = config.getfloat('margin', 2., minval=0.)
         self.fit_max = config.getfloat('fit_max_flow', 12., above=0.)
         self.min_cap = config.getfloat('min_cap', 4., above=0.)
         # Extruder acceleration for the steps (mm/s^2 of filament)
@@ -140,12 +143,30 @@ class HarkFlowCal:
         return [v for t, v in samples if start <= t < end]
 
     def _rest_level(self, toolhead, state, relax):
-        """Median gauge level over the last 0.6 s of a relax pause."""
+        """(print time, median gauge level) over the last 0.6 s of a relax
+        pause."""
         toolhead.wait_moves()
         self.reactor.pause(self.reactor.monotonic() + relax)
         end = toolhead.get_last_move_time()
         self._wait_samples(state, end - 0.1)
-        return median(self._window(state['samples'], end - 0.7, end - 0.05))
+        return end, median(self._window(state['samples'], end - 0.7,
+                                        end - 0.05))
+
+    @staticmethod
+    def _forces(levels, rest, rest_end):
+        """Force per step: the step's gauge level less the rest level, with
+        the rest drifting linearly from the start reading to the end one
+        (the hot gauge moved 2-5% of a step's force over a ramp, 11-03)."""
+        (t0, r0), (t1, r1) = rest, (rest_end if rest_end[1] is not None
+                                    else rest)
+        out = []
+        for flow, t, level in levels:
+            if t1 > t0:
+                r = r0 + (r1 - r0) * min(1., max(0., (t - t0) / (t1 - t0)))
+            else:
+                r = r0
+            out.append((flow, abs(level - r)))
+        return out
 
     def cmd_FLOW_CAL_RUN(self, gcmd):
         flows_param = gcmd.get('FLOWS', None)
@@ -175,12 +196,13 @@ class HarkFlowCal:
         gauge.get_load_cell().add_client(on_data)
         prev_accel = extruder.set_extrude_only_accel_limit(self.e_accel)
         points = []
-        rest = rest_end = None
+        levels = []             # (flow, window mid print time, level)
+        rest = rest_end = (0., None)
         stopped_early = False
         try:
             # Rest level once the prime's pressure has relaxed
             rest = self._rest_level(toolhead, state, relax)
-            if rest is None:
+            if rest[1] is None:
                 raise gcmd.error("No gauge samples: is the strain gauge "
                                  "streaming?")
             for i, flow in enumerate(flows):
@@ -199,14 +221,18 @@ class HarkFlowCal:
                     gcmd.respond_info("Flow %.0f: no gauge samples in the "
                                       "window, skipped" % (flow,))
                     continue
-                points.append((flow, abs(level - rest)))
+                levels.append((flow, 0.5 * (start + settle + extra + end),
+                               level))
+                points = self._forces(levels, rest, rest_end)
                 cap, knee, rows = pick_cap(points, knee_pct, margin,
                                            self.fit_max, self.min_cap)
                 if knee is not None:
                     stopped_early = flow != flows[-1]
                     break
-            # Rest again: how far the hot gauge drifted over the ramp
+            # Rest again: how far the hot gauge drifted over the ramp; the
+            # forces are then taken against a rest that drifts linearly
             rest_end = self._rest_level(toolhead, state, relax)
+            points = self._forces(levels, rest, rest_end)
         finally:
             state['on'] = False
             extruder.set_extrude_only_accel_limit(prev_accel)
@@ -230,17 +256,18 @@ class HarkFlowCal:
         self.last = {'cap': cap, 'knee': knee, 'knee_percent': knee_pct,
                      'points': [(f, round(v)) for f, v in points],
                      'excess': [round(ex, 1) for f, v, ex in rows],
-                     'rest': rest, 'rest_end': rest_end, 'applied': 0,
+                     'rest': rest[1], 'rest_end': rest_end[1], 'applied': 0,
                      'stamp': stamp,
                      'temperature': round(
                          extruder.get_heater().get_status(
                              self.reactor.monotonic()).get('target', 0.))}
         drift = ""
-        if rest is not None and rest_end is not None and points:
+        if rest[1] is not None and rest_end[1] is not None and points:
             drift = "\nrest level moved %+.0f over the ramp (%.0f%% of the" \
-                    " last step's force)" % (
-                        rest_end - rest,
-                        100. * abs(rest_end - rest) / max(1., points[-1][1]))
+                    " last step's force; the forces above allow for it)" % (
+                        rest_end[1] - rest[1],
+                        100. * abs(rest_end[1] - rest[1])
+                        / max(1., points[-1][1]))
         gcmd.respond_info("Flow calibration: %s\n%s%s%s" % (
             verdict, "\n".join(lines),
             "\n(stopped early at the knee)" if stopped_early else "", drift))
