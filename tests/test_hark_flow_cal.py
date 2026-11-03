@@ -28,7 +28,7 @@ AUTO_RUN_1 = [(8, 117829), (10, 145003), (12, 168514), (14, 204682),
               (16, 234911), (18, 272316), (20, 313170), (22, 353247),
               (24, 391882)]
 
-KNEE = 7.   # module default knee_percent
+KNEE = 5.   # module default knee_percent
 
 
 def from8(ramp):
@@ -36,35 +36,38 @@ def from8(ramp):
     return [p for p in ramp if p[0] >= 8]
 
 
-# Third automatic run (3 s steps, first step 2 s longer, rest relaxed):
-# every step on the line, bend from 16, stopped at 18
+# Third and fourth automatic runs (3 s steps, first step 2 s longer, rest
+# relaxed; run 4 also takes the rest drift out): every step on the line,
+# the bend from 16, stopped past 7%
 AUTO_RUN_3 = [(8, 122673), (10, 151964), (12, 184795), (14, 218258),
               (16, 255212), (18, 297402)]
+AUTO_RUN_4 = [(8, 122518), (10, 155378), (12, 187618), (14, 222508),
+              (16, 260403), (18, 303149), (20, 342601)]
 
-MARGIN = 2.  # module default
+MARGIN = 3.  # module default
 
 
 class PickCapTest(unittest.TestCase):
-    def test_petg_250_caps_two_steps_under_the_knee(self):
-        cap, knee, rows = fc.pick_cap(from8(RAMP_250), KNEE, MARGIN)
-        self.assertEqual((cap, knee), (12.0, 16))
+    def test_auto_runs_agree_within_half_a_step(self):
+        # Reading the crossing between steps keeps two runs on the same
+        # filament together; at whole steps they were a step apart
+        cap3, knee3, rows = fc.pick_cap(AUTO_RUN_3, KNEE, MARGIN)
+        cap4, knee4, rows = fc.pick_cap(AUTO_RUN_4, KNEE, MARGIN)
+        self.assertEqual((cap3, cap4), (13.5, 14.0))
+        self.assertAlmostEqual(knee3, 16.8, places=1)
+        self.assertAlmostEqual(knee4, 17.2, places=1)
 
-    def test_petg_260_bends_at_the_same_flow(self):
-        # 10 C more lowers the force but not where the line bends
-        cap, knee, rows = fc.pick_cap(from8(RAMP_260), KNEE, MARGIN)
-        self.assertEqual((cap, knee), (12.0, 16))
+    def test_manual_ramps_bend_earlier(self):
+        # 4 s steps with a dwell between them read the high flows higher,
+        # so the crossing lands lower: still PETG in the low teens
+        for ramp in (RAMP_250, RAMP_260, RAMP_250_3S):
+            cap, knee, rows = fc.pick_cap(from8(ramp), KNEE, MARGIN)
+            self.assertTrue(13. <= knee <= 15., knee)
+            self.assertTrue(10. <= cap <= 12., cap)
 
-    def test_first_ramp_agrees(self):
-        cap, knee, rows = fc.pick_cap(from8(RAMP_250_3S), KNEE, MARGIN)
-        self.assertEqual((cap, knee), (12.0, 16))
-
-    def test_auto_run_3_caps_at_14(self):
-        cap, knee, rows = fc.pick_cap(AUTO_RUN_3, KNEE, MARGIN)
-        self.assertEqual((cap, knee), (14.0, 18))
-
-    def test_biased_auto_run_still_caps_near_the_bend(self):
+    def test_biased_auto_run_still_caps_low(self):
         cap, knee, rows = fc.pick_cap(AUTO_RUN_1, KNEE, MARGIN)
-        self.assertEqual((cap, knee), (14.0, 18))
+        self.assertLessEqual(cap, 14.)
 
     def test_forces_follow_a_drifting_rest(self):
         levels = [(8, 10., -1000.), (10, 20., -1100.), (12, 30., -1200.)]
@@ -90,11 +93,13 @@ class PickCapTest(unittest.TestCase):
         self.assertIsNone(cap)
         self.assertIsNone(knee)
 
-    def test_margin_and_floor(self):
-        points = [(6, 100), (8, 130), (10, 160), (12, 400)]
-        cap, knee, rows = fc.pick_cap(points, margin=1.)
-        self.assertEqual((cap, knee), (9.0, 12))
-        cap, knee, rows = fc.pick_cap(points, margin=8., min_cap=4.)
+    def test_crossing_is_placed_between_the_steps(self):
+        # 10 sits on the line (0%), 12 is 100% over: 5% is crossed at 10.1
+        points = [(6, 100), (8, 130), (10, 160), (12, 380)]
+        cap, knee, rows = fc.pick_cap(points, 5., margin=1.)
+        self.assertEqual(knee, 10.1)
+        self.assertEqual(cap, 9.0)
+        cap, knee, rows = fc.pick_cap(points, 5., margin=8., min_cap=4.)
         self.assertEqual(cap, 4.0)
 
     def test_two_points_cannot_be_judged(self):
@@ -106,8 +111,10 @@ class PickCapTest(unittest.TestCase):
 
     def test_third_point_is_judged_against_the_first_two(self):
         points = [(6, 100), (8, 130), (10, 500)]
-        cap, knee, rows = fc.pick_cap(points, margin=1.)
-        self.assertEqual((cap, knee), (7.0, 10))
+        cap, knee, rows = fc.pick_cap(points, 5., margin=1.)
+        # 8 reads 0 (unjudged), 10 reads +212%: crossing just past 8
+        self.assertEqual(knee, 8.05)
+        self.assertEqual(cap, 7.0)
 
     def test_median(self):
         self.assertEqual(fc.median([3, 1, 2]), 2)

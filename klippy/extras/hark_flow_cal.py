@@ -56,24 +56,32 @@ def excess_percent(points, fit_max):
     return out
 
 
-def pick_cap(points, knee_pct=8., margin=1., fit_max=12., min_cap=4.):
+def pick_cap(points, knee_pct=5., margin=3., fit_max=12., min_cap=4.):
     """From [(flow, force)] in ramp order: (cap, knee_flow, rows).
 
-    knee_flow is the first flow more than knee_pct above the low-flow line
-    (None when the ramp never bent); cap is the last flow still on the line
-    less margin, or None without a knee (no limit found in the ramp)."""
+    knee_flow is where the force passes knee_pct above the low-flow line,
+    placed between the two steps either side of the crossing (the bend is
+    gradual, and reading it at whole steps moved the answer a step between
+    two runs on the same filament, 11-03); None when the ramp never bent.
+    cap is knee_flow less margin, down to the half, or None without a knee
+    (no limit found in the ramp)."""
     rows = excess_percent(points, fit_max)
     knee = None
-    last_ok = None
+    prev = None
     for f, v, ex in rows:
-        if ex > knee_pct:
-            knee = f
+        if ex > knee_pct and prev is not None:
+            pf, pex = prev
+            if ex > pex:
+                knee = pf + (f - pf) * (knee_pct - pex) / (ex - pex)
+            else:
+                knee = float(f)
+            knee = max(float(pf), min(float(f), knee))
             break
-        last_ok = f
-    if knee is None or last_ok is None:
-        return None, knee, rows
-    cap = max(min_cap, last_ok - margin)
-    return round(cap * 2.) / 2., knee, rows
+        prev = (f, ex)
+    if knee is None:
+        return None, None, rows
+    cap = max(min_cap, math.floor((knee - margin) * 2.) / 2.)
+    return cap, round(knee, 2), rows
 
 
 class HarkFlowCal:
@@ -100,11 +108,13 @@ class HarkFlowCal:
         # Pause before the rest level is read (the prime that comes first
         # leaves pressure in the nozzle), and again after the ramp
         self.relax = config.getfloat('relax', 3., minval=0.6)
-        self.knee_pct = config.getfloat('knee_percent', 7., above=0.)
-        # Two steps under the knee: the bend starts a step before the line
-        # test calls it (K2 CR-PETG 250 C: 16 at +3.6%, 18 at +7.2%, and 16
-        # printed gaps in inner walls)
-        self.margin = config.getfloat('margin', 2., minval=0.)
+        # Where the force leaves the line by this much, between steps. The
+        # steps under 14 scatter about 1% around their line (11-03 runs)
+        self.knee_pct = config.getfloat('knee_percent', 5., above=0.)
+        # Under the knee (mm^3/s): walls print with PA bursts and corners
+        # above their steady flow, and K2 CR-PETG at 250 C printed gaps in
+        # inner walls at 16 while its ramps pass 5% at 16.8-17.3 (11-03)
+        self.margin = config.getfloat('margin', 3., minval=0.)
         self.fit_max = config.getfloat('fit_max_flow', 12., above=0.)
         self.min_cap = config.getfloat('min_cap', 4., above=0.)
         # Extruder acceleration for the steps (mm/s^2 of filament)
@@ -249,10 +259,9 @@ class HarkFlowCal:
                        "stayed within %.0f%% of a straight line)"
                        % (points[-1][0] if points else 0., knee_pct))
         else:
-            verdict = ("knee at %.0f mm^3/s (%+.1f%% over the line); "
-                       "max flow %.1f mm^3/s" % (
-                           knee, [ex for f, v, ex in rows if f == knee][0],
-                           cap))
+            verdict = ("force leaves the line by %g%% at %.1f mm^3/s; "
+                       "max flow %.1f mm^3/s (%g under)" % (
+                           knee_pct, knee, cap, margin))
         self.last = {'cap': cap, 'knee': knee, 'knee_percent': knee_pct,
                      'points': [(f, round(v)) for f, v in points],
                      'excess': [round(ex, 1) for f, v, ex in rows],
