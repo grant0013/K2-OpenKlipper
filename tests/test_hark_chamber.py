@@ -31,11 +31,12 @@ class FakeHeater:
 
 
 class FakeTach:
+    """The PTC heater_fan: its status carries Klipper's rpm."""
     def __init__(self):
         self.speed = 0
 
     def get_status(self, eventtime):
-        return {'fan0_speed': self.speed}
+        return {'speed': 1.0, 'rpm': self.speed}
 
 
 class FakeGcode:
@@ -79,7 +80,7 @@ def make(enable=True):
     pheaters = types.SimpleNamespace(
         lookup_heater=lambda n: chamber if n == "chamber_heater" else bed)
     objects = {'gcode': gcode, 'heaters': pheaters, 'heater_bed': object(),
-               'fan_feedback': tach}
+               'heater_fan ptc_fan': tach}
     reactor = types.SimpleNamespace(
         monotonic=lambda: 0., NOW=0., register_timer=lambda *a: None)
     printer = types.SimpleNamespace(

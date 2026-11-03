@@ -5,10 +5,11 @@
 # closed motor_control module ran MOTOR_CANCEL_PRINT. Both are gone on the
 # open stack, so while a print runs this module
 #   - pauses when the hotend fan or the part fan is commanded on but its
-#     tachometer (fan_feedback) reads zero for fan_fail_time. The hotend
-#     fan is only checked at full power (hotend_fan_min): its tachometer
-#     reads zero while PRTouch slows it for probing (K2 Plus 11-01: 12000
-#     rpm at full, 0 at 60%), which paused a print start,
+#     tachometer (the fan's own tachometer_pin, Klipper's rpm) reads zero
+#     for fan_fail_time. The hotend fan is only checked at full power
+#     (hotend_fan_min): its tachometer reads zero while PRTouch slows it
+#     for probing (K2 Plus 11-01: 12000 at full, 0 at 60%), which paused a
+#     print start. A fan without a tachometer is not watched,
 #   - polls the X/Y motor controllers' status (00 0c 0b, as stock does) and
 #     cancels the print on a fault (stall, tracking error, overcurrent ...),
 #   - polls the extruder controller's status and pauses on a fault: an
@@ -82,7 +83,6 @@ class HarkSafety:
 
     def _ready(self):
         self.bus = self.printer.lookup_object('k2_motor_bus', None)
-        self.fans = self.printer.lookup_object('fan_feedback', None)
         self.part_fan = self.printer.lookup_object('fan', None)
         self.hotend_fan = self.printer.lookup_object('heater_fan hotend_fan',
                                                      None)
@@ -130,18 +130,18 @@ class HarkSafety:
         return eventtime + self.poll_interval
 
     def _check_fans(self, eventtime):
-        if self.fans is None:
-            return
-        tach = self.fans.get_status(eventtime)
         expect = {}
-        if self.hotend_fan is not None:
-            expect['hotend fan'] = (
-                self.hotend_fan.get_status(eventtime).get('speed', 0.)
-                >= self.hotend_fan_min, tach.get('fan1_speed', 0))
-        if self.part_fan is not None:
-            expect['part fan'] = (
-                self.part_fan.get_status(eventtime).get('speed', 0.)
-                >= self.part_fan_min, tach.get('fan2_speed', 0))
+        for name, fan, min_speed in (
+                ('hotend fan', self.hotend_fan, self.hotend_fan_min),
+                ('part fan', self.part_fan, self.part_fan_min)):
+            if fan is None:
+                continue
+            status = fan.get_status(eventtime)
+            rpm = status.get('rpm')
+            if rpm is None:
+                # No tachometer on this fan: nothing to watch
+                continue
+            expect[name] = (status.get('speed', 0.) >= min_speed, rpm)
         self.last['fans'] = dict((k, {'on': on, 'tach': t})
                                  for k, (on, t) in expect.items())
         for name, (on, speed) in expect.items():

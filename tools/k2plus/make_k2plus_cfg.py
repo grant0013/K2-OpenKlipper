@@ -465,7 +465,7 @@ def apply(text):
 # tester can see that they line up before anything purges, wipes or cuts
 EXTRA = """
 # K2 Plus PTC chamber heater, as stock: heater PC12, its fan PB14 powered
-# through PB2 with the tachometer on PC6 ([fan_feedback] fan0), and the
+# through PB2 with the tachometer on PC6 (stock fan_feedback fan0), and the
 # chamber thermistor PC5, shared with [temperature_sensor
 # chamber_temperature] so the screen shows what the heater controls on.
 # [hark_chamber] adds stock's rules (only over 40C, bed first, soft start,
@@ -503,6 +503,8 @@ enable_pin: PB2
 heater: chamber_heater
 heater_temp: 100
 fan_speed: 1.0
+tachometer_pin: PC6
+tachometer_ppr: 2
 
 [hark_chamber]
 enable: True

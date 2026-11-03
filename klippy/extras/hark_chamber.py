@@ -35,7 +35,9 @@ class HarkChamber:
         self.enabled = config.getboolean('enable', False)
         self.heater_name = config.get('heater', 'chamber_heater')
         self.fan_name = config.get('fan', 'heater_fan ptc_fan')
-        self.tach_key = config.get('tach', 'fan0_speed')
+        # The fan's tachometer is its own tachometer_pin (Klipper's rpm);
+        # `tach` named a fan_feedback key before 11-03 and is ignored
+        config.get('tach', None)
         self.min_heat_target = config.getfloat('min_heat_target', 40.)
         self.max_target = config.getfloat(
             'max_target', 60., above=self.min_heat_target)
@@ -74,7 +76,7 @@ class HarkChamber:
         if self.printer.lookup_object('heater_bed', None) is not None:
             self.bed = pheaters.lookup_heater('heater_bed')
         self.fan = self.printer.lookup_object(self.fan_name, None)
-        self.tach = self.printer.lookup_object('fan_feedback', None)
+        self.tach = self.fan
         self.full_power = self.heater.control.heater_max_power
         # See every other way the heater target is set (TURN_OFF_HEATERS
         # at the end of a print or on idle, SET_HEATER_TEMPERATURE), also
@@ -172,10 +174,10 @@ class HarkChamber:
             self.full_power * self.soft_start_power if soft
             else self.full_power)
         # Fan check: while the heater has power its fan must turn
-        if power > 0. and self.tach is not None:
+        speed = self._fan_rpm(eventtime)
+        if power > 0. and speed is not None:
             if self.power_since is None:
                 self.power_since = eventtime
-            speed = self.tach.get_status(eventtime).get(self.tach_key, 0)
             if (eventtime - self.power_since < self.fan_spinup_time
                     or speed > 0):
                 self.zero_since = None
@@ -243,12 +245,17 @@ class HarkChamber:
                         else ""))
             eventtime = self.reactor.pause(eventtime + TICK)
 
+    def _fan_rpm(self, eventtime):
+        """The PTC fan's rpm, or None without a fan or a tachometer (then
+        the fan is not checked)."""
+        if self.fan is None:
+            return None
+        return self.fan.get_status(eventtime).get('rpm')
+
     def cmd_CHAMBER_STATUS(self, gcmd):
         eventtime = self.reactor.monotonic()
         status = self.get_status(eventtime)
-        tach = None
-        if self.tach is not None:
-            tach = self.tach.get_status(eventtime).get(self.tach_key)
+        tach = self._fan_rpm(eventtime)
         gcmd.respond_info(
             "Chamber heater: %s, requested %.0fC, heater target %.0fC, "
             "chamber %.1fC, power %.2f%s%s, fan tach %s, fault %s" % (
