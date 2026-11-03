@@ -44,8 +44,16 @@ FUNC_PROTECTION = 0x0c
 FUNC_READ_ADDR = 0x0e
 FUNC_STALL_MODE = 0x11
 
-# Index for FUNC_GET: motor MCU temperature, float32 deg C
+# Indices for FUNC_GET, each a float32 reply (seen on 0x82 during stock
+# homing; the units are the controller's: radians for position)
+GET_POSITION = 0x05
+GET_SPEED = 0x06
+GET_ID = 0x07
+GET_IQ = 0x08
+# Motor MCU temperature, deg C
 GET_MCU_TEMP = 0x11
+GET_LABELS = {GET_POSITION: 'position', GET_SPEED: 'speed', GET_ID: 'id',
+              GET_IQ: 'iq', GET_MCU_TEMP: 'mcu_temp'}
 # Motor firmware limit (protection_param_mcu_temp_max, 0xbe)
 MCU_TEMP_MAX = 115.
 

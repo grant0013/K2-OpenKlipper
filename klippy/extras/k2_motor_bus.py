@@ -114,6 +114,7 @@
 # k2_motor_proto.py.
 
 import logging
+import os
 import struct
 
 import mcu
@@ -196,6 +197,10 @@ class K2MotorBus:
         self._reject_logged = 0.
         self.temps = {}
         self._temp_hot = set()
+        # MOTOR_LOG_START samples (next to the PA pressure logs by default)
+        self.log_dir = config.get(
+            'log_dir', '/mnt/UDISK/printer_data_mainline/config/pa_logs')
+        self.motor_log = None
         self.e_reported_addr = None
         self.calibration_warnings = []
         self.last_faults = {}
@@ -250,6 +255,16 @@ class K2MotorBus:
         gcode.register_command('MOTOR_E_ADDR', self.cmd_MOTOR_E_ADDR,
                                desc="Ask the extruder motor controller its "
                                     "bus address (diagnostic)")
+        gcode.register_command('MOTOR_VALUES', self.cmd_MOTOR_VALUES,
+                               desc="Read a motor's live position, speed, "
+                                    "current and temperature")
+        gcode.register_command('MOTOR_GET_PROBE', self.cmd_MOTOR_GET_PROBE,
+                               desc="Try a range of 'get value' indices on "
+                                    "one motor (diagnostic)")
+        gcode.register_command('MOTOR_LOG_START', self.cmd_MOTOR_LOG_START,
+                               desc="Sample a motor's live values to a CSV")
+        gcode.register_command('MOTOR_LOG_STOP', self.cmd_MOTOR_LOG_STOP,
+                               desc="Stop the motor log and write the CSV")
         self.printer.register_event_handler("klippy:disconnect",
                                             self._close)
 
@@ -736,12 +751,125 @@ class K2MotorBus:
             results.append((name, addr, ok, frame, resp))
         return results
 
-    def read_temp(self, name):
+    def read_value(self, name, index):
+        """One 'get value' (00 08 <index>) float from motor x, y or e, or
+        None without a valid 4-byte reply."""
         frame, raw = self.motor_request(
-            name, (0x00, proto.FUNC_GET, proto.GET_MCU_TEMP), timeout=0.1)
+            name, (0x00, proto.FUNC_GET, index), timeout=0.1)
         if frame is None or len(frame['payload']) != 4:
             return None
-        return round(proto.decode_float(frame['payload']), 1)
+        return proto.decode_float(frame['payload'])
+
+    def read_temp(self, name):
+        temp = self.read_value(name, proto.GET_MCU_TEMP)
+        return None if temp is None else round(temp, 1)
+
+    def _motor_name(self, gcmd):
+        name = gcmd.get('MOTOR', 'e').lower()
+        if name not in self.motor_names():
+            raise gcmd.error("MOTOR must be one of %s"
+                             % (", ".join(self.motor_names()),))
+        return name
+
+    def cmd_MOTOR_VALUES(self, gcmd):
+        name = self._motor_name(gcmd)
+        indices = [int(i, 0) for i in gcmd.get(
+            'INDEX', '5,6,7,8,0x11').split(',')]
+        parts = []
+        for index in indices:
+            value = self.read_value(name, index)
+            parts.append("%s(%02x)=%s" % (
+                proto.GET_LABELS.get(index, 'value'), index,
+                '?' if value is None else "%.4f" % value))
+        gcmd.respond_info("Motor %s: %s" % (name.upper(), " ".join(parts)))
+
+    def cmd_MOTOR_GET_PROBE(self, gcmd):
+        """Raw replies to 00 08 <n> for a range of n, to find what else the
+        controller exposes. Reads only; the reply's payload is shown as hex
+        and, when it is 4 bytes, as a float."""
+        name = self._motor_name(gcmd)
+        first = gcmd.get_int('FIRST', 0, minval=0, maxval=255)
+        last = gcmd.get_int('LAST', 0x1f, minval=first, maxval=255)
+        lines = []
+        for index in range(first, last + 1):
+            frame, raw = self.motor_request(
+                name, (0x00, proto.FUNC_GET, index), timeout=0.1)
+            if frame is None:
+                lines.append("%02x: %s" % (index, raw.hex(' ') or 'no reply'))
+                continue
+            payload = bytes(frame['payload'])
+            text = payload.hex(' ') or '(empty)'
+            if len(payload) == 4:
+                text += " = %g" % (proto.decode_float(payload),)
+            lines.append("%02x: status %02x %s" % (index, frame['status'],
+                                                  text))
+        gcmd.respond_info("Motor %s get-value probe:\n%s"
+                          % (name.upper(), "\n".join(lines)))
+
+    # --- motor value log ---
+    def cmd_MOTOR_LOG_START(self, gcmd):
+        if self.motor_log is not None:
+            raise gcmd.error("Motor log is already running")
+        name = self._motor_name(gcmd)
+        interval = gcmd.get_float('INTERVAL', 0.1, minval=0.02, maxval=5.)
+        indices = [int(i, 0) for i in gcmd.get(
+            'INDEX', '5,6,8').split(',')]
+        self.motor_log = {'motor': name, 'interval': interval,
+                          'indices': indices, 'rows': [], 'misses': 0,
+                          'timer': None}
+        self.motor_log['timer'] = self.reactor.register_timer(
+            self._motor_log_poll, self.reactor.NOW)
+        gcmd.respond_info("Motor %s log started: %s every %.0f ms"
+                          % (name.upper(),
+                             ",".join(proto.GET_LABELS.get(i, '%02x' % i)
+                                      for i in indices),
+                             interval * 1000.))
+
+    def _motor_log_poll(self, eventtime):
+        log = self.motor_log
+        if log is None:
+            return self.reactor.NEVER
+        try:
+            toolhead = self.printer.lookup_object('toolhead')
+            mcu = self.printer.lookup_object('mcu')
+            print_time = mcu.estimated_print_time(eventtime)
+            extruder = toolhead.get_extruder()
+            cmd_e = (extruder.find_past_position(print_time)
+                     if hasattr(extruder, 'find_past_position') else 0.)
+            values = [self.read_value(log['motor'], i)
+                      for i in log['indices']]
+            if any(v is None for v in values):
+                log['misses'] += 1
+            log['rows'].append((print_time, eventtime, cmd_e, values))
+        except Exception:
+            logging.exception("k2_motor_bus: motor log sample failed")
+        return self.reactor.monotonic() + log['interval']
+
+    def cmd_MOTOR_LOG_STOP(self, gcmd):
+        log = self.motor_log
+        if log is None:
+            raise gcmd.error("Motor log is not running")
+        self.reactor.unregister_timer(log['timer'])
+        self.motor_log = None
+        base = self._write_motor_log(gcmd.get('NAME', 'motor_log'), log)
+        gcmd.respond_info("Motor %s log: %d samples (%d with a missed "
+                          "read) -> %s" % (log['motor'].upper(),
+                                           len(log['rows']), log['misses'],
+                                           base))
+
+    def _write_motor_log(self, name, log):
+        os.makedirs(self.log_dir, exist_ok=True)
+        base = os.path.join(self.log_dir, name + '_motor.csv')
+        labels = [proto.GET_LABELS.get(i, 'get%02x' % i)
+                  for i in log['indices']]
+        with open(base, 'w') as f:
+            f.write("print_time,monotonic,cmd_e," + ",".join(labels) + "\n")
+            for print_time, mono, cmd_e, values in log['rows']:
+                f.write("%.6f,%.6f,%.4f,%s\n" % (
+                    print_time, mono, cmd_e,
+                    ",".join('' if v is None else "%.6f" % v
+                             for v in values)))
+        return base
 
     def read_temps(self):
         for name in self.motor_names():
