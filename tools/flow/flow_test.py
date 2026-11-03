@@ -8,6 +8,7 @@ import json, sys, time, urllib.request, urllib.parse
 SLOT, TEMP, NAME = sys.argv[1], float(sys.argv[2]), sys.argv[3]
 F0 = int(sys.argv[4]) if len(sys.argv) > 4 else 4
 F1 = int(sys.argv[5]) if len(sys.argv) > 5 else 24
+STEP_S = float(sys.argv[6]) if len(sys.argv) > 6 else 3.
 AREA = 2.405
 def g(s, to=900):
     urllib.request.urlopen(urllib.request.Request(
@@ -36,13 +37,14 @@ try:
     g("M109 S%.0f" % TEMP)
     g("CFS_FEED_START SLOT=%s CONFIRM=1" % SLOT)
     extrude(15, 5)
-    print("FLOW RAMP (3 s per step):")
-    # The extruder servo's position, speed and iq current alongside the
-    # gauge (about 4 samples a second over the nozzle MCU bridge)
-    g("MOTOR_LOG_START MOTOR=e INTERVAL=0.05")
+    print("FLOW RAMP (%g s per step):" % STEP_S)
+    # The extruder servo's speed and iq current alongside the gauge (each
+    # value is a few round trips over the nozzle MCU bridge, so two values
+    # give about 6 samples a second)
+    g("MOTOR_LOG_START MOTOR=e INTERVAL=0.05 INDEX=6,8")
     g("PA_LOG_START")
     for flow in range(F0, F1 + 1, 2):
-        mm = flow / AREA * 3.
+        mm = flow / AREA * STEP_S
         g("PA_LOG_MARK LABEL=f%d" % flow)
         extrude(mm, flow)
         print("  %2d mm3/s: commanded %.1f mm" % (flow, mm))
