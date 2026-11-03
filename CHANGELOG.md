@@ -1,7 +1,101 @@
 # Changelog
 
-## v0.4.18-alpha.1 (2026-11-02)
+## v0.4.18-alpha.1 (2026-11-03)
 
+- **The melt limit is measured at print start and the print is held to
+  it** (`hark_flow_cal`, `SET_MAX_FLOW`). After the slot is loaded and
+  purged, still over the chute at print temperature, the flow steps up
+  from 8 mm^3/s in 3 s steps while the nozzle strain gauge is read; where
+  the pressure leaves the straight line of the low flows by 4% is the
+  knee, and the print's moves are capped 3 mm^3/s under it. Purges, primes
+  and the slicer's own limit are untouched; `END_PRINT` and `CANCEL_PRINT`
+  clear it. Seven runs on CR-PETG at 250 C put the knee at 14-17 and the
+  cap at 11-14 mm^3/s; 16 had printed gaps in inner walls. Off by default:
+  `[gcode_macro _FLOW_AUTO] variable_on_print_start: 1` in
+  printer-overrides.cfg turns it on; `FLOW_CAL_STATIC [SLOT= TEMP= APPLY=]`
+  runs it by hand. The flow ramps that led here also showed that 260 C
+  lowers the pushing force 20-37% but does not move the knee: the melt
+  zone is the limit. Tests: tests/test_hark_flow_cal.py,
+  tests/test_extruder_max_flow.py.
+- **Every read on the extruder motor's bus came back one request late.**
+  The nozzle board's bridge answers with whatever its buffer already
+  holds, and the controller's reply lands after that, so the E motor's
+  fault status, temperature and stall reads were always the previous
+  answer. The bridge is drained first now. New diagnostics on the same
+  bus: `MOTOR_VALUES MOTOR=x|y|e` (position, speed, id/iq current, MCU
+  temperature), `MOTOR_GET_PROBE`, and `MOTOR_LOG_START/STOP` which
+  samples a motor into a CSV beside the PA logs; `tools/flow/flow_test.py`
+  logs the extruder servo through a ramp and `flow_analyse.py` prints its
+  current and speed per step (on the K2 the servo kept 96-104% of the
+  commanded speed and its current rose with pressure right up to 22
+  mm^3/s: the gears hold, the hotend is the limit).
+- **Fan rpm in Mainsail.** The part fan, hotend fan and (K2 Plus) PTC fan
+  carry Klipper's own `tachometer_pin` on the K2's fan-feedback inputs, so
+  Mainsail, the API and the touchscreen see each fan's rpm (part fan
+  ~7500, hotend fan ~8000 at full on our K2). `[fan_feedback]` is gone;
+  hark_safety and the chamber heater read the fans' rpm instead. The fans
+  are powered through their PWM, so the rpm is only true at full speed;
+  0 still means stopped.
+- **Fan health and minimum speed** (`hark_fans`). `FAN_CHECK` reads each
+  fan's full-speed rpm (the part fan with a 3 s blast) and keeps it in
+  `hark_fans.json`; a reading 15% under the fan's usual, or no pulses, is
+  reported with `!!` so the touchscreen shows it. `FAN_MIN_CAL` steps the
+  part fan down until the tachometer reads 0 and saves the lowest turning
+  duty plus 2% (8% on our K2) as its minimum; `M106` raises any lower
+  request to it, so a fan told to run turns. `_FAN_AUTO` (on by default)
+  checks the part fan at the start of every print and the hotend fan at
+  the chute once hot. `FAN_HEALTH` shows the records.
+- **Bed heater power on 110 V mains** (`hark_bed_power`, K2 only).
+  Creality's config has a 220 V set (half power) and a 110 V set (full
+  power, its own PID) and picks one by heating the bed 30 C at half
+  power: at or under 0.35 C/s is 110 V. Ours only ever ran the 220 V set,
+  a quarter of the power a 110 V printer's bed should have. The test now
+  runs once before the first print's bed heat-up (about a minute from
+  cold; 0.76 C/s on our 230 V K2) and the answer is kept in
+  `hark_bed_power.json`; `voltage: 110|220` forces a set;
+  `BED_POWER_CALIBRATE`, `BED_POWER_STATUS`, `BED_POWER_SET`.
+- **Touchscreen: fan rpm and health in the Fans box** (the part fan's rpm
+  or its usual, a Hotend fan line, warning colours after a slow or
+  stopped reading), and a **new boot animation**: the Hark Tech badge
+  lights up with its circuit traces, "K2 OpenKlipper" and harktech.co.uk
+  (`harkscreen/bootanim`, built by the rewritten
+  `tools/bootanim/make_bootanim.py`). The installer puts it in place and
+  keeps Creality's set in `/mnt/UDISK/mainline-backups/boot-play-stock.tar`
+  (uninstall.sh restores it); `OKL_BOOTANIM=keep` leaves the printer's
+  own, `OKL_BOOTANIM=/folder` installs one made from your logo
+  (docs/SCREEN-CUSTOMISE.md).
+- **K2 Plus: no more beta gate.** The config has run on a real K2 Plus
+  since 31 October (homing, Z tilt, probing, chamber heater, full prints,
+  touchscreen), so `install.sh` no longer needs `OKL_K2PLUS_BETA=1` (the
+  board-layout check stays); README, PROJECT-STATUS and the K2 Plus guide
+  say so. A K2 Plus with a CFS is still untested.
+- **K2 Plus: automatic belt tensioners** (`k2_belt_tension`). The
+  motorised tensioners sit on the motor bus at 0x21/0x22 with its frame,
+  so `BELT_TENSION_STATUS` reads each belt's newtons, slider position and
+  calibration, and `BELT_TENSION CONFIRM=1` is Creality's routine (home,
+  park at the back, motors off, tighten to 140 N, work the belt 200 mm
+  each way, tighten again, save). `BELT_TENSION_MOVE` and
+  `BELT_TENSION_CALIBRATE` are the service and factory commands. Not yet
+  run on a real K2 Plus (docs/K2-PLUS-BETA.md step 10).
+- **K2 Plus: saved Z tilt.** The whole correction of a `Z_TILT_ADJUST`
+  run is kept in `hark_z_tilt.json` and `Z_TILT_APPLY_SAVED` puts it back
+  without probing. Print start goes through `_Z_TILT_START`: `mode:
+  "probe"` (default, as before) or `"saved"` (Creality's ADJUST_STEPPERS,
+  about 30 s less per print).
+- **Maintenance counters** (`hark_maintenance`): print hours, grams
+  through the nozzle and cutter uses against Creality's thresholds
+  (nozzle 20 kg, cutter 100k cuts, belt and PTFE 1000 h, shaper, lube,
+  camera, fans, wipe strip, filter and desiccant 500 h). `MAINTENANCE_STATUS`,
+  `MAINTENANCE_DONE ITEM=`; due items are listed when a print ends.
+- **`FIRST_LAYER_PAUSE ENABLE=1`** pauses every print after layer 1 for a
+  look (stock's FIRST_FLOOR_PAUSE), through the slicer's layer-change
+  line. **`SILENT_MODE ENABLE=1`** is stock's quiet mode (accel 2500,
+  150 mm/s, corner speed 5, speed 50%, `M204` held to 2500); `ENABLE=0`
+  restores the limits. **A second extruder PID set above 280 C**
+  (`pid_*_high_temp`, `high_temp_value`) as stock switches to for hot
+  materials; the K2 extruder carries stock's values commented out.
+- docs/PROJECT-STATUS.md lists what is still only in Creality's firmware
+  after a full pass over 1.1.7.0, ranked.
 - **Power-loss recovery** (new `klippy/extras/hark_plr.py`, `[hark_plr]`,
   after Jacob10383's power_loss_recovery and Prusa's power panic). While
   printing, right after a plain move line (G0-G3, never inside a macro
