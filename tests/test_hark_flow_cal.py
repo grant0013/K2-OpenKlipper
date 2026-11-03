@@ -43,6 +43,10 @@ AUTO_RUN_3 = [(8, 122673), (10, 151964), (12, 184795), (14, 218258),
               (16, 255212), (18, 297402)]
 AUTO_RUN_4 = [(8, 122518), (10, 155378), (12, 187618), (14, 222508),
               (16, 260403), (18, 303149), (20, 342601)]
+# Fifth run: the 8-10 step came in low, so a two-point line made 12 read
+# +5.0% and the ramp stopped at 12 with a cap of 8.5. Three points are
+# needed before anything is judged.
+AUTO_RUN_5 = [(8, 124846), (10, 152935), (12, 190112)]
 
 MARGIN = 3.  # module default
 
@@ -64,6 +68,24 @@ class PickCapTest(unittest.TestCase):
             cap, knee, rows = fc.pick_cap(from8(ramp), KNEE, MARGIN)
             self.assertTrue(13. <= knee <= 15., knee)
             self.assertTrue(10. <= cap <= 12., cap)
+
+    def test_three_points_are_not_judged_yet(self):
+        cap, knee, rows = fc.pick_cap(AUTO_RUN_5, KNEE, MARGIN)
+        self.assertIsNone(knee)
+        self.assertIsNone(cap)
+        self.assertEqual([ex for f, v, ex in rows], [0., 0., 0.])
+
+    def test_one_step_over_the_line_waits_for_the_next(self):
+        base = [(8, 100), (10, 130), (12, 160), (14, 190)]
+        # 16 reads high alone, 18 is back on the line: no knee
+        cap, knee, rows = fc.pick_cap(base + [(16, 240), (18, 250)], KNEE, 1.)
+        self.assertIsNone(knee)
+        # 16 high and 18 higher: knee between 14 and 16
+        cap, knee, rows = fc.pick_cap(base + [(16, 240), (18, 300)], KNEE, 1.)
+        self.assertTrue(14. < knee < 16., knee)
+        # The ramp ends on the first high step: taken as the knee
+        cap, knee, rows = fc.pick_cap(base + [(16, 240)], KNEE, 1.)
+        self.assertTrue(14. < knee < 16., knee)
 
     def test_biased_auto_run_still_caps_low(self):
         cap, knee, rows = fc.pick_cap(AUTO_RUN_1, KNEE, MARGIN)
@@ -109,12 +131,12 @@ class PickCapTest(unittest.TestCase):
         self.assertIsNone(knee)
         self.assertIsNone(cap)
 
-    def test_third_point_is_judged_against_the_first_two(self):
-        points = [(6, 100), (8, 130), (10, 500)]
+    def test_fourth_point_is_judged_against_the_first_three(self):
+        points = [(6, 100), (8, 130), (10, 160), (12, 500)]
         cap, knee, rows = fc.pick_cap(points, 5., margin=1.)
-        # 8 reads 0 (unjudged), 10 reads +212%: crossing just past 8
-        self.assertEqual(knee, 8.05)
-        self.assertEqual(cap, 7.0)
+        # 10 reads 0 (unjudged), 12 reads +163%: crossing just past 10
+        self.assertEqual(knee, 10.06)
+        self.assertEqual(cap, 9.0)
 
     def test_median(self):
         self.assertEqual(fc.median([3, 1, 2]), 2)

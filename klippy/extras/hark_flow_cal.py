@@ -40,14 +40,19 @@ def line_fit(points):
     return my - b * mx, b
 
 
+MIN_FIT_POINTS = 3
+
+
 def excess_percent(points, fit_max):
     """Each point's force above the line through the EARLIER points at or
-    below fit_max, in percent: [(flow, force, excess%)]. The first two
-    points have nothing to be judged against and read 0."""
+    below fit_max, in percent: [(flow, force, excess%)]. A point with fewer
+    than MIN_FIT_POINTS earlier points to fit reads 0: a two-point line
+    called 12 a knee at +5.0% on a run whose 8-10 step came in a little low
+    (11-03 run 5)."""
     out = []
     for i, (f, v) in enumerate(points):
         low = [p for p in points[:i] if p[0] <= fit_max]
-        if len(low) < 2:
+        if len(low) < MIN_FIT_POINTS:
             out.append((f, v, 0.))
             continue
         a, b = line_fit(low)
@@ -64,12 +69,19 @@ def pick_cap(points, knee_pct=5., margin=3., fit_max=12., min_cap=4.):
     gradual, and reading it at whole steps moved the answer a step between
     two runs on the same filament, 11-03); None when the ramp never bent.
     cap is knee_flow less margin, down to the half, or None without a knee
-    (no limit found in the ramp)."""
+    (no limit found in the ramp). A single step over the line is not a
+    knee until the step after it is over as well (or the ramp ends there),
+    so one noisy step does not stop the ramp."""
     rows = excess_percent(points, fit_max)
     knee = None
     prev = None
-    for f, v, ex in rows:
+    for i, (f, v, ex) in enumerate(rows):
         if ex > knee_pct and prev is not None:
+            confirmed = (i + 1 >= len(rows)
+                         or rows[i + 1][2] > knee_pct)
+            if not confirmed:
+                prev = (f, ex)
+                continue
             pf, pex = prev
             if ex > pex:
                 knee = pf + (f - pf) * (knee_pct - pex) / (ex - pex)
