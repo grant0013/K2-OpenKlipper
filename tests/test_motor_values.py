@@ -57,6 +57,7 @@ class MotorLogCsvTest(unittest.TestCase):
         m = types.SimpleNamespace()
         with tempfile.TemporaryDirectory() as d:
             m.log_dir = os.path.join(d, "logs")
+            m._log_dir = lambda: m.log_dir
             log = {'indices': [proto.GET_POSITION, proto.GET_IQ, 0x1a],
                    'rows': [(10.5, 1000.25, 3.2, [1.5, 0.25, None]),
                             (10.6, 1000.35, 3.6, [1.6, None, 7.0])]}

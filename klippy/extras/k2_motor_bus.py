@@ -197,9 +197,9 @@ class K2MotorBus:
         self._reject_logged = 0.
         self.temps = {}
         self._temp_hot = set()
-        # MOTOR_LOG_START samples (next to the PA pressure logs by default)
-        self.log_dir = config.get(
-            'log_dir', '/mnt/UDISK/printer_data_mainline/config/pa_logs')
+        # MOTOR_LOG_START samples: next to the PA pressure logs by default
+        # (pa_pressure_log's output_dir, else <config dir>/pa_logs)
+        self.log_dir = config.get('log_dir', None)
         self.motor_log = None
         self.e_reported_addr = None
         self.calibration_warnings = []
@@ -439,13 +439,26 @@ class K2MotorBus:
                      self._describe_pins(self._read_wake_pins()))
 
     def e_xfer(self, addr, payload, timeout_ms=50):
-        """Send a frame on the extruder motor bus behind the nozzle MCU."""
+        """Send a frame on the extruder motor bus behind the nozzle MCU.
+
+        The bridge hands back whatever its receive buffer holds as soon as
+        there is something in it, so a reply that lands after the bridge
+        has answered sits there until the next request, which then gets
+        the previous reply (11-03: every MOTOR_VALUES read on E was one
+        request behind). Drain the buffer first, and when the read comes
+        back without a whole frame, collect the rest with a second read."""
         frame = self._build(addr, payload)
         # One query at a time: the safety watch and the temperature poll
         # both talk to this bus from reactor timers
         with self._e_lock:
+            self.e_send.send([self.e_oid, b'', 2])
             params = self.e_send.send([self.e_oid, frame, timeout_ms])
-        return frame, bytes(params['read'])
+            data = bytes(params['read'])
+            if proto.find_reply(data, addr, proto.request_func(
+                    addr, payload))[0] is None:
+                more = self.e_send.send([self.e_oid, b'', timeout_ms])
+                data += bytes(more['read'])
+        return frame, data
 
     # --- motor wake-up ---
     def _handle_ready(self):
@@ -851,15 +864,30 @@ class K2MotorBus:
             raise gcmd.error("Motor log is not running")
         self.reactor.unregister_timer(log['timer'])
         self.motor_log = None
-        base = self._write_motor_log(gcmd.get('NAME', 'motor_log'), log)
+        try:
+            base = self._write_motor_log(gcmd.get('NAME', 'motor_log'), log)
+        except OSError as e:
+            # A gcode error, not an internal one: that would shut Klipper
+            # down over a log file
+            raise gcmd.error("Motor log not written: %s" % (e,))
         gcmd.respond_info("Motor %s log: %d samples (%d with a missed "
                           "read) -> %s" % (log['motor'].upper(),
                                            len(log['rows']), log['misses'],
                                            base))
 
+    def _log_dir(self):
+        if self.log_dir:
+            return self.log_dir
+        pa_log = self.printer.lookup_object('pa_pressure_log', None)
+        if pa_log is not None and getattr(pa_log, 'out_dir', None):
+            return pa_log.out_dir
+        config_file = self.printer.get_start_args().get('config_file', '')
+        return os.path.join(os.path.dirname(config_file), 'pa_logs')
+
     def _write_motor_log(self, name, log):
-        os.makedirs(self.log_dir, exist_ok=True)
-        base = os.path.join(self.log_dir, name + '_motor.csv')
+        log_dir = self._log_dir()
+        os.makedirs(log_dir, exist_ok=True)
+        base = os.path.join(log_dir, name + '_motor.csv')
         labels = [proto.GET_LABELS.get(i, 'get%02x' % i)
                   for i in log['indices']]
         with open(base, 'w') as f:

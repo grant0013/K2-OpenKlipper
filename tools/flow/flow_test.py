@@ -37,6 +37,9 @@ try:
     g("CFS_FEED_START SLOT=%s CONFIRM=1" % SLOT)
     extrude(15, 5)
     print("FLOW RAMP (3 s per step):")
+    # The extruder servo's position, speed and iq current alongside the
+    # gauge (about 4 samples a second over the nozzle MCU bridge)
+    g("MOTOR_LOG_START MOTOR=e INTERVAL=0.05")
     g("PA_LOG_START")
     for flow in range(F0, F1 + 1, 2):
         mm = flow / AREA * 3.
@@ -44,7 +47,10 @@ try:
         extrude(mm, flow)
         print("  %2d mm3/s: commanded %.1f mm" % (flow, mm))
     g("PA_LOG_STOP NAME=%s" % NAME)
+    g("MOTOR_LOG_STOP NAME=%s" % NAME)
 finally:
+    try: g("MOTOR_LOG_STOP NAME=%s_aborted" % NAME)
+    except Exception: pass
     for s in ("M104 S0", "CFS_FEED_STOP", "CFS_PRELOAD ENABLE=1", "CFS_SLOT_APPLY SLOT=%s" % SLOT,
               "M106 S255", "NOZZLE_WIPE CONFIRM=1", "TEMPERATURE_WAIT SENSOR=extruder MAXIMUM=180",
               "NOZZLE_WIPE CONFIRM=1", "M107"):
