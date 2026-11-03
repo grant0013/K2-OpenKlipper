@@ -191,6 +191,8 @@ class K2MotorBus:
             raise config.error("temp_poll_interval must be 0 or at least 5")
         self.temp_warn = config.getfloat('temp_warn', 100., above=0.,
                                          maxval=proto.MCU_TEMP_MAX)
+        # Raw bus frames in the console (they always go to klippy.log)
+        self.console_frames = config.getboolean('console_frames', False)
         # Rejected replies by reason, plus retries and failed reads
         self.bus_errors = {'crc': 0, 'len': 0, 'addr': 0, 'func': 0,
                            'retries': 0, 'read_failures': 0}
@@ -992,17 +994,24 @@ class K2MotorBus:
                                      "check the axis, then power cycle"
                                      % (msg,))
                 gcmd.respond_raw("!! MOTOR_STALL_MODE: %s" % (msg,))
-        out = []
+        frames = []
         missing = []
+        confirmed = []
         for name, addr, ok, frame, resp in self.set_stall_mode(mode):
-            out.append("addr %02x: sent %s resp %s%s"
-                       % (addr, frame.hex(' '),
-                          resp.hex(' ') if resp else '(none)',
-                          " (confirmed)" if ok else ""))
-            if not ok:
-                missing.append("%s (%02x)" % (name.upper(), addr))
-        gcmd.respond_info("MOTOR_STALL_MODE DATA=%d\n%s"
-                          % (mode, "\n".join(out)))
+            frames.append("addr %02x: sent %s resp %s%s"
+                          % (addr, frame.hex(' '),
+                             resp.hex(' ') if resp else '(none)',
+                             " (confirmed)" if ok else ""))
+            (confirmed if ok else missing).append(
+                name.upper() if ok else "%s (%02x)" % (name.upper(), addr))
+        logging.info("k2_motor_bus: MOTOR_STALL_MODE DATA=%d\n%s", mode,
+                     "\n".join(frames))
+        meaning = {1: "homing (a stall ends the move)",
+                   2: "print protection (a stall or tracking error stops "
+                      "the print)"}.get(mode, "mode %d" % mode)
+        gcmd.respond_info("Motors %s: stall mode %d, %s%s" % (
+            ", ".join(confirmed) or "none", mode, meaning,
+            ("\n" + "\n".join(frames)) if self.console_frames else ""))
         if missing and self.stall_mode_check != 'off':
             msg = ("stall mode %d not confirmed by motor %s"
                    % (mode, ", ".join(missing)))
@@ -1019,9 +1028,13 @@ class K2MotorBus:
             if d is None:
                 lines.append("%s: no valid reply" % (name.upper(),))
                 continue
-            lines.append("%s: %s (status %02x, error %08x, warning %08x)"
-                         % (name.upper(), proto.describe_protection(d),
-                            d['status'], d['error_code'], d['warning_code']))
+            codes = ""
+            if d['status'] or d['error_code'] or d['warning_code'] \
+                    or self.console_frames:
+                codes = " (status %02x, error %08x, warning %08x)" % (
+                    d['status'], d['error_code'], d['warning_code'])
+            lines.append("%s: %s%s" % (name.upper(),
+                                       proto.describe_protection(d), codes))
         gcmd.respond_info("Motor protection\n%s" % ("\n".join(lines),))
 
     def cmd_MOTOR_CLEAR_FAULTS(self, gcmd):

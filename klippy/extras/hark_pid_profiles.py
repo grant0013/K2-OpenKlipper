@@ -21,12 +21,21 @@ from . import heaters, pid_calibrate
 
 
 class _PIDConfig:
-    # The three getfloat() calls mainline ControlPID makes on its config
+    # The getfloat() calls ControlPID makes on its config: the three gains,
+    # and (since the high-temperature set, 11-03) optional ones that must
+    # come back as their default rather than raise (a KeyError here shut
+    # Klipper down at a print start through CFS_SLOT_APPLY)
+    _MISSING = object()
+
     def __init__(self, kp, ki, kd):
         self.values = {'pid_Kp': kp, 'pid_Ki': ki, 'pid_Kd': kd}
 
-    def getfloat(self, option, *args, **kwargs):
-        return self.values[option]
+    def getfloat(self, option, default=_MISSING, *args, **kwargs):
+        if option in self.values:
+            return self.values[option]
+        if default is not self._MISSING:
+            return default
+        raise KeyError(option)
 
 
 class HarkPIDProfiles:

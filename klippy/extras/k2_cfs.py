@@ -481,6 +481,8 @@ class K2CFS:
         # colour change pauses the print, as Prusa's MMU3 retries silently
         self.load_retries = config.getint(
             'load_retries', 2, minval=0, maxval=5)
+        # Raw bus frames in console messages (they always go to klippy.log)
+        self.console_frames = config.getboolean('console_frames', False)
         # Per-slot counts (loads, failed attempts, paused changes, clogs,
         # runouts, cut misses), kept across restarts
         config_file = self.printer.get_start_args().get('config_file', '')
@@ -1191,6 +1193,16 @@ class K2CFS:
     def _dec_raw(self, p):
         return {'raw': p.hex(' ')}
 
+    def _frames_note(self, frames):
+        """Raw frames for a console message: logged always, shown only with
+        console_frames: True."""
+        frames = [f for f in frames if f]
+        if frames:
+            logging.info("k2_cfs: frames %s", " | ".join(frames))
+        if self.console_frames and frames:
+            return "\n" + "\n".join(frames)
+        return ""
+
     # --- gcode ---
     def _run_query(self, name):
         payload, dec = self.QUERIES[name]
@@ -1281,14 +1293,22 @@ class K2CFS:
                                  busy, self.busy_retries)
                     reactor.pause(reactor.monotonic() + self.busy_retry_delay)
                     continue
+                logging.info("k2_cfs: %s failed: sent %s resp %s", name,
+                             frame.hex(' '), resp.hex(' '))
                 raise CFSStatusError(
-                    "%s failed: box status %s (sent %s resp %s)"
-                    % (name, status_label(p[0]), frame.hex(' '),
-                       resp.hex(' ')), p[0])
+                    "%s failed: box status %s%s"
+                    % (name, status_label(p[0]),
+                       self._frames_note([frame.hex(' '), resp.hex(' ')])),
+                    p[0])
+            logging.info("k2_cfs: %s: no usable reply: sent %s resp %s",
+                         name, frame.hex(' '),
+                         resp.hex(' ') if resp else '(none)')
             raise RuntimeError(
-                "%s failed: sent %s resp %s"
-                % (name, frame.hex(' '),
-                   resp.hex(' ') if resp else '(none)'))
+                "%s failed: %s%s"
+                % (name, "the box did not answer" if not resp
+                   else "the box's answer made no sense",
+                   self._frames_note([frame.hex(' '),
+                                      resp.hex(' ') if resp else '(none)'])))
 
     def _nozzle_has_filament(self):
         sensor = self.printer.lookup_object(
@@ -1449,7 +1469,7 @@ class K2CFS:
         })
         gcmd.respond_info(
             "CFS feed armed for slot %s\n%s"
-            % (slot, "\n".join(sent)))
+            % (slot, self._frames_note(sent)))
 
     def cmd_CFS_FEED_START(self, gcmd):
         if not self.fitted:
@@ -1497,7 +1517,7 @@ class K2CFS:
             'box_mode': 'idle',
         })
         gcmd.respond_info(
-            "CFS feed disarmed\n%s" % "\n".join(sent))
+            "CFS feed disarmed%s" % self._frames_note(sent))
 
     def _require_safe_motion(self, gcmd, command):
         self._require_actuation(gcmd)
