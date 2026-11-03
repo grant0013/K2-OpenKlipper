@@ -36,6 +36,38 @@ HEADER = """\
 
 # (description, old, new). old must occur exactly once in the K2 config.
 CHANGES = [
+    # --- bed power ---
+    ("bed mains voltage: the K2 Plus bed has one PID set and full power in\n"
+     "Creality's config (no 110 V / 220 V split), so hark_bed_power and\n"
+     "its first-print check are left out",
+     """[hark_bed_power]
+#voltage: auto
+#power_220: 0.5
+#power_110: 1.0
+#pid_220: 18.578, 0.152, 298.489
+#pid_110: 52.98, 0.849, 826.491
+#slope_divide: 0.35
+
+# Off: printer-overrides.cfg  [gcode_macro _BED_POWER_AUTO]
+#                              variable_on_first_print: 0
+[gcode_macro _BED_POWER_AUTO]
+variable_on_first_print: 1
+gcode:
+    {% set bp = printer.hark_bed_power %}
+    {% if printer["gcode_macro _BED_POWER_AUTO"].on_first_print|int
+          and bp.setting == "auto" and not bp.calibrated
+          and printer.heater_bed.temperature < 60 %}
+        _STAGE TEXT="Checking the bed heater's mains voltage (once, about 2 min)"
+        BED_POWER_CALIBRATE
+    {% endif %}
+""", """# (K2 Plus: no 110 V / 220 V bed sets in Creality's config, so no
+# hark_bed_power here)
+[gcode_macro _BED_POWER_AUTO]
+variable_on_first_print: 0
+gcode:
+    RESPOND MSG="Bed power check: not on the K2 Plus (one bed set)"
+"""),
+
     # --- axes ---------------------------------------------------------
     ("X travel (stock 352.5)",
      """position_endstop: 262
