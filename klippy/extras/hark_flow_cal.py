@@ -85,8 +85,15 @@ class HarkFlowCal:
         # pressure had not relaxed, and a 2 s step is short for 6 mm^3/s
         self.flows = config.getfloatlist(
             'flows', (8., 10., 12., 14., 16., 18., 20., 22., 24.))
-        self.step_time = config.getfloat('step_time', 2., minval=0.8,
+        # 3 s: with 2 s steps the pressure at 16+ mm^3/s was still climbing
+        # when the step ended, so the ramp bent two steps late (11-03)
+        self.step_time = config.getfloat('step_time', 3., minval=0.8,
                                          maxval=10.)
+        # The first step starts from no pressure at all: give it this much
+        # longer before its window opens (the second run read 8 at 60% of
+        # its line)
+        self.first_step_extra = config.getfloat('first_step_extra', 2.,
+                                                minval=0.)
         # Gauge window: from settle after the step starts to just before it
         # ends
         self.settle = config.getfloat('settle', 0.9, minval=0.2)
@@ -176,16 +183,17 @@ class HarkFlowCal:
             if rest is None:
                 raise gcmd.error("No gauge samples: is the strain gauge "
                                  "streaming?")
-            for flow in flows:
+            for i, flow in enumerate(flows):
                 velocity = flow / area
+                extra = self.first_step_extra if i == 0 else 0.
                 start = toolhead.get_last_move_time()
-                E += velocity * step_time
+                E += velocity * (step_time + extra)
                 toolhead.move([X, Y, Z, E], velocity)
                 toolhead.wait_moves()
                 end = toolhead.get_last_move_time()
                 self._wait_samples(state, end)
-                window = self._window(state['samples'], start + settle,
-                                      end - 0.05)
+                window = self._window(state['samples'],
+                                      start + settle + extra, end - 0.05)
                 level = median(window)
                 if level is None:
                     gcmd.respond_info("Flow %.0f: no gauge samples in the "
