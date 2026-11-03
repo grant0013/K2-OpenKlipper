@@ -1,10 +1,13 @@
-# K2 Plus beta (F008)
+# K2 Plus (F008): first run, step by step
 
-K2 OpenKlipper was developed on a K2 Combo (F021). This branch adds a K2 Plus
-config. **It has not run on a real K2 Plus yet.** Everything below is built
-from Creality's own K2 Plus 1.1.7.0 configuration and from Jacob10383's K2
-Plus firmware, and checked offline (Klipper loads the config and builds the
-board commands), but the first real run is yours. Go step by step, stay next
+K2 OpenKlipper was developed on a K2 Combo (F021). The K2 Plus config is
+built from Creality's own K2 Plus 1.1.7.0 configuration and from Jacob10383's
+K2 Plus firmware, and since 31 October 2026 it has run on a real K2 Plus
+(board CR0CN240319C13, no CFS): homing, Z tilt, probing, the chamber heater
+and full prints, with the fixes from that testing in every release since
+v0.4.4. This guide is still the way to do a first run: it checks each part
+of the printer on its own before anything prints, so a difference between
+your machine and the tested one shows up early. Go step by step, stay next
 to the printer, and keep the power switch in reach.
 
 Uninstalling puts the printer back to stock at any point:
@@ -13,7 +16,7 @@ Uninstalling puts the printer back to stock at any point:
 
 ## What is different from the K2
 
-| | K2 | K2 Plus beta |
+| | K2 | K2 Plus |
 |---|---|---|
 | Travel | X 262, Y 296.5, Z 270 | X 352.5, Y -6.2 to 400, Z 360 |
 | Z motors | one, geared 64:20, TMC2208 | two closed-loop motors (Z left, Z1 right) on the motor bus, direct 8 mm lead screws |
@@ -27,19 +30,21 @@ Uninstalling puts the printer back to stock at any point:
 The config is generated from the K2 one by `tools/k2plus/make_k2plus_cfg.py`
 (every change is listed there with its source).
 
-## Known gaps in the beta
+## Known gaps
 
-- **Bottom switch height** is `position_endstop: 349.5`: the first K2 Plus
+- **Bottom switch height** is `position_endstop: 349.5`: the tested K2 Plus
   measured 349.85 / 350.10 and Creality's config puts the bottom at 350, less
   a little (too low is safe: the bed stops short and the nozzle tap fails
   instead of touching). Step 6 checks it on your printer.
-- **Rear cleaning strip scrub is off** (`scrub_strip: False`) until step 7
-  confirms where the strip is.
+- **Rear cleaning strip scrub is off** (`scrub_strip: False`): the strip
+  positions were confirmed on the tested printer, but the scrub itself has
+  not been run on a K2 Plus. Step 7 is where to try it.
 - Not ported yet: belt tension tool, Creality's per-motor gain change (stock
-  runs one X/Y motor at a lower position gain while printing; the beta leaves
-  the motor firmware default, which is what the K2 uses).
-- Untested on the Plus: Hark Screen, the camera, a CFS, the flow and retraction
-  test prints (they print centred at X130 Y130, which is still on the bed).
+  runs one X/Y motor at a lower position gain while printing; this config
+  leaves the motor firmware default, which is what the K2 uses).
+- Untested on the Plus: a CFS (the tested printer has none), the camera, the
+  flow and retraction test prints (they print centred at X130 Y130, which is
+  still on the bed).
 
 Supported layout: the installer checks `get_sn_mac.sh board` and
 `structure_version` and only installs on boards CR0CN240110C10, CR0CN240319C13
@@ -60,7 +65,7 @@ Send the output.
 
 ## Step 2: install
 
-    OKL_REF=k2plus-beta OKL_K2PLUS_BETA=1 sh /tmp/install.sh
+    OKL_REF=k2plus-beta sh /tmp/install.sh
 
 It installs, starts Klipper and waits for the motors. Then open Mainsail at
 `http://PRINTER-IP:4409/`. Send the installer output whether it worked or not.

@@ -13,8 +13,8 @@
 #
 # Environment: OKL_REF=<tag or branch> to install something other than the
 # latest release, OKL_FORCE=1 to install on a model other than the K2 / K2
-# Combo (F021), at your own risk, OKL_K2PLUS_BETA=1 to install the K2 Plus
-# (F008) beta config (docs/K2-PLUS-BETA.md), OKL_EXTRUDER=stock|dxc2 to answer the
+# Combo (F021) or the K2 Plus (F008; docs/K2-PLUS-BETA.md is its first-run
+# guide), at your own risk, OKL_EXTRUDER=stock|dxc2 to answer the
 # extruder question in advance, OKL_CFS=yes|no to fix whether a CFS is used
 # (default: found automatically at each start).
 set -eu
@@ -110,18 +110,12 @@ case "$MODEL" in
         echo "    K2 Plus board: ${BOARD:-unknown}   structure_version: ${STRUCT:-unknown}"
         case "$BOARD:$STRUCT" in
             CR0CN240110C10:0|CR0CN240319C13:0|CR0CN240319C14:0) ;;
-            *) [ "${OKL_FORCE:-0}" = 1 ] || die "this K2 Plus layout ($BOARD, structure $STRUCT) is not the one the beta config was written for; please send the check output to the developer" ;;
+            *) [ "${OKL_FORCE:-0}" = 1 ] || die "this K2 Plus layout ($BOARD, structure $STRUCT) is not the one the K2 Plus config was written for; please send the check output to the developer" ;;
         esac
-        # An update of a printer already running the K2 Plus config (its boot
-        # hook names it) was opted in at install: the Mainsail/touchscreen
-        # Update button runs install.sh --update without the flag
-        if [ "$MODE" = update ] && grep -q "boot-mainline.*mainline_stage2_k2plus\.cfg" /etc/rc.local 2>/dev/null; then
-            OKL_K2PLUS_BETA=1
-        fi
-        if [ "$MODE" != check ]; then
-            [ "${OKL_K2PLUS_BETA:-0}" = 1 ] || [ "${OKL_FORCE:-0}" = 1 ] || die "the K2 Plus config is a BETA that has not run on a real K2 Plus yet. Read docs/K2-PLUS-BETA.md, then run with OKL_K2PLUS_BETA=1"
-            echo "    WARNING: K2 Plus BETA config (untested on a real K2 Plus)"
-        fi
+        # Tested on a real K2 Plus (board CR0CN240319C13, no CFS) from
+        # 31 Oct 2026: homing, probing, chamber heater, full prints. The old
+        # OKL_K2PLUS_BETA=1 opt-in is no longer needed and is ignored.
+        echo "    K2 Plus config (docs/K2-PLUS-BETA.md is the first-run guide)"
         STAGE_CFG=mainline_stage2_k2plus.cfg ;;
     F012)
         [ "${OKL_FORCE:-0}" = 1 ] || die "model $MODEL is untested (developed on the F021 K2 / K2 Combo). OKL_FORCE=1 to try anyway"

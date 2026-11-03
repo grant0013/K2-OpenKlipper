@@ -48,7 +48,7 @@ earlier notes calling it a K2 Plus were wrong.
 
 ### Beta
 
-- validate on K2 Pro / K2 Plus units and more firmware revisions
+- validate on K2 Pro units and more firmware revisions (K2 Plus: done, one tester's printer, no CFS, from 31 Oct 2026)
 - publish CFS electrical interface findings
 - split CFS transport, device state, and K2 motion adapters
 - document a recovery-tested install and rollback flow

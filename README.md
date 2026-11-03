@@ -72,7 +72,7 @@ Optionally, Klipper can run on a separate PC over one USB cable
 | K2 / K2 Combo (F021) | Developed and tested here |
 | K2 without a CFS (rear spool) | Supported: found automatically at each start ([details](docs/INSTALL.md#printers-without-a-cfs)); tested on our K2 with the CFS unplugged |
 | K2 Pro (F012) | Same motor tuning and boards as the K2 in Creality's config; untested |
-| K2 Plus (F008) | Beta config on the `k2plus-beta` branch, not yet run on a real K2 Plus: see [docs/K2-PLUS-BETA.md](docs/K2-PLUS-BETA.md) |
+| K2 Plus (F008) | Supported: tested on a real K2 Plus without a CFS from 31 Oct 2026 (homing, Z tilt, probing, chamber heater, full prints, touchscreen). [docs/K2-PLUS-BETA.md](docs/K2-PLUS-BETA.md) is the step-by-step first run; a K2 Plus with a CFS is still untested |
 
 Earlier snapshots described the test machine as a K2 Plus; it is an F021 K2.
 
