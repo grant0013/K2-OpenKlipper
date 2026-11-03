@@ -48,7 +48,9 @@ OBJECTS = {
     "extruder": ["temperature", "target"],
     "heater_bed": ["temperature", "target"],
     "temperature_sensor chamber_temperature": ["temperature"],
-    "fan": ["speed"],
+    "fan": ["speed", "rpm"],
+    "heater_fan hotend_fan": ["speed", "rpm"],
+    "hark_fans": ["part", "hotend", "min_duty"],
     "fan_generic auxiliary_fan": ["speed"],
     "fan_generic exhaust_fan": ["speed"],
     "gcode_macro _CHAMBER_FAN": ["manual"],
@@ -1506,7 +1508,12 @@ class Screen:
             st.get("hark_chamber"),
             round((st.get("display_status", {}).get("progress")
                    or vs.get("progress") or 0) * 100),
-            round(st.get("fan", {}).get("speed", 0) * 100), round(z, 2), rem,
+            round(st.get("fan", {}).get("speed", 0) * 100),
+            round((st.get("fan", {}).get("rpm") or 0) / 50),
+            round(((st.get("heater_fan hotend_fan") or {}).get("rpm") or 0)
+                  / 50),
+            (st.get("heater_fan hotend_fan") or {}).get("speed"),
+            st.get("hark_fans"), round(z, 2), rem,
             st.get("k2_cfs"), st.get("hark_cfs_slots"),
             st.get("filament_switch_sensor filament_sensor"),
             st.get("k2_motor_bus"), st.get("output_pin chamber_led"),
@@ -2907,11 +2914,20 @@ class Screen:
         self.text(d, (box[0] + 30, 80), "Fans", "m", anchor="lm")
         self.buttons = []
         auto = not (st.get("gcode_macro _CHAMBER_FAN") or {}).get("manual")
+        health = st.get("hark_fans") or {}
         y = 112
         for label, index, obj in FANS:
-            speed = round(float((st.get(obj) or {}).get("speed", 0)) * 100)
+            fan = st.get(obj) or {}
+            speed = round(float(fan.get("speed", 0)) * 100)
             self.text(d, (box[0] + 30, y + 26), label, "s", "muted",
                       anchor="lm")
+            if index == 0:
+                # Tachometer: true at full speed only (the fan is powered
+                # through its PWM), so the rpm shows then, else the health
+                # record's usual
+                text, color = self.fan_rpm_text(fan, health.get("part"))
+                self.text(d, (box[0] + 30, y + 46), text, "xs", color,
+                          anchor="lm", width=150)
             steps = list(FAN_STEPS)
             opts = [("%d%%" % v if v else "Off", ("fan_to", index, v),
                      abs(speed - v) < 13 and not (index == 1 and auto))
@@ -2927,11 +2943,45 @@ class Screen:
                 x = bx + i * (bw + 8)
                 self.button(d, (x, y, x + bw, y + 52), text, action,
                             "accent" if on else "muted", True, "xs")
-            y += 70
-        self.text(d, (W // 2, y + 14), "The slicer may change them again"
+            y += 64
+        # The hotend fan runs itself (on above 50C, slowed while probing):
+        # its rpm and health only
+        hot = st.get("heater_fan hotend_fan") or {}
+        self.text(d, (box[0] + 30, y + 10), "Hotend fan", "s", "muted",
+                  anchor="lm")
+        hot_speed = float(hot.get("speed", 0) or 0)
+        state = ("off" if hot_speed <= 0 else
+                 "slowed for probing" if hot_speed < 0.99 else "running")
+        text, color = self.fan_rpm_text(hot, health.get("hotend"))
+        self.text(d, (box[0] + 190, y + 10), "%s · %s" % (state, text),
+                  "xs", color, anchor="lm")
+        y += 36
+        self.text(d, (W // 2, y + 10), "The slicer may change them again"
                   " at its next fan command", "xs", "muted", anchor="mm")
         self.button(d, (W // 2 - 110, 352, W // 2 + 110, 416), "Done",
                     ("box_close",), "accent", True, "m")
+
+    @staticmethod
+    def fan_rpm_text(fan, record):
+        """(text, colour): '7496 rpm' at full speed, else the usual from
+        the health record; a slowed or stopped verdict from the last
+        FAN_CHECK colours it."""
+        rpm = fan.get("rpm")
+        speed = float(fan.get("speed", 0) or 0)
+        record = record or {}
+        last = record.get("last") or {}
+        usual = record.get("usual")
+        if rpm is not None and speed >= 0.99:
+            text = "%d rpm" % round(rpm)
+        elif usual:
+            text = "usually %d rpm" % round(usual)
+        else:
+            text = "no tachometer" if rpm is None else "rpm at full speed"
+        if last.get("verdict") == "slow":
+            return text + ", slow", "warn"
+        if last.get("verdict") == "stopped":
+            return text + ", not turning", "error"
+        return text, "muted"
 
     def draw_storage_row(self, d, body, y, rh, st):
         x0, y0, x1, y1 = body

@@ -494,6 +494,26 @@ fi
 cp -a "$BUILD/harkcam" /mnt/UDISK/harkcam
 chmod 755 /mnt/UDISK/harkscreen/start.sh /mnt/UDISK/harkcam/start.sh
 
+# Boot animation: the frames the panel shows while the printer boots, before
+# the touchscreen app starts. Ours (harkscreen/bootanim, the Hark Tech badge
+# and "K2 OpenKlipper") replaces Creality's; the stock set is kept at
+# /mnt/UDISK/mainline-backups/boot-play-stock.tar and uninstall.sh puts it
+# back. OKL_BOOTANIM=keep leaves whatever is there; OKL_BOOTANIM=/a/folder
+# installs your own (made with tools/bootanim/make_bootanim.py, see
+# docs/SCREEN-CUSTOMISE.md). boot.mp3 is never touched.
+BOOTANIM="${OKL_BOOTANIM:-$BUILD/harkscreen/bootanim}"
+if [ "$BOOTANIM" != keep ] && [ -f "$BOOTANIM/desc.txt" ] && [ -d /usr/res/boot-play ]; then
+    mkdir -p /mnt/UDISK/mainline-backups
+    if [ ! -f /mnt/UDISK/mainline-backups/boot-play-stock.tar ] \
+            && ! grep -q "K2 OpenKlipper" /usr/res/boot-play/desc.txt 2>/dev/null; then
+        tar -cf /mnt/UDISK/mainline-backups/boot-play-stock.tar -C /usr/res boot-play
+    fi
+    rm -rf /usr/res/boot-play/part0 /usr/res/boot-play/part1
+    cp -a "$BOOTANIM/part0" "$BOOTANIM/part1" /usr/res/boot-play/
+    cp "$BOOTANIM/desc.txt" /usr/res/boot-play/desc.txt
+    echo "    boot animation: $( [ "$BOOTANIM" = "$BUILD/harkscreen/bootanim" ] && echo "K2 OpenKlipper (OKL_BOOTANIM=keep keeps the printer's own)" || echo "$BOOTANIM" )"
+fi
+
 # Nginx: validate the new config before it goes live
 cp "$BUILD/system-nginx.conf" /etc/nginx/nginx.conf.okl-new
 if ! nginx -t -c /etc/nginx/nginx.conf.okl-new >/dev/null 2>&1; then

@@ -202,15 +202,27 @@ and make sure `klipper-logo.png` is in the config folder.
 Made a theme you like? Share it: add `harkscreen/themes/<name>.cfg` and its
 logo in a pull request.
 
-## Boot animation (optional, advanced)
+## Boot animation
 
-The animation shown while the printer boots is Creality's, and the installer
-leaves it alone. `tools/bootanim/make_bootanim.py` builds one from your logo:
+The animation the panel shows while the printer boots (before the
+touchscreen app starts) is K2 OpenKlipper's own since v0.4.18: the Hark Tech
+badge lights up with its circuit traces, "K2 OpenKlipper" and
+harktech.co.uk. The installer keeps Creality's set at
+`/mnt/UDISK/mainline-backups/boot-play-stock.tar`, and `uninstall.sh` puts it
+back.
+
+To keep Creality's animation, install or update with `OKL_BOOTANIM=keep`.
+
+To show your own, build one from a logo (a square image; a round badge on a
+dark background looks best) and point the installer at the folder:
 
 ```sh
-python3 make_bootanim.py my-logo.png out/ [font.ttf] [background #RRGGBB] [accent #RRGGBB]
+python3 tools/bootanim/make_bootanim.py my-logo.png out/ --title "My printer" \
+    --subtitle "my-site.example" [--font F.ttf] [--bg #RRGGBB] [--accent #RRGGBB]
+OKL_BOOTANIM=/path/to/out sh install.sh --update
 ```
 
-Replacing `/usr/res/boot-play` is a change to the printer's system files:
-back up the stock folder first, and know that `uninstall.sh` does not restore
-it.
+`out/sheet.png` shows four frames to check. The folder holds `desc.txt`,
+`part0/` (played once, 3 s) and `part1/` (looped); the installer copies
+those over `/usr/res/boot-play` and never touches `boot.mp3`. To try a set
+without rebooting: `/sbin/boot-play boot`, then `killall boot-play`.

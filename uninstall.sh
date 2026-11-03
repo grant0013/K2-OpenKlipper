@@ -56,6 +56,11 @@ if [ -f "$BACKUP/stock-moonraker-was-enabled" ]; then
 fi
 /etc/init.d/nginx reload >/dev/null 2>&1 || true
 /etc/init.d/app restart >/dev/null 2>&1 || true
+# Creality's boot animation back, if install.sh replaced it
+if [ -f /mnt/UDISK/mainline-backups/boot-play-stock.tar ]; then
+    rm -rf /usr/res/boot-play/part0 /usr/res/boot-play/part1
+    tar -xf /mnt/UDISK/mainline-backups/boot-play-stock.tar -C /usr/res
+fi
 
 if [ "$PURGE" = 1 ]; then
     say "Deleting the open-stack files and settings"
