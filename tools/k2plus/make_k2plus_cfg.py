@@ -509,6 +509,15 @@ tachometer_ppr: 2
 [hark_chamber]
 enable: True
 
+# K2 Plus automatic belt tensioners (stock [belt_mdl mdlx]/[belt_mdl mdly]):
+# a motorised slider with a strain gauge on each belt, answering on the
+# motor bus at 0x21 (X) and 0x22 (Y). BELT_TENSION_STATUS reads them;
+# BELT_TENSION CONFIRM=1 is stock's automatic tensioning (140 N, as
+# Creality's BELT_TENSION macro). docs/K2-PLUS-BETA.md step 10.
+[k2_belt_tension]
+#target: 140
+#tolerance: 0.15
+
 # K2 Plus beta: visit the chute, brush, cutter and strip positions slowly
 # (20 mm/s, 3 s at each) and say where the nozzle is. Nothing extrudes, wipes
 # or cuts. Watch the toolhead; KZ / power off if anything is about to hit.

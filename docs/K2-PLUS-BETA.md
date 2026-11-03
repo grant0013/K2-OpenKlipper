@@ -200,6 +200,31 @@ it heats and the chamber should climb steadily. `CHAMBER_HEAT TARGET=0` to
 stop. If anything smells hot, the fan is silent or the console shows
 `!! Chamber heater off`, stop and send the output.
 
+## Step 10: belt tension (automatic tensioners)
+
+The K2 Plus has a motorised tensioner with a strain gauge on each belt.
+Creality's firmware tightens both to 140 N from the screen; ours does the
+same over the motor bus. First just read them:
+
+    BELT_TENSION_STATUS
+
+Each belt answers with its tension in newtons, "ok" when it is within 15%
+of 140 N, its slider position and the module's firmware. "did not answer"
+means the module is not on the bus at 0x21/0x22 (send the output); "not
+calibrated" means the module's own two-point gauge calibration is missing
+(Creality sets it at the factory; `BELT_TENSION_CALIBRATE` redoes it with a
+belt tension gauge).
+
+If a belt is out of range:
+
+    BELT_TENSION CONFIRM=1
+
+homes X and Y, parks at the back, frees the motors, tightens each belt to
+140 N (it only ever tightens, as stock does), runs the head 200 mm forward
+and back to settle the belt, tightens again, and reports. Home afterwards.
+`AXES=X` or `AXES=Y` does one belt; `TARGET=` changes the newtons. This has
+not run on a real K2 Plus yet: stay by the printer and send the output.
+
 ## Between prints
 
 - **Cancel** works like stock: heaters off, the nozzle lifts and parks, and
