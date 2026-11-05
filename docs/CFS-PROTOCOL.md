@@ -4,8 +4,11 @@ Portions adapted from Jacob10383's K2 Plus custom firmware
 (https://github.com/Jacob10383/k2-plus-custom-firmware, extras/box.py and
 extras/box_protocol.py), GPLv3. Addressing, bootloader and flashing notes
 cross-checked against Lamar1007's CFSTool
-(https://github.com/Lamar1007/CFSTool, PROTOCOL.md and cfstool.py, MIT),
-an independent reverse-engineering pass from the K1 side.
+(https://github.com/Lamar1007/CFSTool, PROTOCOL.md and cfstool.py; GitHub
+lists it as MIT, its author describes it as GPLv3), an independent
+reverse-engineering pass from the K1 side, and his notes in Discussion #1
+(5 Nov 2026). He compared live K2 payloads with a K1 dump (`box_wrapper`):
+every command byte matches, so the K1 and K2 run the same CFS command layer.
 
 These findings describe the CFS connected to the development Creality K2 Plus.
 They are sufficient for the current K2 integration, but not yet a portable
@@ -96,7 +99,10 @@ nozzle sensor sees filament and the hub sensor (`ff 08 01`) shows that slot
   and reads the first byte as a device count. With one box the readings
   agree; a second box would settle it.
 - **Multiple boxes.** His firmware addresses up to four boxes (1-4) through
-  `a0`/`a1`. This printer has one box at address 1 and the driver keeps that.
+  `a0`/`a1`, and Lamar1007 confirms it from the K1 side: boxes chain on the
+  bus at `0x01`-`0x04`, Creality's `auto_addr` assigns them at startup, and
+  Creality numbers the slots T1A-T4D, i.e. T1-T16. This printer has one box
+  at address 1 and the driver keeps that.
 
 ## Addressing and cold boot
 
@@ -119,9 +125,11 @@ found the same frames independently on a K1.
   wrong one gets no answer.
 - `cfs_uniid` in `[k2_motor_bus]` is tried before the discover broadcast;
   it is not needed.
-- Only one box is handled. Up to four (addresses 1-4) is how Jacob10383's
-  firmware uses `a0`/`a1`; collisions when several unaddressed boxes answer
-  one discover are not tested.
+- Only one box is handled. Up to four, chained at addresses `0x01`-`0x04`,
+  is how Creality, Jacob10383's firmware and the K1 side use `a0`/`a1`;
+  Creality's slot names run T1A-T4D (T1-T16) with the usual A-D masks in
+  each box. Collisions when several unaddressed boxes answer one discover
+  are not tested.
 
 ## Bootloader and flashing (CFSTool, K1; not used here)
 
@@ -136,10 +144,12 @@ verified on real hardware from 1.1.3 to 1.5.0. Summary of its notes:
   flash can be repeated), `01` request update, then the whole file length
   (4 bytes, little-endian), the file in chunks of at most 252 bytes, and
   `02` to start the application. Each step is acknowledged; up to 3 tries.
-- After a flash the box did not answer app-mode commands until it was
-  power-cycled (two users on K1). The start-app broadcast above, or a
-  discover and assign, may do the same without a power-cycle; not tried
-  after a flash.
+- After a flash the box does not answer on the bus until its power is cut
+  (two users on K1, and Lamar1007: it does not re-enumerate on a soft
+  reset, so it looks dead until power-cycled).
+- `SYSTEM_RESET` is command `25`. Over CAN (the K1's IAP path) the same `F7`
+  frame is sent wrapped, e.g. `cansend 0FE#F7FE04FF25A2FB`: `F7`, broadcast
+  `0xfe`, length 4, `ff 25 a2`, CRC `fb` (checked).
 - Firmware files are `<boot_ver>-<app_ver>.bin`, e.g.
   `cfs0_050_G32-cfs0_000_142.bin`. The `G30`/`G32` suffix is the hardware
   variant (the wrong one can brick the box), the last three digits of the
@@ -234,6 +244,14 @@ The current code should be separated into:
 It is acceptable for the currently gated commands but unsuitable for frequent
 background polling in a general Klipper deployment. A reactor-safe transport
 is a priority contribution.
+
+Lamar1007's `k1_cfs_bus.py` (a Klipper module on the K1, RS485 working, CAN
+a stub) does this, and he has offered it: the port stays non-blocking, it
+reads in small chunks and yields to the reactor between reads, resyncs on
+the `F7` preamble (bytes before it are dropped), hands a frame on only once
+the whole length has arrived, and drops it early when the length byte
+cannot be right. A half frame or bus noise then never stalls Klipper. Its
+framing matches the K2 motor frames (`f7 81 04 00 11 01 1d`).
 
 ## Status codes, stages and recovery (v0.2.0)
 
