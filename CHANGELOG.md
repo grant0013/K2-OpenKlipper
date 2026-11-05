@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.4.19-alpha.1 (2026-11-05)
 
 - **Print a file from the touchscreen** (asked for in GitHub issue #3).
   The idle Status page has a Print a file button: the print files newest

@@ -15,6 +15,11 @@ the framebuffer and talks to Moonraker.
   print, **Print again** opens the same file's details (clear the bed
   first) and **Other file** the list. Starting goes through Moonraker
   (`/printer/print/start`); a refusal is shown under the preview.
+
+  | | |
+  | --- | --- |
+  | ![Status page with Print a file](img/screen/print-a-file-1-status.png) | ![The file list](img/screen/print-a-file-2-list.png) |
+  | ![A file's details and Print](img/screen/print-a-file-3-detail.png) | ![A finished print: Print again or Other file](img/screen/print-a-file-4-finished.png) |
 - CFS slot sheet: edit the filament record, Load & purge, Purge, Unload, and
   **Calibrate PA** for the loaded slot.
 - Wi-Fi selection with an on-screen keyboard, through `wpa_supplicant`'s
