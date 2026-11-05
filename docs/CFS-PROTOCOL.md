@@ -95,9 +95,11 @@ nozzle sensor sees filament and the hub sensor (`ff 08 01`) shows that slot
 - **`00 a2`.** We call it BOX_STATE. Jacob10383 calls it AUTO_QUERY, part of
   the address protocol (`a0` assign, `a1` discover, `a2` query): the reply
   is device type (1 = CFS), mode (0 app, 1 loader) and the 12-byte UniID,
-  which matches our `flags` and `uniid` fields. CFSTool sends it as `ff a2`
-  and reads the first byte as a device count. With one box the readings
-  agree; a second box would settle it.
+  which matches our `flags` and `uniid` fields. Lamar1007's two-box test on
+  a K1 settled the first byte: boxes `0x01` and `0x02` both answer
+  `00 a2 01 00 <uniid>` to `ff a2`, so it is a device type, not a count.
+  Each box reports only itself: `ff a2` broadcast to `0xfe` gets no reply,
+  and `ff 14` gives each box's own version and serial.
 - **Multiple boxes.** His firmware addresses up to four boxes (1-4) through
   `a0`/`a1`, and Lamar1007 confirms it from the K1 side: boxes chain on the
   bus at `0x01`-`0x04`, Creality's `auto_addr` assigns them at startup, and
