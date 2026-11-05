@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- **Fix: watching the camera could stop a print** (GitHub issue #4,
+  measured by nur00 on a K2 Plus). harkcam sent 720p at 15 fps to every
+  viewer: about 1.3 MB/s each with the chamber light on, which slowed the
+  printer's network until the toolhead board missed its moves (`MCU
+  'nozzle_mcu' shutdown: Stepper too far in past`); two viewers took the
+  network down. The camera now runs at 10 fps and every viewer shares that
+  one budget (streams and snapshots together), so a second tab halves each
+  tab's frame rate instead of doubling the data. At most 2 streams stay
+  open; a new one closes the oldest, so Mainsail's or Fluidd's fullscreen
+  camera never comes up blank. Size, frame rate and the stream cap are in
+  `harkcam.cfg` (new, editable in Mainsail); an update restarts a running
+  camera. Tests in tests/test_harkcam.py. Not yet run on a printer.
+
 ## v0.4.18-alpha.2 (2026-11-03)
 
 - **Fix: a CFS print start shut Klipper down on v0.4.18-alpha.1.** Applying

@@ -1,0 +1,16 @@
+# Hark Cam settings (chamber camera stream on :8080, Mainsail's /webcam/).
+# Run "sh /mnt/UDISK/harkcam/start.sh" over SSH or reboot after a change.
+#
+# The printer's WiFi is the limit: one 720p frame is about 85 KB with the
+# chamber light on, so every extra frame a second is about 85 KB/s more.
+# All viewers share one frame budget, so two open tabs get half each.
+
+# 1280x720, 800x600 or 640x480
+size: 1280x720
+
+# Frames a second for all viewers together, 1 to 15. 10 is safe while
+# printing; 15 slowed the printer's network enough to stop a print.
+fps: 10
+
+# Streams open at once (1 to 4). A new one closes the oldest.
+max_streams: 2

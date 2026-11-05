@@ -37,12 +37,30 @@ Creality serves it through its own WebRTC apps, which Mainsail cannot use.
 `harkcam/harkcam.py` stops those and serves the camera's own MJPEG stream
 with no re-encoding:
 
-- `ffmpeg -f v4l2 -input_format mjpeg -video_size 1280x720 -framerate 15
+- `ffmpeg -f v4l2 -input_format mjpeg -video_size 1280x720 -framerate 10
   -i /dev/video0 -c:v copy -f mjpeg pipe:1`, split into frames
 - `http://<printer>:8080/?action=stream` and `/?action=snapshot`, the same
   URLs as mjpg-streamer, so Mainsail, Obico-style AI detectors and the like
   work as-is
 - about 5% CPU
+
+The printer's WiFi is the limit, not the CPU. A 720p frame is about 85 KB
+with the chamber light on, so 15 fps to one viewer was about 1.3 MB/s and
+pushed ping to about 1 s; with two viewers the network stopped answering,
+and a print stopped with `Stepper too far in past` (issue #4). So:
+
+- **10 fps shared by all viewers.** Streams and snapshots draw on one frame
+  budget, so two open tabs get 5 fps each and the data sent stays the same.
+- **At most 2 streams.** A new stream closes the oldest, so switching to a
+  fullscreen camera page never comes up blank.
+- `printer_data_mainline/config/harkcam.cfg` (editable in Mainsail) sets
+  `size` (1280x720, 800x600, 640x480), `fps` (1 to 15) and `max_streams`
+  (1 to 4). Run `sh /mnt/UDISK/harkcam/start.sh` or reboot after a change.
+  `fps: 5` or `size: 640x480` leaves more room on a weak WiFi signal.
+
+Creality's own camera path (`cam_app` + `webrtc_local` on :8000) sends
+H.264 at about 51 KB/s per viewer, far lighter than MJPEG, but Mainsail and
+Fluidd cannot show it yet. That is the longer-term fix.
 
 nginx proxy for the Mainsail server block:
 

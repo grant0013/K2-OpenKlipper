@@ -493,6 +493,16 @@ if grep -q "^timezone: uk$" "$CONF/harkscreen.cfg" 2>/dev/null \
 fi
 cp -a "$BUILD/harkcam" /mnt/UDISK/harkcam
 chmod 755 /mnt/UDISK/harkscreen/start.sh /mnt/UDISK/harkcam/start.sh
+# Camera settings (size, frame rate, viewer cap), editable in Mainsail. An
+# existing harkcam.cfg is kept.
+if [ ! -f "$CONF/harkcam.cfg" ]; then
+    cp "$BUILD/harkcam/harkcam.cfg.example" "$CONF/harkcam.cfg"
+    echo "    harkcam.cfg: camera at 10 fps shared by all viewers (was 15 each)"
+fi
+# A camera already running picks up the new streamer now, not at the next boot
+if [ -f /tmp/harkcam.pid ] && kill -0 "$(cat /tmp/harkcam.pid)" 2>/dev/null; then
+    sh /mnt/UDISK/harkcam/start.sh >/dev/null 2>&1 && echo "    camera restarted"
+fi
 
 # Boot animation: the frames the panel shows while the printer boots, before
 # the touchscreen app starts. Ours (harkscreen/bootanim, the Hark Tech badge
