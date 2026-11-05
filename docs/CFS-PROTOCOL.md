@@ -2,7 +2,10 @@
 
 Portions adapted from Jacob10383's K2 Plus custom firmware
 (https://github.com/Jacob10383/k2-plus-custom-firmware, extras/box.py and
-extras/box_protocol.py), GPLv3.
+extras/box_protocol.py), GPLv3. Addressing, bootloader and flashing notes
+cross-checked against Lamar1007's CFSTool
+(https://github.com/Lamar1007/CFSTool, PROTOCOL.md and cfstool.py, MIT),
+an independent reverse-engineering pass from the K1 side.
 
 These findings describe the CFS connected to the development Creality K2 Plus.
 They are sufficient for the current K2 integration, but not yet a portable
@@ -45,9 +48,10 @@ Payload bytes exclude the frame preamble, address, length, and CRC.
 | `FILAMENT_SENSOR` | `ff 08 00` | per-slot filament state |
 | (hub sensor) | `ff 08 01` | slot whose filament is in the hub |
 | `HARDWARE_STATUS` | `ff 15` | raw hardware status |
-| `VERSION_SN` | `ff 14` | firmware/version identity data |
+| `VERSION_SN` | `ff 14` | three ASCII version digits then the serial (`150...` = 1.5.0); CFSTool decodes it the same way |
 | `MEASURING_WHEEL` | `ff 0e 01` | hub wheel, big-endian float mm |
 | (RFID records) | `ff 02 <mask>` | ASCII `A:<40 chars>;B:...;` |
+| `COMMUNICATION_TEST` | `ff 55` | plain acknowledge (CFSTool); not used by the driver |
 
 Some decoders are confirmed live; others remain provisional. Check the
 comments in `klippy/extras/k2_cfs.py` before relying on a field.
@@ -88,9 +92,65 @@ nozzle sensor sees filament and the hub sensor (`ff 08 01`) shows that slot
 - **`00 a2`.** We call it BOX_STATE. Jacob10383 calls it AUTO_QUERY, part of
   the address protocol (`a0` assign, `a1` discover, `a2` query): the reply
   is device type (1 = CFS), mode (0 app, 1 loader) and the 12-byte UniID,
-  which matches our `flags` and `uniid` fields.
+  which matches our `flags` and `uniid` fields. CFSTool sends it as `ff a2`
+  and reads the first byte as a device count. With one box the readings
+  agree; a second box would settle it.
 - **Multiple boxes.** His firmware addresses up to four boxes (1-4) through
   `a0`/`a1`. This printer has one box at address 1 and the driver keeps that.
+
+## Addressing and cold boot
+
+The box keeps no address over a power-off and boots either its
+application (app mode) or its loader. `address_cfs()` in
+`klippy/extras/k2_motor_bus.py` runs at every Klipper start (`cfs_detect`),
+following Creality's `auto_addr` and Jacob10383's AutoAddressClient; CFSTool
+found the same frames independently on a K1.
+
+| Step | Address | Payload | Meaning |
+| --- | --- | --- | --- |
+| query | `0x01` | `00 a2` | answers `00 a2 01 <mode> <uniid>` when addressed; mode 0 app, 1 loader |
+| start app | `0xff` | `00 0b 01` | loader to application; it answers about 2 s later. Sent when the query reports mode 1 (a box powered up while the printer runs) |
+| discover | `0xfe` | `00 a1 fe fe` | an unaddressed box answers with its 12-byte UniID |
+| assign | `0xfe` | `00 a0 01 <uniid>` | gives that box address 1 |
+
+- The address family (`a0`/`a1`/`a2`) goes out with first byte `00` and
+  works in app mode as well as in the loader. CFSTool's notes tie `00` to the
+  loader and `ff` to app mode; that holds for the other commands, where the
+  wrong one gets no answer.
+- `cfs_uniid` in `[k2_motor_bus]` is tried before the discover broadcast;
+  it is not needed.
+- Only one box is handled. Up to four (addresses 1-4) is how Jacob10383's
+  firmware uses `a0`/`a1`; collisions when several unaddressed boxes answer
+  one discover are not tested.
+
+## Bootloader and flashing (CFSTool, K1; not used here)
+
+This driver never flashes the CFS. CFSTool (MIT) flashes it on K1 printers,
+verified on real hardware from 1.1.3 to 1.5.0. Summary of its notes:
+
+- Enter the loader with the broadcast `F7 EB 03 FF 56 CF` (address `0xeb`,
+  command `56`). Re-discover and re-assign it (`a1`, `a0` as above) after:
+  the loader does not keep the app address.
+- Loader commands are `00 f0 <sub> ...` at address 1: `00` version, `03`
+  sector size, `06` erase the application (the loader survives, so a broken
+  flash can be repeated), `01` request update, then the whole file length
+  (4 bytes, little-endian), the file in chunks of at most 252 bytes, and
+  `02` to start the application. Each step is acknowledged; up to 3 tries.
+- After a flash the box did not answer app-mode commands until it was
+  power-cycled (two users on K1). The start-app broadcast above, or a
+  discover and assign, may do the same without a power-cycle; not tried
+  after a flash.
+- Firmware files are `<boot_ver>-<app_ver>.bin`, e.g.
+  `cfs0_050_G32-cfs0_000_142.bin`. The `G30`/`G32` suffix is the hardware
+  variant (the wrong one can brick the box), the last three digits of the
+  app part are the version. Newer Creality bundles also list a `cfs6`
+  generation (`cfs6_100_G31`, `cfs6_220_000`) with its own scheme.
+- In app mode `06` and `07` are motor-control writes: do not probe unknown
+  commands on a live box.
+- **On the K2** the CFS shares `/dev/ttyS5` with the closed-loop motors
+  (X `0x81`, Y `0x82`; K2 Plus Z `0x83`, `0x84`), not a USB adapter of its
+  own as on the K1. A flash would need Klipper stopped, and whether the
+  motors ignore the `0xeb` frame is not yet checked.
 
 ## Slot masks
 
@@ -152,9 +212,11 @@ treated as generic CFS commands.
 - connector pinout and signalling voltage
 - power requirements and safe external power sequencing
 - bus termination and topology limits
-- address assignment and collision handling
-- cold-boot and reset behaviour
-- compatibility across CFS hardware and firmware revisions
+- collision handling with more than one unaddressed box (single-box
+  addressing and cold boot are handled; see Addressing and cold boot)
+- compatibility across CFS hardware and firmware revisions beyond the
+  boxes seen so far (firmware 1.4.2 and 1.5.0; see the naming notes above)
+- whether the K2's bus motors ignore the CFS loader frames
 - whether the protocol can safely coexist with other printer serial stacks
 
 Do not connect a CFS to another controller based only on this document.
