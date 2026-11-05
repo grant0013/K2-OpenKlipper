@@ -69,9 +69,33 @@ and a print stopped with `Stepper too far in past` (issue #4). So:
   (1 to 4). Run `sh /mnt/UDISK/harkcam/start.sh` or reboot after a change.
   `fps: 5` or `size: 640x480` leaves more room on a weak WiFi signal.
 
-Creality's own camera path (`cam_app` + `webrtc_local` on :8000) sends
-H.264 at about 51 KB/s per viewer, far lighter than MJPEG, but Mainsail and
-Fluidd cannot show it yet. That is the longer-term fix.
+### WebRTC mode (H.264, much lighter on WiFi) - in testing
+
+Creality's own camera path (`cam_app` + `webrtc_local` on :8000) has the
+camera compress to H.264 and sends it over WebRTC: about 51 KB/s per viewer
+against 800+ KB/s for MJPEG, with ping unaffected by 3 viewers (measured by
+nur00, issue #4). `mode: webrtc` in `harkcam.cfg` switches to it:
+
+1. In `harkcam.cfg` (Mainsail: Machine > config files) set `mode: webrtc`,
+   then run `sh /mnt/UDISK/harkcam/start.sh` over SSH, or reboot.
+2. In Mainsail: Settings > Webcams > K2 Chamber: **Service** "WebRTC
+   (MediaMTX)", **URL Stream** `/webcam/`. Fluidd: the same camera type and
+   URL.
+3. `http://<printer>/webcam/` is a test page that plays the stream on its
+   own.
+
+How it works: `start.sh` starts Creality's `cam_app` and `webrtc_local`
+through Creality's own `/usr/bin/auto_uvc.sh` (with the K2's crop
+settings), and `harkcam.py` answers Mainsail's WHEP calls on :8080 by
+passing the browser's offer to `webrtc_local` in its own base64 JSON
+form. `webrtc_local` sends video only, so the audio Mainsail asks for is
+refused in the answer; it takes no trickled ICE candidates, and learns the
+browser's address from its connection checks instead.
+
+The camera sends one format at a time, so in this mode there is **no MJPEG
+stream or snapshot**: time-lapse, the AI watcher and anything reading
+`/webcam/?action=snapshot` need `mode: mjpeg` (the default). `mode: mjpeg`
+and `start.sh` again switch back.
 
 nginx proxy for the Mainsail server block:
 

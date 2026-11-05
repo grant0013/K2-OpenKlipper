@@ -18,13 +18,33 @@ fullscreen camera never leaves it blank.
 
 Settings (all optional) in /mnt/UDISK/printer_data_mainline/config/harkcam.cfg,
 "key: value" lines, read at start; the command line wins over the file:
-  size: 1280x720     fps: 10     max_streams: 2
+  size: 1280x720     fps: 10     max_streams: 2     mode: mjpeg
+
+mode: webrtc hands the camera to Creality's own apps instead (cam_app, which
+has the camera compress to H.264, and webrtc_local, which sends it over
+WebRTC: about 51 KB/s a viewer against 800+ for MJPEG, measured by nur00 in
+issue #4). Mainsail and Fluidd cannot talk to webrtc_local, so this serves
+the WHEP protocol their "WebRTC (MediaMTX)" camera type uses and translates:
+  OPTIONS /whep        204, no ICE servers (the printer is on the LAN)
+  POST /whep           browser offer (application/sdp) -> webrtc_local's
+                       base64 JSON call -> answer, 201 with a Location
+  PATCH /whep/<id>     204: webrtc_local takes no trickled candidates; the
+                       browser's checks reach it and it learns them from those
+  DELETE /whep/<id>    200
+  /                    a test page that plays the stream
+webrtc_local only sends video, so other media in the offer (Mainsail asks
+for audio too) are left out of what it sees and refused in the answer. The
+camera does only one format at a time: no MJPEG snapshots in this mode.
 """
-import http.server, os, socketserver, subprocess, sys, threading, time
+import base64, http.server, json, os, socketserver, subprocess, sys
+import threading, time, urllib.request, uuid
 
 CFG_PATH = os.environ.get(
     "HARKCAM_CFG", "/mnt/UDISK/printer_data_mainline/config/harkcam.cfg")
-DEFAULTS = {"size": "1280x720", "fps": "10", "max_streams": "2"}
+DEFAULTS = {"size": "1280x720", "fps": "10", "max_streams": "2",
+            "mode": "mjpeg",
+            "webrtc_url": "http://127.0.0.1:8000/call/webrtc_local"}
+MODES = ("mjpeg", "webrtc")
 SIZES = ("640x480", "800x600", "1280x720")
 FPS_RANGE = (1, 15)
 MAX_WAIT = 3.0          # a snapshot queued longer than this gets a 503
@@ -67,6 +87,142 @@ def settings(argv, cfg):
     except ValueError:
         max_streams = int(DEFAULTS["max_streams"])
     return port, device, size, fps, max_streams
+
+
+def mode_settings(cfg):
+    """(mode, webrtc_local URL) from the settings file; unknown -> mjpeg."""
+    mode = cfg.get("mode", DEFAULTS["mode"]).strip().lower()
+    return (mode if mode in MODES else "mjpeg",
+            cfg.get("webrtc_url", DEFAULTS["webrtc_url"]).strip())
+
+
+# --- SDP translation for webrtc_local ------------------------------------
+def split_sdp(sdp):
+    """Session lines and one list of lines per media section."""
+    lines = [l for l in sdp.replace("\r\n", "\n").split("\n") if l]
+    session, media = [], []
+    for line in lines:
+        if line.startswith("m="):
+            media.append([line])
+        elif media:
+            media[-1].append(line)
+        else:
+            session.append(line)
+    return session, media
+
+
+def join_sdp(session, media):
+    return "\r\n".join(session + [l for m in media for l in m]) + "\r\n"
+
+
+def media_mid(section):
+    for line in section:
+        if line.startswith("a=mid:"):
+            return line[6:].strip()
+    return None
+
+
+def offer_for_creality(offer):
+    """The offer webrtc_local can answer: the first video section only.
+    Returns (sdp, plan); plan is each offered section, in order, as
+    ("keep", mid) or ("refuse", m-line kind and protocol, mid)."""
+    session, media = split_sdp(offer)
+    kept, plan = [], []
+    for section in media:
+        mid = media_mid(section)
+        kind = section[0][2:].split()[0]
+        if kind == "video" and not kept:
+            kept.append(section)
+            plan.append(("keep", mid))
+        else:
+            parts = section[0][2:].split()
+            pt = parts[3] if len(parts) > 3 else "0"
+            # that payload type's codec lines, as browsers repeat them
+            codec = [l for l in section if l.startswith((
+                "a=rtpmap:%s " % pt, "a=fmtp:%s " % pt))]
+            plan.append(("refuse", "%s 0 %s %s" % (parts[0], parts[2], pt),
+                         mid, codec))
+    if not kept:
+        raise ValueError("the offer has no video")
+    keep_mids = [p[1] for p in plan if p[0] == "keep" and p[1] is not None]
+    session = [("a=group:BUNDLE " + " ".join(keep_mids))
+               if l.startswith("a=group:BUNDLE") else l for l in session]
+    return join_sdp(session, kept), plan
+
+
+def answer_for_browser(answer, plan):
+    """webrtc_local's answer with every offered section back in its place:
+    the video section under the offer's mid, the others refused (port 0),
+    so the browser accepts it."""
+    session, media = split_sdp(answer)
+    if not media:
+        raise ValueError("webrtc_local's answer has no media")
+    video = media[0]
+    out = []
+    for step in plan:
+        if step[0] == "keep":
+            mid = step[1]
+            section = [l for l in video if not l.startswith("a=mid:")]
+            if mid is not None:
+                # a=mid goes after the m=/c= lines like browsers write it
+                at = next((i for i, l in enumerate(section)
+                           if l.startswith("a=")), len(section))
+                section.insert(at, "a=mid:" + mid)
+            out.append(section)
+        else:
+            section = ["m=" + step[1], "c=IN IP4 0.0.0.0"]
+            # the bundle's ICE and DTLS lines, as browsers write them in a
+            # refused section (strict stacks will not take one without)
+            section += [l for l in video if l.startswith((
+                "a=ice-ufrag:", "a=ice-pwd:", "a=fingerprint:", "a=setup:",
+                "a=rtcp-mux"))]
+            if step[2] is not None:
+                section.append("a=mid:" + step[2])
+            section.append("a=inactive")
+            section += step[3] if len(step) > 3 else []
+            out.append(section)
+    keep_mids = [s[1] for s in plan if s[0] == "keep" and s[1] is not None]
+    session = [l for l in session if not l.startswith("a=group:BUNDLE")]
+    if keep_mids:
+        at = next((i for i, l in enumerate(session) if l.startswith("t=")),
+                  len(session) - 1) + 1
+        session.insert(at, "a=group:BUNDLE " + " ".join(keep_mids))
+    return join_sdp(session, out)
+
+
+def call_creality(url, offer_sdp, timeout=10):
+    """webrtc_local's own signalling: base64 of {"type": "offer", "sdp"}
+    in, base64 of the answer out."""
+    body = base64.b64encode(json.dumps(
+        {"type": "offer", "sdp": offer_sdp}).encode())
+    req = urllib.request.Request(url, data=body,
+                                 headers={"Content-Type": "plain/text"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        reply = json.loads(base64.b64decode(r.read().strip()))
+    if reply.get("type") != "answer" or not reply.get("sdp"):
+        raise ValueError("webrtc_local did not answer: %r" % (reply,))
+    return reply["sdp"]
+
+
+TEST_PAGE = b"""<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width"><title>K2 camera</title>
+<style>body{margin:0;background:#000;color:#aaa;font:14px sans-serif}
+video{width:100%;max-height:100vh}#s{position:fixed;top:4px;left:6px}</style>
+</head><body><div id="s">connecting</div>
+<video id="v" autoplay muted playsinline></video><script>
+const s = document.getElementById("s"), v = document.getElementById("v");
+const pc = new RTCPeerConnection();
+pc.addTransceiver("video", {direction: "recvonly"});
+pc.ontrack = e => { v.srcObject = e.streams[0] || new MediaStream([e.track]); };
+pc.oniceconnectionstatechange = () => { s.textContent = pc.iceConnectionState; };
+pc.createOffer().then(o => pc.setLocalDescription(o)).then(() =>
+  fetch("whep", {method: "POST", headers: {"Content-Type": "application/sdp"},
+                 body: pc.localDescription.sdp}))
+  .then(r => { if (r.status !== 201) throw new Error("status " + r.status);
+               return r.text(); })
+  .then(sdp => pc.setRemoteDescription({type: "answer", sdp}))
+  .catch(e => { s.textContent = "failed: " + e; });
+</script></body></html>"""
 
 
 class Pacer:
@@ -156,11 +312,109 @@ BOUNDARY = b"harkcamframe"
 CAM = PACER = STREAMS = None
 
 
+MODE, WEBRTC_URL = "mjpeg", DEFAULTS["webrtc_url"]
+SESSIONS = {}           # WHEP session id -> start time (for the log)
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
+    def cors(self):
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods",
+                         "OPTIONS, GET, POST, PATCH, DELETE")
+        self.send_header("Access-Control-Allow-Headers",
+                         "Content-Type, If-Match")
+        self.send_header("Access-Control-Expose-Headers",
+                         "Location, ETag, Link")
+
+    def plain(self, code, text):
+        body = text.encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(body)))
+        self.cors()
+        self.end_headers()
+        self.wfile.write(body)
+
+    def whep(self):
+        """The path is /whep or /whep/<id> (behind nginx's /webcam/)."""
+        path = self.path.split("?", 1)[0].rstrip("/")
+        if path == "/whep":
+            return ""
+        if path.startswith("/whep/"):
+            return path[6:]
+        return None
+
+    def do_OPTIONS(self):
+        if self.whep() is None:
+            return self.plain(404, "not found")
+        self.send_response(204)
+        self.cors()
+        self.end_headers()
+
+    def do_POST(self):
+        if self.whep() != "":
+            return self.plain(404, "not found")
+        if MODE != "webrtc":
+            return self.plain(409, "harkcam is in mode: mjpeg; set mode: "
+                              "webrtc in harkcam.cfg for WebRTC")
+        offer = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        try:
+            sdp, plan = offer_for_creality(offer.decode())
+            answer = answer_for_browser(
+                call_creality(WEBRTC_URL, sdp), plan)
+        except Exception as e:
+            print("whep: %s" % e, flush=True)
+            return self.plain(502, "webrtc_local: %s" % e)
+        sid = uuid.uuid4().hex
+        SESSIONS[sid] = time.time()
+        while len(SESSIONS) > 32:
+            SESSIONS.pop(next(iter(SESSIONS)))
+        print("whep: session %s (%d kept)" % (sid[:8], len(SESSIONS)),
+              flush=True)
+        body = answer.encode()
+        self.send_response(201)
+        self.send_header("Content-Type", "application/sdp")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Location", "whep/" + sid)
+        self.send_header("ETag", '"%s"' % sid)
+        self.cors()
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_PATCH(self):
+        if not self.whep():
+            return self.plain(404, "not found")
+        self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        self.send_response(204)
+        self.cors()
+        self.end_headers()
+
+    def do_DELETE(self):
+        sid = self.whep()
+        if not sid:
+            return self.plain(404, "not found")
+        SESSIONS.pop(sid, None)
+        self.send_response(200)
+        self.cors()
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def do_GET(self):
+        if MODE == "webrtc":
+            if "action=" in self.path:
+                return self.plain(503, "harkcam is in mode: webrtc (the "
+                                  "camera is sending H.264): no MJPEG "
+                                  "stream or snapshot. Set mode: mjpeg in "
+                                  "harkcam.cfg for those.")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(TEST_PAGE)))
+            self.end_headers()
+            self.wfile.write(TEST_PAGE)
+            return
         if "action=stream" in self.path:
             self.stream()
         elif "action=snapshot" in self.path:
@@ -231,8 +485,15 @@ class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
 
 
 def main(argv):
-    global CAM, PACER, STREAMS
-    port, device, size, fps, max_streams = settings(argv, read_cfg(CFG_PATH))
+    global CAM, PACER, STREAMS, MODE, WEBRTC_URL
+    cfg = read_cfg(CFG_PATH)
+    port, device, size, fps, max_streams = settings(argv, cfg)
+    MODE, WEBRTC_URL = mode_settings(cfg)
+    if MODE == "webrtc":
+        print("harkcam: mode webrtc, WHEP on port %d -> %s"
+              % (port, WEBRTC_URL), flush=True)
+        Server(("", port), Handler).serve_forever()
+        return
     print("harkcam: %s %s at %d fps shared, up to %d streams, port %d"
           % (device, size, fps, max_streams, port), flush=True)
     # The camera offers 5, 10 and 15 fps; capture at the nearest one at or

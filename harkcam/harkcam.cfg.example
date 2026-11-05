@@ -14,3 +14,9 @@ fps: 10
 
 # Streams open at once (1 to 4). A new one closes the oldest.
 max_streams: 2
+
+# mjpeg (default): MJPEG stream and snapshots (time-lapse, AI watcher).
+# webrtc: Creality's H.264 over WebRTC, about 51 KB/s a viewer instead of
+# 800+, but no snapshots. Set Mainsail's camera to "WebRTC (MediaMTX)" with
+# URL /webcam/. In testing; see docs/SCREEN-AND-CAMERA.md.
+mode: mjpeg

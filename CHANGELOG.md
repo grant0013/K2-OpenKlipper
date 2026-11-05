@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- **Camera WebRTC mode (H.264), in testing** (GitHub issue #4, nur00's
+  measurements). `mode: webrtc` in `harkcam.cfg` hands the camera to
+  Creality's own `cam_app` + `webrtc_local`, which send H.264 at about
+  51 KB/s a viewer instead of 800+ for MJPEG; harkcam translates Mainsail's
+  and Fluidd's "WebRTC (MediaMTX)" (WHEP) calls into `webrtc_local`'s
+  base64 JSON offer, leaves the audio track out and refuses it in the
+  answer. No snapshots in this mode (time-lapse and the AI watcher need
+  `mode: mjpeg`, still the default). Tested here up to `webrtc_local`'s
+  door: a real Chromium and aiortc accept the answers and connect; video
+  from a real `webrtc_local` is for a K2 with its camera (nur00).
+  tests/test_harkcam_webrtc.py.
+
 ## v0.4.19-alpha.1 (2026-11-05)
 
 - **Print a file from the touchscreen** (asked for in GitHub issue #3).
