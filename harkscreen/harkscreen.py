@@ -38,7 +38,7 @@ DEFAULTS = {
                "touch_max_x": "480", "touch_max_y": "800",
                "touch_swap_xy": "no", "touch_invert_x": "no",
                "touch_invert_y": "no", "rotate": "90",
-               "timezone": "auto"},
+               "timezone": "auto", "transitions": "fast"},
 }
 
 OBJECTS = {
@@ -133,6 +133,7 @@ USB_LABEL = "K2PRINTER"
 # Print files the touchscreen lists (Moonraker's gcodes root)
 GCODE_EXTS = (".gcode", ".g", ".gco")
 FILES_PER_PAGE = 4
+FILE_THUMB_LIST, FILE_THUMB_DETAIL = 54, 226
 LIGHT_OFF = ((0, "Never"), (300, "5 min"), (600, "10 min"), (1800, "30 min"))
 # 99999999 s is stock's "never"
 IDLE_OFF = ((900, "15 min"), (1800, "30 min"), (3600, "1 hour"),
@@ -1156,6 +1157,10 @@ class Screen:
         if self.page not in self.pages and self.pages:
             self.page = self.pages[0]
         self.tcache, self.glow_cache, self.bg = {}, {}, None
+        # text widths and the logo at each size it is drawn: measuring text
+        # and scaling the logo took 6 and 34 ms a frame on the K2
+        self.lcache, self.logo_cache = {}, {}
+        self.dim_luts = {}
         self.dirty = True
 
     def soft_logo(self, im):
@@ -1201,12 +1206,21 @@ class Screen:
         self.canvas.paste(self.colour(color),
                           (int(xy[0] + ox), int(xy[1] + oy)), m)
 
+    def length(self, font, s):
+        """Width of s in pixels, cached (freetype is slow on the K2)."""
+        key = (font, s)
+        n = self.lcache.get(key)
+        if n is None:
+            if len(self.lcache) > 3000:
+                self.lcache.clear()
+            n = self.lcache[key] = self.fonts[font].getlength(s)
+        return n
+
     def fit(self, s, font, width):
         """s, cut short with an ellipsis if wider than width pixels."""
-        f = self.fonts[font]
-        if f.getlength(s) <= width:
+        if self.length(font, s) <= width:
             return s
-        while s and f.getlength(s + "…") > width:
+        while s and self.length(font, s + "…") > width:
             s = s[:-1]
         return s.rstrip() + "…"
 
@@ -1255,20 +1269,41 @@ class Screen:
             self.bg = grad.resize((W, H))
         return self.bg.copy()
 
+    def dimmed(self, amount):
+        """The frame darkened behind a box: a lookup table, 4x quicker than
+        blending with black on the K2 (13 against 56 ms)."""
+        lut = self.dim_luts.get(amount)
+        if lut is None:
+            lut = self.dim_luts[amount] = [
+                int(v * (1 - amount)) for v in range(256)] * 3
+        return self.canvas.point(lut)
+
     def glow(self, box, color, radius=16):
-        """Soft halo behind a panel, cached per size and colour."""
+        """Soft halo behind a panel, cached per size and colour. The halo
+        is a ring, so it is pasted as its four edge bands: a big box's
+        whole mask took 140 ms to paste on the K2."""
         x0, y0, x1, y1 = box
         key = (x1 - x0, y1 - y0, color, radius)
-        g = self.glow_cache.get(key)
-        if g is None:
+        parts = self.glow_cache.get(key)
+        if parts is None:
             pad = 22
             g = Image.new("L", (x1 - x0 + 2 * pad, y1 - y0 + 2 * pad), 0)
             ImageDraw.Draw(g).rounded_rectangle(
                 (pad, pad, pad + x1 - x0, pad + y1 - y0), radius=radius,
                 outline=150, width=6)
             g = g.filter(ImageFilter.GaussianBlur(9))
-            self.glow_cache[key] = g
-        self.canvas.paste(color, (x0 - 22, y0 - 22), g)
+            gw, gh = g.size
+            parts = [((0, 0), g)]
+            for b in range(40, min(gw, gh) // 2, 8):
+                if g.crop((b, b, gw - b, gh - b)).getbbox() is None:
+                    parts = [((rx0, ry0), g.crop((rx0, ry0, rx1, ry1)))
+                             for rx0, ry0, rx1, ry1 in (
+                                 (0, 0, gw, b), (0, gh - b, gw, gh),
+                                 (0, b, b, gh - b), (gw - b, b, gw, gh - b))]
+                    break
+            self.glow_cache[key] = parts
+        for (dx, dy), m in parts:
+            self.canvas.paste(color, (x0 - 22 + dx, y0 - 22 + dy), m)
 
     def panel(self, d, box, edge=None, glow=False, fill=None):
         if glow and edge:
@@ -1296,7 +1331,7 @@ class Screen:
         sizes = ("xl", "l", "m", "s", "xs", "xxs")
         for f in sizes[sizes.index(font):]:
             font = f
-            if self.fonts[f].getlength(label) <= room:
+            if self.length(f, label) <= room:
                 break
         if icon and box[3] - box[1] > 90:
             self.icon(d, icon, cx, cy - 18, 34, tc)
@@ -1311,8 +1346,13 @@ class Screen:
         if not self.logo:
             return
         x0, y0, x1, y1 = box
-        logo = self.logo.copy()
-        logo.thumbnail((x1 - x0, y1 - y0), Image.LANCZOS)
+        logo = self.logo_cache.get((x1 - x0, y1 - y0))
+        if logo is None:
+            logo = self.logo.copy()
+            logo.thumbnail((x1 - x0, y1 - y0), Image.LANCZOS)
+            if len(self.logo_cache) > 8:
+                self.logo_cache.clear()
+            self.logo_cache[(x1 - x0, y1 - y0)] = logo
         self.canvas.paste(logo, (x0 + (x1 - x0 - logo.width) // 2,
                                  y0 + (y1 - y0 - logo.height) // 2), logo)
 
@@ -1813,8 +1853,7 @@ class Screen:
         return note and [note["kind"], note["lines"]]
 
     def draw_notice(self, note):
-        dim = Image.new("RGB", (W, H), (0, 0, 0))
-        self.canvas = Image.blend(self.canvas, dim, 0.65)
+        self.canvas = self.dimmed(0.65)
         d = ImageDraw.Draw(self.canvas)
         col = self.c[note["color"]]
         box = (110, 50, W - 110, 430)
@@ -1879,8 +1918,7 @@ class Screen:
 
     def draw_calib_pick(self, pick):
         """One button per tested value; the pick is saved to the slot."""
-        dim = Image.new("RGB", (W, H), (0, 0, 0))
-        self.canvas = Image.blend(self.canvas, dim, 0.65)
+        self.canvas = self.dimmed(0.65)
         d = ImageDraw.Draw(self.canvas)
         kind, slot = pick.get("kind"), pick.get("slot", "?")
         box = (90, 40, W - 90, 450)
@@ -1911,8 +1949,7 @@ class Screen:
 
     def draw_pa_result(self, res):
         """Calibration outcome; stays up until OK is pressed."""
-        dim = Image.new("RGB", (W, H), (0, 0, 0))
-        self.canvas = Image.blend(self.canvas, dim, 0.65)
+        self.canvas = self.dimmed(0.65)
         d = ImageDraw.Draw(self.canvas)
         slot = res.get("slot") or "?"
         saved = res.get("saved")
@@ -1961,8 +1998,7 @@ class Screen:
                      res.get("stamp")), "accent", True, "m")
 
     def draw_slot_menu(self, st):
-        dim = Image.new("RGB", (W, H), (0, 0, 0))
-        self.canvas = Image.blend(self.canvas, dim, 0.6)
+        self.canvas = self.dimmed(0.6)
         d = ImageDraw.Draw(self.canvas)
         slot = self.slot_menu["slot"]
         slots = st.get("hark_cfs_slots", {}).get("slots", {})
@@ -2807,10 +2843,16 @@ class Screen:
         fs = self.files
         if fs is None:
             return None
-        return [fs.get("pick"), fs.get("page"), fs.get("error"),
-                fs.get("starting"),
+        page = fs.get("page", 0)
+        shown = [f[0] for f in (fs.get("list") or [])[
+            page * FILES_PER_PAGE:(page + 1) * FILES_PER_PAGE]]
+        if fs.get("pick"):
+            shown.append(fs["pick"])
+        # only the files on view: the next page loading in behind is not
+        # a reason to redraw
+        return [fs.get("pick"), page, fs.get("error"), fs.get("starting"),
                 None if fs.get("list") is None else len(fs["list"]),
-                sorted(self.file_info)]
+                [p in self.file_info for p in shown]]
 
     def files_pages(self):
         n = len((self.files or {}).get("list") or [])
@@ -2829,8 +2871,10 @@ class Screen:
                 print("files: %s" % e, flush=True)
                 fs["error"] = "Could not read the print files"
                 fs["list"] = []
-            self.dirty = True
-            if self.files is fs:
+            if not fs["list"]:
+                self.dirty = True
+            elif self.files is fs:
+                # the list and its first thumbnails arrive in one redraw
                 self.load_file_info(mr, fs)
         threading.Thread(target=run, daemon=True).start()
 
@@ -2849,24 +2893,48 @@ class Screen:
                 page * FILES_PER_PAGE:(page + 1) * FILES_PER_PAGE]]
             if fs.get("pick"):
                 paths.insert(0, fs["pick"])
-            for path in paths:
+            # the next page too, after the ones on view, so Next is quick
+            nxt = [f[0] for f in (fs.get("list") or [])[
+                (page + 1) * FILES_PER_PAGE:(page + 2) * FILES_PER_PAGE]]
+            # One redraw once what is on view is in (a redraw takes 60-150
+            # ms on the K2, so not one per file), none for the next page
+            # loading behind it, none when nothing new came in
+            fetched = flagged = False
+            for n, path in enumerate(paths + nxt):
                 if self.files is not fs:
                     return
+                if n == len(paths):
+                    flagged = True
+                    if fetched or not fs.get("shown"):
+                        self.dirty = True
                 have = self.file_info.get(path)
                 if have and have["modified"] == listed.get(path,
                                                            have["modified"]):
+                    if path == fs.get("pick") and have.get("img") \
+                            and FILE_THUMB_DETAIL not in have.get("sized", {}):
+                        self.file_thumb(have, FILE_THUMB_DETAIL)
+                        fetched = fetched or n < len(paths)
                     continue
                 info = {"modified": listed.get(path, 0.), "meta": {},
                         "img": None}
                 try:
                     info["meta"] = mr.metadata(path)
                     info["img"] = mr.thumb_image(path, info["meta"])
+                    # scaled here, not in the redraw (about 30 ms each on
+                    # the K2): the list's size, and the detail view's for
+                    # the file picked
+                    self.file_thumb(info, FILE_THUMB_LIST)
+                    if path == fs.get("pick"):
+                        self.file_thumb(info, FILE_THUMB_DETAIL)
                 except Exception as e:
                     print("files: %s: %s" % (path, e), flush=True)
                 if len(self.file_info) > 24:
                     self.file_info.clear()
                 self.file_info[path] = info
+                fetched = fetched or n < len(paths)
+            if not flagged and (fetched or not fs.get("shown")):
                 self.dirty = True
+            fs["shown"] = True
 
     def start_print(self, mr, path):
         fs = self.files
@@ -2923,18 +2991,18 @@ class Screen:
         return time.strftime("%d %b %H:%M", t).lstrip("0")
 
     def file_thumb(self, info, size):
+        """A file's thumbnail cropped to the model and scaled to size,
+        kept with the file's info."""
         img = info and info.get("img")
         if img is None:
             return None
-        key = ("filethumb", id(img), size)
-        hit = self.preview_cache.get(key)
+        sized = info.setdefault("sized", {})
+        hit = sized.get(size)
         if hit is None:
             alpha = img.getchannel("A")
             hit = img.crop(alpha.getbbox() or (0, 0) + img.size)
             hit.thumbnail((size, size), Image.LANCZOS)
-            if len(self.preview_cache) > 40:
-                self.preview_cache.clear()
-            self.preview_cache[key] = hit
+            sized[size] = hit
         return hit
 
     def draw_files(self, d, body, st):
@@ -2969,7 +3037,7 @@ class Screen:
             self.panel(d, box)
             info = self.file_info.get(path)
             tb = (box[0] + 8, by + 6, box[0] + 8 + rh - 12, by + rh - 6)
-            img = self.file_thumb(info, rh - 12)
+            img = self.file_thumb(info, FILE_THUMB_LIST)
             if img is not None:
                 self.canvas.paste(img, (
                     tb[0] + (tb[2] - tb[0] - img.size[0]) // 2,
@@ -2992,10 +3060,10 @@ class Screen:
             self.buttons.append((*box, ("files_pick", path)))
         by = y1 - 58
         bw = (x1 - x0 - pad * 4) // 3
-        self.button(d, (x0 + pad, by, x0 + pad + bw, by + 48), "Back",
+        self.button(d, (x0 + pad, by, x0 + pad + bw, by + 48), "Previous",
                     ("files_page", -1), "muted", fs["page"] > 0, "s")
         self.button(d, (x0 + 2 * pad + bw, by, x0 + 2 * pad + 2 * bw,
-                        by + 48), "More", ("files_page", 1), "muted",
+                        by + 48), "Next", ("files_page", 1), "muted",
                     fs["page"] < pages - 1, "s")
         self.button(d, (x0 + 3 * pad + 2 * bw, by, x1 - pad, by + 48),
                     "Close", ("files_close",), "muted", True, "s")
@@ -3011,7 +3079,7 @@ class Screen:
                   width=x1 - x0 - 2 * pad)
         tb = (x0 + pad, y0 + 48, x0 + pad + 250, y0 + 298)
         self.panel(d, tb)
-        img = self.file_thumb(info, 226)
+        img = self.file_thumb(info, FILE_THUMB_DETAIL)
         if img is not None:
             self.canvas.paste(img, (
                 tb[0] + (tb[2] - tb[0] - img.size[0]) // 2,
@@ -3181,8 +3249,7 @@ class Screen:
         mr.gcode(cmd)
 
     def modal_dim(self):
-        dim = Image.new("RGB", (W, H), (0, 0, 0))
-        self.canvas = Image.blend(self.canvas, dim, 0.65)
+        self.canvas = self.dimmed(0.65)
         return ImageDraw.Draw(self.canvas)
 
     def draw_temp_box(self, heater, st):
@@ -3630,8 +3697,7 @@ class Screen:
             self.buttons.append((*box, ("page", p)))
 
     def draw_confirm(self, d):
-        dim = Image.new("RGB", (W, H), (0, 0, 0))
-        self.canvas = Image.blend(self.canvas, dim, 0.65)
+        self.canvas = self.dimmed(0.65)
         d = ImageDraw.Draw(self.canvas)
         box = (150, 110, W - 150, 370)
         self.panel(d, box, self.c["warn"], True)
@@ -3777,28 +3843,41 @@ class Screen:
             os.pwrite(self.fb, raw[r * row:(r + 1) * row],
                       ((fy + r) * FB_W + fx) * 4)
 
-    def fade(self, old, new, frames=5):
+    # Frames for a page slide and a box fade. A full frame costs about 50 ms
+    # on the K2, so "fast" keeps the movement but not the wait.
+    TRANSITIONS = {"smooth": (7, 5), "fast": (3, 1), "off": (0, 0)}
+
+    def transition_frames(self):
+        return self.TRANSITIONS.get(
+            self.cfg.get("screen", "transitions").strip().lower(),
+            self.TRANSITIONS["fast"])
+
+    def fade(self, old, new, frames=None):
         """Ease a box in over (or out of) the page."""
+        if frames is None:
+            frames = self.transition_frames()[1]
         for i in range(1, frames):
             self.show(Image.blend(old, new, ease_out(i / float(frames))))
         self.show(new)
 
     def slide(self, old, new, direction):
-        """Slide the page body vertically from old to new frame."""
+        """Slide the page body vertically from old to new frame. Only the
+        body is written; the header and the nav go out once at the end."""
         bx0, by0 = NAV_W, HEADER_H
         bh = H - HEADER_H
-        old_body = old.crop((bx0, by0, W, H))
-        new_body = new.crop((bx0, by0, W, H))
-        frames = 7
-        for i in range(1, frames + 1):
-            p = ease_out(i / float(frames))
-            off = int(bh * p)
-            frame = new.copy()
-            body = Image.new("RGB", new_body.size)
-            body.paste(old_body, (0, -direction * off))
-            body.paste(new_body, (0, direction * (bh - off)))
-            frame.paste(body, (bx0, by0))
-            self.show(frame)
+        rect = (bx0, by0, W, H)
+        frames = self.transition_frames()[0]
+        if frames:
+            old_body = old.crop(rect)
+            new_body = new.crop(rect)
+            for i in range(1, frames):
+                p = ease_out(i / float(frames))
+                off = int(bh * p)
+                body = Image.new("RGB", new_body.size)
+                body.paste(old_body, (0, -direction * off))
+                body.paste(new_body, (0, direction * (bh - off)))
+                self.blit(body, rect)
+        self.show(new)
 
     def set_sleep(self, asleep):
         if asleep != self.asleep:
@@ -4162,12 +4241,17 @@ def main():
                        if screen.page in screen.pages else 0)
                 direction = 1 if new >= screen.transition else -1
                 screen.slide(old, screen.base, direction)
-                screen.shown = None
+                shown_now = True
             elif old is not None and screen.modal_on != was_modal:
                 screen.fade(old, screen.base)
-                screen.shown = None
+                shown_now = True
+            else:
+                shown_now = False
             screen.transition = None
             digest = hashlib.md5(screen.base.tobytes()).digest()
+            if shown_now:
+                # the slide or fade ended on this frame
+                screen.shown = digest
             if digest != screen.shown:
                 screen.show(screen.base)
                 screen.shown = digest

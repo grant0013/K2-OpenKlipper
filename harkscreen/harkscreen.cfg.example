@@ -37,6 +37,9 @@ sleep_after: 600
 # Timezone for the "done about" time: auto (the printer's own time zone,
 # as set in Creality's settings), uk (GMT/BST) or hours from UTC, e.g. +2
 timezone: auto
+# Page slides and boxes: fast (default: a short slide, boxes appear at
+# once), smooth (longer animations, slower on the K2) or off
+transitions: fast
 moonraker: http://127.0.0.1:7126
 # Panel rotation in degrees clockwise (K2: 90 = landscape, 0 = portrait)
 rotate: 90

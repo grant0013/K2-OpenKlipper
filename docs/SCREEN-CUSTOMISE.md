@@ -168,6 +168,7 @@ font_scale: 1.0
 pages: status,cfs,controls,machine,wifi
 sleep_after: 600
 timezone: auto
+transitions: fast
 rotate: 90
 ```
 
@@ -180,6 +181,9 @@ rotate: 90
   hours from UTC, e.g. `+2`. To set the printer's time zone over SSH:
   `uci set system.@system[0].zonename='Europe/Berlin'; uci commit system;
   /etc/init.d/system reload` (any name from /usr/share/zoneinfo).
+- **transitions**: `fast` (default) slides the page in 3 frames and shows
+  boxes at once; `smooth` is the older 7-frame slide and box fade, about
+  0.3 s longer per tap on the K2; `off` changes pages with no slide.
 - **rotate**: `90` is the K2's landscape mounting; leave it.
 - **touch_*** settings: only if taps land in the wrong place.
 - **moonraker**: where the screen gets its data. Leave it as

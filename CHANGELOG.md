@@ -10,6 +10,17 @@
   printing or while Klipper is busy; Moonraker's reason is shown if a start
   is refused. Tests in tests/test_harkscreen_files.py (fake Moonraker,
   rendered screens); the list was also read from a real host's 46 files.
+- **Quicker touchscreen.** Measured on the K2's own processor: changing
+  page 513 -> 219 ms, opening a box (temperatures, fans, a question)
+  806 -> 251 ms, a redraw 93 -> 61 ms, with the same look (pages
+  pixel-identical). The logo and text widths are cached instead of worked
+  out every frame; the halo round a box is pasted as its four edges; the
+  dimming behind a box uses a lookup table; a page slide is 3 frames of the
+  page body only, and a box appears at once (`transitions: smooth` brings
+  back the old animations, `off` drops the slide). The frame a slide or
+  fade ended on is no longer written a second time. The file list redraws
+  once a page is in, not per thumbnail, loads the next page behind it, and
+  scales thumbnails in the background. Previous / Next page the list.
 
 ## v0.4.18-alpha.3 (2026-11-05)
 

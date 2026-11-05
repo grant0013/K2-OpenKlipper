@@ -309,6 +309,52 @@ class ScreenTest(Base):
         self.tap(("page", "controls"))
         self.assertIsNone(self.s.files)
 
+    def test_transitions_setting(self):
+        self.assertEqual(self.s.transition_frames(), (3, 1))      # fast
+        self.s.cfg.cp.set("screen", "transitions", "off")
+        self.assertEqual(self.s.transition_frames(), (0, 0))
+        self.s.cfg.cp.set("screen", "transitions", "smooth")
+        self.assertEqual(self.s.transition_frames(), (7, 5))
+        self.s.cfg.cp.set("screen", "transitions", "nonsense")
+        self.assertEqual(self.s.transition_frames(), (3, 1))
+        a = self.render(status(), "x")
+        self.s.page = "controls"
+        b = self.render(status(), "x")
+        for mode in ("off", "fast", "smooth"):
+            self.s.cfg.cp.set("screen", "transitions", mode)
+            self.s.slide(a, b, 1)
+            self.s.fade(a, b)
+        # the panel ends on the new frame
+        with open(hs.FB, "rb") as f:
+            panel = f.read()
+        self.assertEqual(panel, self.s.to_fb(b).convert("RGBA").tobytes(
+            "raw", "BGRA"))
+
+    def test_next_page_loading_does_not_redraw(self):
+        self.render(status(), "x")
+        self.tap(("files_open",))
+        self.assertTrue(wait_for(lambda: len(self.s.file_info) >= 7))
+        key = self.s.files_key()
+        self.s.file_info.pop("Part_04.gcode", None)     # on page 2
+        self.assertEqual(self.s.files_key(), key)
+        self.s.file_info.pop("Part_00.gcode", None)     # on view
+        self.assertNotEqual(self.s.files_key(), key)
+
+    def test_page_buttons_say_previous_and_next(self):
+        self.render(status(), "x")
+        self.tap(("files_open",))
+        self.assertTrue(wait_for(lambda: self.s.files["list"] is not None))
+        self.render(status(), "x")
+        labels = []
+        orig = self.s.button
+        self.s.button = lambda d, box, label, *a, **k: (
+            labels.append(label), orig(d, box, label, *a, **k))
+        self.render(status(), "x")
+        self.s.button = orig
+        self.assertIn("Previous", labels)
+        self.assertIn("Next", labels)
+        self.assertNotIn("More", labels)
+
     def test_empty_and_unreadable_lists(self):
         global FILES
         saved = FILES
