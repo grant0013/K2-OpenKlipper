@@ -242,18 +242,23 @@ The current code should be separated into:
 2. CFS commands, response decoders, and state machine
 3. printer adapter for motion, hotend, cutter, and filament sensors
 
-`k2_motor_bus.xfer()` is synchronous and can wait up to its configured timeout.
-It is acceptable for the currently gated commands but unsuitable for frequent
-background polling in a general Klipper deployment. A reactor-safe transport
-is a priority contribution.
+`k2_motor_bus.xfer()` does not block Klipper while it waits for a reply. Since
+v0.2.0 `_read_frame` keeps the port non-blocking, reads in small chunks and
+yields to the reactor between reads, so a CFS stage that takes 20+ s to
+answer leaves the heaters running. In strict mode `proto.find_reply` checks
+the CRC and address and reads past frames that fail, and a reactor mutex
+holds the bus for the whole transfer, so a timer cannot take another
+caller's reply. The only blocking step is `ser.flush()`, about half a
+millisecond for a short frame at 230400 baud.
+
+The limit is the shared bus: the CFS and the closed-loop motors both use
+`/dev/ttyS5`, so a long CFS stage holds the lock and the motor temperature
+poll waits for it.
 
 Lamar1007's `k1_cfs_bus.py` (a Klipper module on the K1, RS485 working, CAN
-a stub) does this, and he has offered it: the port stays non-blocking, it
-reads in small chunks and yields to the reactor between reads, resyncs on
-the `F7` preamble (bytes before it are dropped), hands a frame on only once
-the whole length has arrived, and drops it early when the length byte
-cannot be right. A half frame or bus noise then never stalls Klipper. Its
-framing matches the K2 motor frames (`f7 81 04 00 11 01 1d`).
+a stub) derives its read loop from this one and puts it behind a single
+`xfer()` that picks the transport, which is a useful model for the split
+above. Its framing matches the K2 motor frames (`f7 81 04 00 11 01 1d`).
 
 ## Status codes, stages and recovery (v0.2.0)
 
