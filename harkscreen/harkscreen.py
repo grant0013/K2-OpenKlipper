@@ -1443,9 +1443,10 @@ class Screen:
                            (x, y + r * 1.6), (x - r * .45, y + r * .45),
                            (x - r * 1.6, y), (x - r * .45, y - r * .45)],
                           fill=color)
-        elif name == "light":
+        elif name in ("light", "light_on"):
             d.ellipse((cx - h * .55, cy - h * .8, cx + h * .55, cy + h * .3),
-                      outline=color, width=w)
+                      outline=color, width=w,
+                      fill=color if name == "light_on" else None)
             d.rectangle((cx - h * .3, cy + h * .35, cx + h * .3, cy + h * .7),
                         fill=color)
         elif name == "motor":
@@ -2597,7 +2598,7 @@ class Screen:
              # (_LIGHT_IDLE off_after) starts again
              ("gcode", "SET_PIN PIN=chamber_led VALUE=0" if light
               else "SET_PIN PIN=chamber_led VALUE=1\n_LIGHT_IDLE"),
-             "accent", True, "light"),
+             "accent", True, "light_on" if light else "light"),
             ("Motors off", ("gcode", "M84"), "accent", not busy, "motor"),
             ("Heaters off", ("gcode", "TURN_OFF_HEATERS"), "warn",
              ps not in ("printing", "paused"), "heat_off"),
@@ -2632,7 +2633,7 @@ class Screen:
             ("Light off" if light else "Light on",
              ("gcode", "SET_PIN PIN=chamber_led VALUE=%d" % (0 if light
                                                              else 1)),
-             "accent", True, "light"),
+             "accent", True, "light_on" if light else "light"),
             ("Save Z %+.3f" % (saved + self.z_adjust), ("z_save",),
              "ok", abs(self.z_adjust) > 1e-6, None)]
         for i, (label, action, color, enabled, icon) in enumerate(top):
@@ -4192,6 +4193,9 @@ def main():
         printing = st.get("print_stats", {}).get("state") in (
             "printing", "paused")
         taps = touch.pop()
+        if printing:
+            # a print counts as activity: the sleep timer starts at its end
+            touch.last_activity = now
         sleep_after = float(screen.prefs.get(
             "sleep_after", cfg.num("screen", "sleep_after")))
         if screen.asleep:

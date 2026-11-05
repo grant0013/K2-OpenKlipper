@@ -116,6 +116,6 @@ location /webcam/ {
 ```
 
 Register the camera in Moonraker (`POST /server/webcams/item` on Creality's
-older Moonraker). Mainsail 2.18 hides webcams without an `enabled` field,
-which that Moonraker does not send; `system/moonraker-webcam-defaults.patch`
-adds the defaults.
+older Moonraker). Mainsail 2.18 and Fluidd 1.37 hide webcams without an
+`enabled` field, which that Moonraker does not send; `install.sh` adds the
+defaults (the change is `system/moonraker-webcam-defaults.patch`).

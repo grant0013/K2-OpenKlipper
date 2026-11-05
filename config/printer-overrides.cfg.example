@@ -18,6 +18,14 @@
 #   [input_shaper]
 #   shaper_freq_x: 52.0
 #
+# Bed mesh limits checked at the start of a print (mm, and mm per mm between
+# points). An unshimmed K2 Plus bed can need more than the defaults (0.35 and
+# 0.006): one tester's 0.675 mm bed printed well with these:
+#
+#   [gcode_macro START_PRINT]
+#   variable_mesh_max_deviation: 0.85
+#   variable_mesh_max_slope: 0.009
+#
 # Idle settings. Chamber light off this many seconds after a print ends or
 # is cancelled (0 = stays on):
 #

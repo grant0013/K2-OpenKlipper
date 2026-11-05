@@ -353,6 +353,7 @@ cp -a /usr/share/moonraker/moonraker.conf "$BACKUP/moonraker-stock.conf" 2>/dev/
 cp -a /usr/share/moonraker/components/update_manager/update_manager.py "$BACKUP/update_manager.py" 2>/dev/null || true
 cp -a /usr/share/moonraker/.version "$BACKUP/moonraker.version" 2>/dev/null || true
 cp -a /usr/share/moonraker/components/file_manager/metadata.py "$BACKUP/metadata.py" 2>/dev/null || true
+cp -a /usr/share/moonraker/components/webcam.py "$BACKUP/webcam.py" 2>/dev/null || true
 [ -e /etc/init.d/moonraker-mainline ] && cp -a /etc/init.d/moonraker-mainline "$BACKUP/moonraker-mainline.init"
 /etc/init.d/moonraker enabled 2>/dev/null && touch "$BACKUP/stock-moonraker-was-enabled" || true
 # On an update or reinstall the system files are already ours: carry the
@@ -360,7 +361,7 @@ cp -a /usr/share/moonraker/components/file_manager/metadata.py "$BACKUP/metadata
 # still restores stock.
 PREV=$(cat /mnt/UDISK/openklipper-backups/LATEST 2>/dev/null || true)
 if [ "$APPINIT" = already ] && [ -n "$PREV" ] && [ -f "$PREV/app.init" ]; then
-    for f in app.init rc.local nginx.conf moonraker-stock.conf update_manager.py moonraker.version metadata.py stock-moonraker-was-enabled; do
+    for f in app.init rc.local nginx.conf moonraker-stock.conf update_manager.py moonraker.version metadata.py webcam.py stock-moonraker-was-enabled; do
         [ -e "$PREV/$f" ] && cp -a "$PREV/$f" "$BACKUP/$f"
     done
 fi
@@ -438,6 +439,31 @@ PY
     python3 -m py_compile "$MD" 2>/dev/null || {
         echo "    Moonraker metadata patch did not compile: restoring the original"
         [ -f "$BACKUP/metadata.py" ] && cp "$BACKUP/metadata.py" "$MD"; }
+fi
+# Newer Mainsail and Fluidd hide webcams without an "enabled" field, which
+# Creality's older Moonraker does not send.
+WC=/usr/share/moonraker/components/webcam.py
+if [ -f "$WC" ]; then
+    python3 - "$WC" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = """        return {k: v for k, v in self.__dict__.items() if k[0] != "_"}\n"""
+new = """        data = {k: v for k, v in self.__dict__.items() if k[0] != "_"}
+        data.setdefault("enabled", True)
+        data.setdefault("icon", "mdiWebcam")
+        data.setdefault("aspect_ratio", "16:9")
+        data.setdefault("target_fps_idle", 5)
+        data.setdefault("extra_data", {})
+        return data
+"""
+if old in s:
+    open(p, "w").write(s.replace(old, new, 1))
+    print("    Moonraker: webcams now show in newer Mainsail and Fluidd")
+PY
+    python3 -m py_compile "$WC" 2>/dev/null || {
+        echo "    Moonraker webcam patch did not compile: restoring the original"
+        [ -f "$BACKUP/webcam.py" ] && cp "$BACKUP/webcam.py" "$WC"; }
 fi
 cp "$BUILD/system/moonraker-mainline.init" /etc/init.d/moonraker-mainline
 chmod 755 /etc/init.d/moonraker-mainline

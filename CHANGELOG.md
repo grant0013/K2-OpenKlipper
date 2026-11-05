@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+Fixes from nur00's K2 Plus report (GitHub issue #4):
+
+- **Mesh retry no longer aborts the print.** A failed mesh check cleans the
+  nozzle and measures again, but the clean began with a retract at 140 C,
+  which Klipper refuses, so the print stopped. The retract now needs a hot
+  nozzle.
+- **go2rtc's web UI and config editor are off the network.** Where the app
+  installed go2rtc, nginx passes its video endpoints only, and `/cam` on
+  port 4409 is Mainsail's camera page again.
+- **Webcams show in newer Mainsail and Fluidd on every install.** `install.sh`
+  now applies the `enabled` defaults to Creality's Moonraker; `uninstall.sh`
+  restores the original.
+- **Touchscreen:** stays on for the sleep time after a print instead of going
+  dark as it ends. The light button's bulb is filled when the light is on.
+- `printer-overrides.cfg.example` shows the bed mesh limits, for an unshimmed
+  K2 Plus bed.
+
 ## v0.4.20-alpha.1 (2026-11-05)
 
 - **Camera WebRTC mode (H.264), in testing** (GitHub issue #4, nur00's
