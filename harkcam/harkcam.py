@@ -36,8 +36,9 @@ webrtc_local only sends video, so other media in the offer (Mainsail asks
 for audio too) are left out of what it sees and refused in the answer. The
 camera does only one format at a time: no MJPEG snapshots in this mode.
 """
-import base64, http.server, json, os, socketserver, subprocess, sys
-import threading, time, urllib.request, uuid
+import base64, hashlib, http.server, json, os, socket, socketserver
+import select, struct, subprocess, sys, threading, time, urllib.request
+import uuid
 
 CFG_PATH = os.environ.get(
     "HARKCAM_CFG", "/mnt/UDISK/printer_data_mainline/config/harkcam.cfg")
@@ -122,10 +123,33 @@ def media_mid(section):
     return None
 
 
-def offer_for_creality(offer):
-    """The offer webrtc_local can answer: the first video section only.
-    Returns (sdp, plan); plan is each offered section, in order, as
-    ("keep", mid) or ("refuse", m-line kind and protocol, mid)."""
+def fix_candidate(line, client_ip):
+    """One ICE candidate as webrtc_local can use it, or None. Browsers hide
+    their LAN address behind a random .local name, which webrtc_local
+    cannot look up: the address the browser reached us from is put in its
+    place. Only UDP over IPv4 is kept."""
+    c = line.strip()
+    if c.startswith("a="):
+        c = c[2:]
+    parts = c.split()
+    if len(parts) < 8 or not parts[0].startswith("candidate:") \
+            or parts[2].lower() != "udp":
+        return None
+    if parts[4].lower().endswith(".local"):
+        if not client_ip or ":" in client_ip:
+            return None
+        parts[4] = client_ip
+    elif ":" in parts[4]:
+        return None
+    return "a=" + " ".join(parts)
+
+
+def offer_for_creality(offer, extra_candidates=(), client_ip=None):
+    """The offer webrtc_local can answer: the first video section only,
+    with the browser's candidates in it (webrtc_local takes none later and
+    never connects without them). Returns (sdp, plan); plan is each offered
+    section, in order, as ("keep", mid) or ("refuse", m-line, mid, codec
+    lines)."""
     session, media = split_sdp(offer)
     kept, plan = [], []
     for section in media:
@@ -144,6 +168,17 @@ def offer_for_creality(offer):
                          mid, codec))
     if not kept:
         raise ValueError("the offer has no video")
+    video = kept[0]
+    found = [l for l in video if l.startswith("a=candidate:")]
+    rest = [l for l in video if not l.startswith((
+        "a=candidate:", "a=end-of-candidates"))]
+    cands = []
+    for c in found + ["a=" + c if not c.startswith("a=") else c
+                      for c in extra_candidates]:
+        fixed = fix_candidate(c, client_ip)
+        if fixed and fixed not in cands:
+            cands.append(fixed)
+    kept[0] = rest + cands + (["a=end-of-candidates"] if cands else [])
     keep_mids = [p[1] for p in plan if p[0] == "keep" and p[1] is not None]
     session = [("a=group:BUNDLE " + " ".join(keep_mids))
                if l.startswith("a=group:BUNDLE") else l for l in session]
@@ -215,8 +250,13 @@ const pc = new RTCPeerConnection();
 pc.addTransceiver("video", {direction: "recvonly"});
 pc.ontrack = e => { v.srcObject = e.streams[0] || new MediaStream([e.track]); };
 pc.oniceconnectionstatechange = () => { s.textContent = pc.iceConnectionState; };
+// webrtc_local needs the candidates in the offer: wait for them
 pc.createOffer().then(o => pc.setLocalDescription(o)).then(() =>
-  fetch("whep", {method: "POST", headers: {"Content-Type": "application/sdp"},
+  new Promise(r => { if (pc.iceGatheringState === "complete") r();
+    pc.onicegatheringstatechange = () => {
+      if (pc.iceGatheringState === "complete") r(); }; }))
+  .then(() => fetch("whep", {method: "POST",
+                 headers: {"Content-Type": "application/sdp"},
                  body: pc.localDescription.sdp}))
   .then(r => { if (r.status !== 201) throw new Error("status " + r.status);
                return r.text(); })
@@ -313,12 +353,26 @@ CAM = PACER = STREAMS = None
 
 
 MODE, WEBRTC_URL = "mjpeg", DEFAULTS["webrtc_url"]
+WS_GATHER, WS_GATHER_MAX = 0.6, 3.0
 SESSIONS = {}           # WHEP session id -> start time (for the log)
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
+    # unbuffered reads, so select() on the socket sees everything waiting
+    # (a timed-out buffered reader cannot be read again)
+    rbufsize = 0
+
     def log_message(self, *args):
         pass
+
+    def read_exact(self, n):
+        buf = b""
+        while len(buf) < n:
+            chunk = self.rfile.read(n - len(buf))
+            if not chunk:
+                break
+            buf += chunk
+        return buf
 
     def cors(self):
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -337,6 +391,96 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.cors()
         self.end_headers()
         self.wfile.write(body)
+
+    def client_ip(self):
+        """The browser's address: nginx's X-Real-IP, else the peer."""
+        ip = (self.headers.get("X-Real-IP")
+              or (self.headers.get("X-Forwarded-For") or "").split(",")[0]
+              or self.client_address[0]).strip()
+        return ip[7:] if ip.startswith("::ffff:") else ip
+
+    # --- go2rtc-style WebSocket (Mainsail's "WebRTC (go2rtc)") ----------
+    def ws_send(self, obj):
+        data = json.dumps(obj).encode()
+        n = len(data)
+        head = bytes([0x81]) + (bytes([n]) if n < 126 else
+                                struct.pack(">BH", 126, n) if n < 65536 else
+                                struct.pack(">BQ", 127, n))
+        self.wfile.write(head + data)
+        self.wfile.flush()
+
+    def ws_recv(self):
+        """One text message, or None when the browser closes."""
+        while True:
+            head = self.read_exact(2)
+            if len(head) < 2:
+                return None
+            op, n = head[0] & 0x0F, head[1] & 0x7F
+            if n == 126:
+                n = struct.unpack(">H", self.read_exact(2))[0]
+            elif n == 127:
+                n = struct.unpack(">Q", self.read_exact(8))[0]
+            mask = self.read_exact(4) if head[1] & 0x80 else b"\0\0\0\0"
+            data = bytes(b ^ mask[i % 4] for i, b in
+                         enumerate(self.read_exact(n)))
+            if op == 8:
+                return None
+            if op == 9:                       # ping -> pong
+                self.wfile.write(bytes([0x8A, len(data)]) + data)
+                self.wfile.flush()
+            elif op == 1:
+                return data.decode()
+
+    def go2rtc_ws(self):
+        key = self.headers.get("Sec-WebSocket-Key", "")
+        accept = base64.b64encode(hashlib.sha1(
+            (key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode())
+            .digest()).decode()
+        self.send_response(101)
+        self.send_header("Upgrade", "websocket")
+        self.send_header("Connection", "Upgrade")
+        self.send_header("Sec-WebSocket-Accept", accept)
+        self.end_headers()
+        self.close_connection = True
+        ip = self.client_ip()
+        offer, cands = None, []
+        # The offer comes at once and the candidates one by one after it;
+        # webrtc_local needs them all in the offer, so wait until they stop
+        # (WS_GATHER s of quiet, WS_GATHER_MAX at most)
+        start = time.time()
+        while time.time() - start < WS_GATHER_MAX:
+            ready = select.select([self.connection], [], [], WS_GATHER)[0]
+            if not ready:
+                if offer and cands:
+                    break
+                continue
+            msg = self.ws_recv()
+            if msg is None:
+                return
+            try:
+                m = json.loads(msg)
+            except ValueError:
+                continue
+            if m.get("type") == "webrtc/offer":
+                offer = m.get("value") or ""
+            elif m.get("type") == "webrtc/candidate" and m.get("value"):
+                cands.append(m["value"])
+        if not offer:
+            return
+        try:
+            sdp, plan = offer_for_creality(offer, cands, ip)
+            answer = answer_for_browser(call_creality(WEBRTC_URL, sdp), plan)
+        except Exception as e:
+            print("ws: %s" % e, flush=True)
+            self.ws_send({"type": "error", "value": "webrtc_local: %s" % e})
+            return
+        print("ws: %s, %d candidates" % (ip, sum(
+            1 for l in sdp.split("\r\n") if l.startswith("a=candidate"))),
+            flush=True)
+        self.ws_send({"type": "webrtc/answer", "value": answer})
+        # keep the socket open (the browser closes it); answer pings
+        while self.ws_recv() is not None:
+            pass
 
     def whep(self):
         """The path is /whep or /whep/<id> (behind nginx's /webcam/)."""
@@ -360,9 +504,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if MODE != "webrtc":
             return self.plain(409, "harkcam is in mode: mjpeg; set mode: "
                               "webrtc in harkcam.cfg for WebRTC")
-        offer = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        offer = self.read_exact(int(self.headers.get("Content-Length") or 0))
         try:
-            sdp, plan = offer_for_creality(offer.decode())
+            sdp, plan = offer_for_creality(offer.decode(),
+                                           client_ip=self.client_ip())
             answer = answer_for_browser(
                 call_creality(WEBRTC_URL, sdp), plan)
         except Exception as e:
@@ -387,7 +532,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_PATCH(self):
         if not self.whep():
             return self.plain(404, "not found")
-        self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        self.read_exact(int(self.headers.get("Content-Length") or 0))
         self.send_response(204)
         self.cors()
         self.end_headers()
@@ -403,6 +548,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
+        if (self.headers.get("Upgrade", "").lower() == "websocket"
+                and self.path.split("?")[0].rstrip("/").endswith("/api/ws")):
+            if MODE != "webrtc":
+                return self.plain(409, "harkcam is in mode: mjpeg")
+            return self.go2rtc_ws()
         if MODE == "webrtc":
             if "action=" in self.path:
                 return self.plain(503, "harkcam is in mode: webrtc (the "

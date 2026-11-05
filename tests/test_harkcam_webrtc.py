@@ -2,7 +2,11 @@
 client and Creality's webrtc_local, and the WHEP endpoints against a fake
 webrtc_local that speaks its base64 JSON signalling."""
 import base64
+import hashlib
 import http.server
+import os
+import socket
+import struct
 import importlib.util
 import json
 import pathlib
@@ -109,6 +113,40 @@ class SdpTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             hc.answer_for_browser("v=0\r\ns=-\r\n", [("keep", "0")])
 
+    def test_fix_candidate(self):
+        mdns = ("candidate:842163049 1 udp 1677729535 "
+                "0a1b2c3d-1111-2222-3333-444455556666.local 54321 typ host "
+                "generation 0")
+        self.assertEqual(hc.fix_candidate(mdns, "192.168.3.98"),
+                         "a=candidate:842163049 1 udp 1677729535 "
+                         "192.168.3.98 54321 typ host generation 0")
+        self.assertIsNone(hc.fix_candidate(mdns, None))
+        self.assertIsNone(hc.fix_candidate(mdns, "fe80::1"))
+        self.assertEqual(hc.fix_candidate(
+            "a=candidate:1 1 UDP 2122260223 192.168.3.98 50000 typ host",
+            None), "a=candidate:1 1 UDP 2122260223 192.168.3.98 50000 "
+                   "typ host")
+        self.assertIsNone(hc.fix_candidate(
+            "candidate:2 1 tcp 1518280447 192.168.3.98 9 typ host "
+            "tcptype active", None))
+        self.assertIsNone(hc.fix_candidate(
+            "candidate:3 1 udp 2122262783 fd00::5 50001 typ host", None))
+        self.assertIsNone(hc.fix_candidate("garbage", None))
+
+    def test_offer_gets_the_candidates(self):
+        sdp, _ = hc.offer_for_creality(OFFER, [
+            "candidate:9 1 udp 1677729535 abcd.local 51000 typ host",
+            "candidate:9 1 udp 1677729535 abcd.local 51000 typ host",
+            "candidate:8 1 udp 1677729535 81.2.3.4 51001 typ srflx raddr "
+            "0.0.0.0 rport 0"], "192.168.3.98")
+        video = sections(sdp)[0]
+        cands = [l for l in video if l.startswith("a=candidate")]
+        self.assertEqual(cands, [
+            "a=candidate:9 1 udp 1677729535 192.168.3.98 51000 typ host",
+            "a=candidate:8 1 udp 1677729535 81.2.3.4 51001 typ srflx raddr "
+            "0.0.0.0 rport 0"])
+        self.assertEqual(video[-1], "a=end-of-candidates")
+
     def test_mode_settings(self):
         self.assertEqual(hc.mode_settings({}), (
             "mjpeg", "http://127.0.0.1:8000/call/webrtc_local"))
@@ -204,6 +242,69 @@ class WhepTest(unittest.TestCase):
         code, h, body = self.req("GET", "/")
         self.assertEqual(code, 200)
         self.assertIn("RTCPeerConnection", body)
+
+    def ws(self, messages, wait_answer=True):
+        """A go2rtc-style WebSocket client: send messages, return replies."""
+        sock = socket.create_connection(("127.0.0.1",
+                                         self.srv.server_address[1]))
+        key = base64.b64encode(os.urandom(16)).decode()
+        sock.sendall(("GET /api/ws?src=k2&media=video+audio HTTP/1.1\r\n"
+                      "Host: x\r\nUpgrade: websocket\r\n"
+                      "Connection: Upgrade\r\nSec-WebSocket-Key: %s\r\n"
+                      "Sec-WebSocket-Version: 13\r\n\r\n" % key).encode())
+        head = b""
+        while b"\r\n\r\n" not in head:
+            head += sock.recv(1)
+        self.assertIn(b"101", head.split(b"\r\n")[0])
+        accept = base64.b64encode(hashlib.sha1(
+            (key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode())
+            .digest())
+        self.assertIn(accept, head)
+        for m in messages:
+            data = json.dumps(m).encode()
+            mask = os.urandom(4)
+            n = len(data)
+            hdr = bytes([0x81]) + (bytes([0x80 | n]) if n < 126 else
+                                   struct.pack(">BH", 0x80 | 126, n))
+            sock.sendall(hdr + mask + bytes(
+                b ^ mask[i % 4] for i, b in enumerate(data)))
+        replies = []
+        if wait_answer:
+            sock.settimeout(8)
+            buf = b""
+            while True:
+                buf += sock.recv(65536)
+                if len(buf) >= 4:
+                    n = buf[1] & 0x7F
+                    off = 2
+                    if n == 126:
+                        n = struct.unpack(">H", buf[2:4])[0]
+                        off = 4
+                    if len(buf) >= off + n:
+                        replies.append(json.loads(buf[off:off + n]))
+                        break
+        sock.sendall(bytes([0x88, 0x80]) + os.urandom(4))   # close
+        sock.close()
+        return replies
+
+    def test_go2rtc_websocket(self):
+        reply = self.ws([
+            {"type": "webrtc/offer", "value": OFFER},
+            {"type": "webrtc/candidate", "value":
+             "candidate:9 1 udp 1677729535 abcd.local 51000 typ host"}])
+        self.assertEqual(reply[0]["type"], "webrtc/answer")
+        self.assertEqual(len(sections(reply[0]["value"])), 2)
+        sent = FakeWebrtcLocal.offers[0]["sdp"]
+        # the candidate went into the offer, with the peer's address
+        self.assertIn("a=candidate:9 1 udp 1677729535 127.0.0.1 51000 typ "
+                      "host", sent.split("\r\n"))
+
+    def test_go2rtc_websocket_error(self):
+        FakeWebrtcLocal.reply = {"type": "error"}
+        reply = self.ws([{"type": "webrtc/offer", "value": OFFER},
+                         {"type": "webrtc/candidate", "value":
+                          "candidate:1 1 udp 1 10.0.0.2 5000 typ host"}])
+        self.assertEqual(reply[0]["type"], "error")
 
     def test_whep_refused_in_mjpeg_mode(self):
         hc.MODE = "mjpeg"

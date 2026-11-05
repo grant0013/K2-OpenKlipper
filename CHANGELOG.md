@@ -4,15 +4,17 @@
 
 - **Camera WebRTC mode (H.264), in testing** (GitHub issue #4, nur00's
   measurements). `mode: webrtc` in `harkcam.cfg` hands the camera to
-  Creality's own `cam_app` + `webrtc_local`, which send H.264 at about
-  51 KB/s a viewer instead of 800+ for MJPEG; harkcam translates Mainsail's
-  and Fluidd's "WebRTC (MediaMTX)" (WHEP) calls into `webrtc_local`'s
-  base64 JSON offer, leaves the audio track out and refuses it in the
-  answer. No snapshots in this mode (time-lapse and the AI watcher need
-  `mode: mjpeg`, still the default). Tested here up to `webrtc_local`'s
-  door: a real Chromium and aiortc accept the answers and connect; video
-  from a real `webrtc_local` is for a K2 with its camera (nur00).
-  tests/test_harkcam_webrtc.py.
+  Creality's own `cam_app` + `webrtc_local`; harkcam translates for
+  Mainsail's and Fluidd's "WebRTC (go2rtc)" camera type (WebSocket). It
+  collects the browser's offer and candidates and sends them to
+  `webrtc_local` in one call (it never connects without candidates),
+  swapping Chrome's `.local` names for the browser's real address, and
+  refuses the audio track in the answer. Seen working on a K2 on 5 Nov
+  2026, in Mainsail and on the test page: 1280x720 at 15 fps, 224 KB/s a
+  viewer against about 820 for MJPEG, `webrtc_local` at 4% CPU. No
+  snapshots in this mode (time-lapse and the AI watcher need
+  `mode: mjpeg`, still the default). nginx's `/webcam/` (port 4408) now
+  passes WebSockets. tests/test_harkcam_webrtc.py.
 
 ## v0.4.19-alpha.1 (2026-11-05)
 
