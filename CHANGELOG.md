@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- **Print a file from the touchscreen** (asked for in GitHub issue #3).
+  The idle Status page has a Print a file button: the print files newest
+  first with their thumbnails, print time and filament, a detail view with
+  a large preview, and Print. A finished print offers Print again (through
+  the detail view, so the bed is cleared first) and Other file. Hidden while
+  printing or while Klipper is busy; Moonraker's reason is shown if a start
+  is refused. Tests in tests/test_harkscreen_files.py (fake Moonraker,
+  rendered screens); the list was also read from a real host's 46 files.
+
 ## v0.4.18-alpha.3 (2026-11-05)
 
 - **Fix: watching the camera could stop a print** (GitHub issue #4,

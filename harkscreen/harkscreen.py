@@ -9,7 +9,7 @@ sleep), which is re-read whenever it changes.
 Usage: harkscreen.py [config path]
 """
 import configparser, hashlib, json, os, re, struct, subprocess, sys, threading
-import time, urllib.parse, urllib.request
+import time, urllib.error, urllib.parse, urllib.request
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
 CONFIG_DIR = "/mnt/UDISK/printer_data_mainline/config"
@@ -130,6 +130,9 @@ LOGS_LINK = "/mnt/UDISK/printer_data_mainline/logs"
 USB_DEV = "sda"
 USB_DEV_RE = r"sd[a-z]$"
 USB_LABEL = "K2PRINTER"
+# Print files the touchscreen lists (Moonraker's gcodes root)
+GCODE_EXTS = (".gcode", ".g", ".gco")
+FILES_PER_PAGE = 4
 LIGHT_OFF = ((0, "Never"), (300, "5 min"), (600, "10 min"), (1800, "30 min"))
 # 99999999 s is stock's "never"
 IDLE_OFF = ((900, "15 min"), (1800, "30 min"), (3600, "1 hour"),
@@ -660,16 +663,23 @@ class Moonraker:
     def thumbnail(self, filename):
         """The slicer's largest thumbnail (up to 400 px) of a print file as
         an RGBA image, and the model height; (None, 0) without one."""
+        meta = self.metadata(filename)
+        return (self.thumb_image(filename, meta),
+                float(meta.get("object_height") or 0))
+
+    def metadata(self, filename):
         q = urllib.parse.quote(filename)
         with urllib.request.urlopen(
                 self.base + "/server/files/metadata?filename=" + q,
                 timeout=5) as r:
-            meta = json.load(r)["result"]
-        height = float(meta.get("object_height") or 0)
+            return json.load(r)["result"]
+
+    def thumb_image(self, filename, meta):
+        """The largest thumbnail up to 400 px in meta as RGBA, or None."""
         thumbs = [t for t in meta.get("thumbnails") or []
                   if t.get("relative_path") and t.get("width", 0) <= 400]
         if not thumbs:
-            return None, height
+            return None
         best = max(thumbs, key=lambda t: t.get("width", 0))
         folder = os.path.dirname(filename)
         path = "/".join(p for p in (folder, best["relative_path"]) if p)
@@ -679,7 +689,37 @@ class Moonraker:
                 timeout=5) as r:
             img = Image.open(io.BytesIO(r.read()))
             img.load()
-        return img.convert("RGBA"), height
+        return img.convert("RGBA")
+
+    def files(self):
+        """Print files, newest first, as (path, modified, size). Hidden
+        folders (".thumbs" and the like) are left out."""
+        with urllib.request.urlopen(
+                self.base + "/server/files/list?root=gcodes", timeout=5) as r:
+            items = json.load(r)["result"]
+        out = []
+        for f in items:
+            path = f.get("path") or f.get("filename") or ""
+            if (path.lower().endswith(GCODE_EXTS)
+                    and not any(p.startswith(".") for p in path.split("/"))):
+                out.append((path, float(f.get("modified") or 0),
+                            int(f.get("size") or 0)))
+        out.sort(key=lambda f: -f[1])
+        return out
+
+    def start_print(self, filename):
+        """Start a print file; raises with Moonraker's message on failure."""
+        req = urllib.request.Request(
+            self.base + "/printer/print/start?filename="
+            + urllib.parse.quote(filename), data=b"")
+        try:
+            urllib.request.urlopen(req, timeout=10).read()
+        except urllib.error.HTTPError as e:
+            try:
+                msg = json.load(e)["error"]["message"]
+            except Exception:
+                msg = "HTTP %d" % e.code
+            raise RuntimeError(msg)
 
     def timelapse(self):
         """moonraker-timelapse settings, or None without the add-on."""
@@ -1012,6 +1052,12 @@ class Screen:
         self.last_key = None         # view_key of the drawn base
         self.running = None          # (label, start) of a command we sent
         self.slot_menu = None        # slot sheet: load / purge / unload / set
+        # Print a file (Status page): {"list": [(path, modified, size)] or
+        # None while reading, "page", "pick": path in the detail view or
+        # None, "error"}; file_info caches each file's metadata/thumbnail
+        self.files = None
+        self.file_info = {}
+        self.files_lock = threading.Lock()
         try:
             with open(PA_ACK_FILE) as f:
                 self.pa_ack = float(f.read().strip() or 0)
@@ -1541,6 +1587,7 @@ class Screen:
             (st.get("gcode_macro _LIGHT_IDLE") or {}).get("off_after"),
             # the Settings page shows the time
             time.strftime("%H:%M") if self.page == "settings" else "",
+            self.files_key(),
             # the stage timer ticks every 2 s while a stage runs
             int(time.time() / 2) if self.stage_log and self.stage_log[-1][0]
             else 0],
@@ -1579,11 +1626,16 @@ class Screen:
         if self.editor and st.get("print_stats", {}).get("state") in (
                 "printing", "paused"):
             self.editor = None
+        if self.files is not None and st.get("print_stats", {}).get(
+                "state") in ("printing", "paused"):
+            self.files = None
         if err:
             self.draw_offline(d, body, err,
                               st.get("webhooks", {}).get("state_message", ""))
         elif self.editor:
             self.draw_editor(d, body, st)
+        elif self.files is not None:
+            self.draw_files(d, body, st)
         else:
             getattr(self, "page_" + self.page)(d, body, st)
         self.draw_nav(d)
@@ -2173,13 +2225,31 @@ class Screen:
                                              self.c["white"], 0.35))
                 if state == "printing":
                     self.anims.append({"kind": "sheen", "rect": fill})
-            ztxt = "Z %.2f mm" % z
-            if thumb and thumb[2] > 0:
-                ztxt += " of %.1f" % thumb[2]
-            self.text(d, (lx, left[3] - 30), ztxt, "s", "muted",
-                      anchor="lm")
-        elif self.cfg.flag("brand", "idle_logo"):
-            self.paste_logo((left[0], left[1] - 6, left[2], left[3] + 6))
+            if state == "complete" and not self.busy(st):
+                # The finished file again (through its detail view, so the
+                # bed gets cleared first) or another one
+                bw = (left[2] - 18 - lx - 12) // 2
+                by = left[3] - 56
+                self.button(d, (lx, by, lx + bw, by + 46), "Print again",
+                            ("files_open", ps.get("filename")), "accent",
+                            True, "s")
+                self.button(d, (lx + bw + 12, by, left[2] - 18, by + 46),
+                            "Other file", ("files_open",), "muted", True,
+                            "s")
+            else:
+                ztxt = "Z %.2f mm" % z
+                if thumb and thumb[2] > 0:
+                    ztxt += " of %.1f" % thumb[2]
+                self.text(d, (lx, left[3] - 30), ztxt, "s", "muted",
+                          anchor="lm")
+        else:
+            bottom = left[3] + 6
+            if not self.busy(st):
+                pb = (left[0], left[3] - 74, left[2], left[3])
+                self.button(d, pb, "Print a file", ("files_open",))
+                bottom = pb[1] - 6
+            if self.cfg.flag("brand", "idle_logo"):
+                self.paste_logo((left[0], left[1] - 6, left[2], bottom))
         self.draw_status_side(d, body, st, left, pad)
 
     def preview(self, img, size, frac):
@@ -2731,6 +2801,254 @@ class Screen:
             self.button(d, (x0 + 3 * pad + 2 * bw, by, x1 - pad, by + 48),
                         "Save", ("ed_save",), "ok", bool(ed.get("colour")),
                         "s")
+
+    # --- Print a file -------------------------------------------------
+    def files_key(self):
+        fs = self.files
+        if fs is None:
+            return None
+        return [fs.get("pick"), fs.get("page"), fs.get("error"),
+                fs.get("starting"),
+                None if fs.get("list") is None else len(fs["list"]),
+                sorted(self.file_info)]
+
+    def files_pages(self):
+        n = len((self.files or {}).get("list") or [])
+        return max(1, (n + FILES_PER_PAGE - 1) // FILES_PER_PAGE)
+
+    def open_files(self, mr, pick=None):
+        """The file list (pick None) or one file's detail view; the list is
+        read in the background either way, for Back."""
+        self.files = {"list": None, "page": 0, "pick": pick, "error": None}
+        fs = self.files
+
+        def run():
+            try:
+                fs["list"] = mr.files()
+            except Exception as e:
+                print("files: %s" % e, flush=True)
+                fs["error"] = "Could not read the print files"
+                fs["list"] = []
+            self.dirty = True
+            if self.files is fs:
+                self.load_file_info(mr, fs)
+        threading.Thread(target=run, daemon=True).start()
+
+    def want_file_info(self, mr):
+        fs = self.files
+        if fs is not None:
+            threading.Thread(target=self.load_file_info, args=(mr, fs),
+                             daemon=True).start()
+
+    def load_file_info(self, mr, fs):
+        """Metadata and thumbnail for the files on view, one at a time."""
+        with self.files_lock:
+            listed = {f[0]: f[1] for f in fs.get("list") or []}
+            page = fs.get("page", 0)
+            paths = [f[0] for f in (fs.get("list") or [])[
+                page * FILES_PER_PAGE:(page + 1) * FILES_PER_PAGE]]
+            if fs.get("pick"):
+                paths.insert(0, fs["pick"])
+            for path in paths:
+                if self.files is not fs:
+                    return
+                have = self.file_info.get(path)
+                if have and have["modified"] == listed.get(path,
+                                                           have["modified"]):
+                    continue
+                info = {"modified": listed.get(path, 0.), "meta": {},
+                        "img": None}
+                try:
+                    info["meta"] = mr.metadata(path)
+                    info["img"] = mr.thumb_image(path, info["meta"])
+                except Exception as e:
+                    print("files: %s: %s" % (path, e), flush=True)
+                if len(self.file_info) > 24:
+                    self.file_info.clear()
+                self.file_info[path] = info
+                self.dirty = True
+
+    def start_print(self, mr, path):
+        fs = self.files
+        if fs is not None:
+            fs["starting"] = True
+
+        def run():
+            try:
+                mr.start_print(path)
+                self.running = ("Starting print", time.time())
+                if self.files is fs:
+                    self.files = None
+            except Exception as e:
+                print("print %s: %s" % (path, e), flush=True)
+                if self.files is fs:
+                    fs.update(starting=False,
+                              error="Did not start: %s" % e)
+            self.dirty = True
+        threading.Thread(target=run, daemon=True).start()
+
+    @staticmethod
+    def file_facts(meta):
+        """Print time, filament and the like from a file's metadata."""
+        out = []
+        sec = meta.get("estimated_time")
+        if sec:
+            m = int(round(float(sec) / 60))
+            out.append(("Print time", "%dh %02dm" % (m // 60, m % 60)
+                        if m >= 60 else "%d min" % max(1, m)))
+        grams = meta.get("filament_weight_total")
+        # "PLA;PETG;" or, from OrcaSlicer, '["PLA", "PETG", "PLA"]'
+        kinds = [k.strip(" \"'") for k in re.split(
+            r"[;,]", str(meta.get("filament_type") or "").strip("[] "))]
+        kinds = [k for k in kinds if k]
+        kind = "/".join(sorted(set(kinds), key=kinds.index))
+        if grams:
+            out.append(("Filament", ("%.0f g %s" % (float(grams), kind))
+                        .strip()))
+        elif kind:
+            out.append(("Filament", kind))
+        if meta.get("object_height"):
+            out.append(("Height", "%.1f mm" % float(meta["object_height"])))
+        if meta.get("layer_height"):
+            out.append(("Layers", "%.2f mm" % float(meta["layer_height"])))
+        return out
+
+    def file_when(self, ts):
+        if not ts:
+            return ""
+        t = local_time(ts, self.zone())
+        today = local_time(time.time(), self.zone())
+        if t[:3] == today[:3]:
+            return time.strftime("today %H:%M", t)
+        return time.strftime("%d %b %H:%M", t).lstrip("0")
+
+    def file_thumb(self, info, size):
+        img = info and info.get("img")
+        if img is None:
+            return None
+        key = ("filethumb", id(img), size)
+        hit = self.preview_cache.get(key)
+        if hit is None:
+            alpha = img.getchannel("A")
+            hit = img.crop(alpha.getbbox() or (0, 0) + img.size)
+            hit.thumbnail((size, size), Image.LANCZOS)
+            if len(self.preview_cache) > 40:
+                self.preview_cache.clear()
+            self.preview_cache[key] = hit
+        return hit
+
+    def draw_files(self, d, body, st):
+        fs = self.files
+        if fs.get("pick"):
+            return self.draw_file_detail(d, body, st)
+        x0, y0, x1, y1 = body
+        pad = 14
+        self.text(d, (x0 + pad, y0 + 8), "Print a file", "s")
+        items = fs.get("list")
+        pages = self.files_pages()
+        fs["page"] = min(fs.get("page", 0), pages - 1)
+        if items:
+            self.text(d, (x1 - pad, y0 + 12), "page %d of %d" % (
+                fs["page"] + 1, pages), "xs", "muted", anchor="ra")
+        mid = ((x0 + x1) // 2, (y0 + y1) // 2 - 20)
+        if items is None:
+            self.text(d, mid, "Reading files…", "s", "muted", anchor="mm")
+        elif not items:
+            msg = fs.get("error") or ("No print files yet. Send one from "
+                                      "your slicer or upload it in "
+                                      "Mainsail.")
+            for i, line in enumerate(self.wrap(msg, "s", x1 - x0 - 80)[:3]):
+                self.text(d, (mid[0], mid[1] - 30 + i * 32), line, "s",
+                          "muted", anchor="mm")
+        rh, gap, top = 66, 8, y0 + 44
+        for i, (path, modified, size) in enumerate((items or [])[
+                fs["page"] * FILES_PER_PAGE:
+                (fs["page"] + 1) * FILES_PER_PAGE]):
+            by = top + i * (rh + gap)
+            box = (x0 + pad, by, x1 - pad, by + rh)
+            self.panel(d, box)
+            info = self.file_info.get(path)
+            tb = (box[0] + 8, by + 6, box[0] + 8 + rh - 12, by + rh - 6)
+            img = self.file_thumb(info, rh - 12)
+            if img is not None:
+                self.canvas.paste(img, (
+                    tb[0] + (tb[2] - tb[0] - img.size[0]) // 2,
+                    tb[1] + (tb[3] - tb[1] - img.size[1]) // 2), img)
+            else:
+                d.rounded_rectangle(tb, radius=10, fill=self.c["background"])
+            tx = tb[2] + 14
+            folder, name = os.path.split(path)
+            name = os.path.splitext(name)[0]
+            self.text(d, (tx, by + 22), name, "s", anchor="lm",
+                      width=box[2] - 12 - tx)
+            facts = dict(self.file_facts(info["meta"])) if info else {}
+            bits = [self.file_when(modified)]
+            bits += [facts[k] for k in ("Print time", "Filament")
+                     if k in facts]
+            if folder:
+                bits.append(folder + "/")
+            self.text(d, (tx, by + 48), "  ·  ".join(b for b in bits if b),
+                      "xs", "muted", anchor="lm", width=box[2] - 12 - tx)
+            self.buttons.append((*box, ("files_pick", path)))
+        by = y1 - 58
+        bw = (x1 - x0 - pad * 4) // 3
+        self.button(d, (x0 + pad, by, x0 + pad + bw, by + 48), "Back",
+                    ("files_page", -1), "muted", fs["page"] > 0, "s")
+        self.button(d, (x0 + 2 * pad + bw, by, x0 + 2 * pad + 2 * bw,
+                        by + 48), "More", ("files_page", 1), "muted",
+                    fs["page"] < pages - 1, "s")
+        self.button(d, (x0 + 3 * pad + 2 * bw, by, x1 - pad, by + 48),
+                    "Close", ("files_close",), "muted", True, "s")
+
+    def draw_file_detail(self, d, body, st):
+        fs = self.files
+        path = fs["pick"]
+        x0, y0, x1, y1 = body
+        pad = 14
+        info = self.file_info.get(path)
+        name = os.path.splitext(os.path.basename(path))[0]
+        self.text(d, (x0 + pad, y0 + 8), name, "s",
+                  width=x1 - x0 - 2 * pad)
+        tb = (x0 + pad, y0 + 48, x0 + pad + 250, y0 + 298)
+        self.panel(d, tb)
+        img = self.file_thumb(info, 226)
+        if img is not None:
+            self.canvas.paste(img, (
+                tb[0] + (tb[2] - tb[0] - img.size[0]) // 2,
+                tb[1] + (tb[3] - tb[1] - img.size[1]) // 2), img)
+        else:
+            self.text(d, ((tb[0] + tb[2]) // 2, (tb[1] + tb[3]) // 2),
+                      "Reading…" if info is None else "No preview", "xs",
+                      "muted", anchor="mm")
+        tx = tb[2] + 24
+        facts = self.file_facts(info["meta"]) if info else []
+        listed = {f[0]: f for f in fs.get("list") or []}
+        if path in listed:
+            facts.append(("Saved", self.file_when(listed[path][1])))
+        first = 0
+        if info is not None and not info["meta"]:
+            self.text(d, (tx, y0 + 56), "No details for this file", "xs",
+                      "muted", width=x1 - pad - tx)
+            first = 1
+        for i, (label, value) in enumerate(facts[:5 - first]):
+            ly = y0 + 56 + (i + first) * 48
+            self.text(d, (tx, ly), label, "xs", "muted")
+            self.text(d, (tx, ly + 20), value, "s", width=x1 - pad - tx)
+        err = fs.get("error")
+        self.text(d, (x0 + pad, y1 - 84), err or
+                  "Clear the bed before you start.", "xs",
+                  "error" if err else "muted", anchor="lm",
+                  width=x1 - x0 - 2 * pad)
+        state = st.get("print_stats", {}).get("state")
+        can = (not fs.get("starting") and not self.busy(st)
+               and state not in ("printing", "paused"))
+        by = y1 - 58
+        bw = (x1 - x0 - pad * 3) // 2
+        self.button(d, (x0 + pad, by, x0 + pad + bw, by + 48), "Back",
+                    ("files_back",), "muted", True, "s")
+        self.button(d, (x0 + 2 * pad + bw, by, x1 - pad, by + 48),
+                    "Starting…" if fs.get("starting") else "Print",
+                    ("files_print", path), "ok", can, "s")
 
     # --- Wi-Fi ---------------------------------------------------------
     KB_LETTERS = ("1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm")
@@ -3535,12 +3853,30 @@ class Screen:
                 self.page = action[1]
                 self.editor = None
                 self.kb = None
+                self.files = None
             elif kind == "gcode":
                 if action[1] in label:
                     self.running = (label[action[1]], time.time())
                 mr.gcode(action[1])
             elif kind == "confirm":
                 self.confirm = (action[1], action[2])
+            elif kind == "files_open":
+                self.open_files(mr, action[1] if len(action) > 1 else None)
+            elif kind == "files_page" and self.files:
+                pages = self.files_pages()
+                self.files["page"] = max(0, min(pages - 1, self.files["page"]
+                                                + action[1]))
+                self.want_file_info(mr)
+            elif kind == "files_pick" and self.files:
+                self.files.update(pick=action[1], error=None)
+                self.want_file_info(mr)
+            elif kind == "files_back" and self.files:
+                self.files.update(pick=None, error=None)
+                self.want_file_info(mr)
+            elif kind == "files_close":
+                self.files = None
+            elif kind == "files_print":
+                self.start_print(mr, action[1])
             elif kind == "temp_pick":
                 self.temp_pick = action[1]
                 self.temp_target = int(round(
@@ -3818,6 +4154,7 @@ def main():
                 traceback.print_exc()
                 sys.stdout.flush()
                 screen.page, screen.editor, screen.kb = "status", None, None
+                screen.files = None
                 screen.confirm = None
                 screen.base = screen.render(st, err)
             if screen.transition is not None and old is not None:

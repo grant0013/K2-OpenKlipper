@@ -9,6 +9,12 @@ the framebuffer and talks to Moonraker.
 - Landscape layout (the panel is portrait, 480x800; the UI rotates 90°).
 - Pages: status (progress, temperatures, ETA from the slicer's M73), CFS
   slots, controls, machine, Wi-Fi.
+- **Print a file** (Status page, when idle): the print files newest first,
+  four to a page with the slicer's thumbnail, age, print time and filament;
+  tap one for its preview and details, then **Print** to start it. After a
+  print, **Print again** opens the same file's details (clear the bed
+  first) and **Other file** the list. Starting goes through Moonraker
+  (`/printer/print/start`); a refusal is shown under the preview.
 - CFS slot sheet: edit the filament record, Load & purge, Purge, Unload, and
   **Calibrate PA** for the loaded slot.
 - Wi-Fi selection with an on-screen keyboard, through `wpa_supplicant`'s
