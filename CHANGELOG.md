@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.4.18-alpha.3 (2026-11-05)
 
 - **Fix: watching the camera could stop a print** (GitHub issue #4,
   measured by nur00 on a K2 Plus). harkcam sent 720p at 15 fps to every
@@ -13,7 +13,7 @@
   open; a new one closes the oldest, so Mainsail's or Fluidd's fullscreen
   camera never comes up blank. Size, frame rate and the stream cap are in
   `harkcam.cfg` (new, editable in Mainsail); an update restarts a running
-  camera. Tests in tests/test_harkcam.py. Not yet run on a printer.
+  camera. Tests in tests/test_harkcam.py.
 
 ## v0.4.18-alpha.2 (2026-11-03)
 
