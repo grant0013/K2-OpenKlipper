@@ -3273,6 +3273,10 @@ class K2CFS:
         # paused and parked (pause_on_runout). Push the old tail through at
         # the chute, release the empty slot, load and purge the new one,
         # wipe, then RESUME. Any failure leaves the print paused, as before.
+        # RESUME=0: the RESUME macro called this for a spool replaced by
+        # hand, in the same slot or another; it resumes when this returns,
+        # so a failure has to raise.
+        resume = gcmd.get_int('RESUME', 1, minval=0, maxval=1)
         slot = gcmd.get('SLOT').upper()
         if slot not in self.SLOT_MASKS:
             raise gcmd.error("SLOT must be one of A, B, C, D")
@@ -3335,6 +3339,10 @@ class K2CFS:
                 'box_mode': 'idle',
             })
             self.status['last_runout_refill'] = "failed: %s" % (str(e)[:80],)
+            if not resume:
+                raise gcmd.error(
+                    "Loading slot %s failed (%s). The print stays paused: "
+                    "load filament, then RESUME." % (slot, e))
             gcmd.respond_raw(
                 "!! Automatic refill from slot %s failed (%s). The print "
                 "stays paused: load filament, then RESUME." % (slot, e))
@@ -3343,6 +3351,9 @@ class K2CFS:
             self.print_start_transaction = False
         self.status['last_runout_refill'] = slot
         self._clear_runout_warning()
+        if not resume:
+            gcmd.respond_info("Runout: slot %s loaded and purged" % slot)
+            return
         gcmd.respond_info(
             "Runout: refilled from slot %s, resuming the print" % slot)
         self.gcode.run_script_from_command("RESUME")

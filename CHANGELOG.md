@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **`RESUME` loads and purges a new spool after a runout.** With no matching
+  slot the print pauses for a new spool, but `RESUME` then carried on with
+  nothing at the toolhead and the print went on in the air. If the toolhead
+  has no filament, `RESUME` now reheats, pushes the old tail through, loads
+  the slot, purges and wipes first; if that fails the print stays paused.
+  Without a CFS it stays paused and asks for the spool to be loaded.
+- **`RESUME` reheats after a long pause.** The idle timeout turns the hotend
+  off during a pause; `RESUME` brings the heaters back and waits for them.
+
 Fixes from nur00's K2 Plus report (GitHub issue #4):
 
 - **Mesh retry no longer aborts the print.** A failed mesh check cleans the

@@ -334,7 +334,8 @@ Without a CFS:
   spool card in Mainsail or on the touchscreen, or with
   `CFS_SLOT_SET SLOT=E ...`. OrcaSlicer sees it as the first filament.
   `PA_CAL_STATIC` and `PA_CAL_RUN` use slot E by default.
-- **Runout** pauses the print and says to load a new spool.
+- **Runout** pauses the print and says to load a new spool. `RESUME` will not
+  carry on with no filament at the toolhead.
 - Mainsail shows an External spool card in place of the CFS card, and the
   touchscreen an External spool page in place of the CFS page, with the same
   filament editing, load/unload and pressure-advance calibration.
