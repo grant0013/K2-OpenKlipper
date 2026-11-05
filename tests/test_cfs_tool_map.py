@@ -380,9 +380,11 @@ class MacroTest(unittest.TestCase):
         p['k2_cfs'] = {'fitted': fitted, 'active_slot': active,
                        'feed_slot': active, 'online': True,
                        'detected': True}
+        default = {'T0': 'A', 'T1': 'B', 'T2': 'C', 'T3': 'D'}
         p['hark_cfs_slots'] = {
-            'tool_map': tmap or {'T0': 'A', 'T1': 'B', 'T2': 'C',
-                                 'T3': 'D'},
+            'tool_map': tmap or default,
+            'tool_map_set': {t: s for t, s in (tmap or {}).items()
+                             if s and s != default[t]},
             'tool_map_external': external,
             'slots': records or {
                 'A': {'loaded': True, 'type': 'PLA', 'color': '000000'},
@@ -545,7 +547,9 @@ class MacroTest(unittest.TestCase):
     def test_start_print_no_cfs(self):
         p = self.printer(fitted=False, external=True,
                          tmap={'T0': 'E', 'T1': '', 'T2': '', 'T3': ''})
+        p['hark_cfs_slots']['tool_map_set'] = {}
         out = self.start(p, TOOL=0)
+        self.assertFalse([l for l in out if 'Filament map' in l])
         self.assertTrue([l for l in out if l.startswith(
             '_SPOOL_PRINT_START')])
         self.assertNotIn('CFS_FEED_STOP', out)
@@ -580,8 +584,16 @@ class MacroTest(unittest.TestCase):
         self.assertEqual(out, ['CFS_LOAD_SLOT SLOT=B'])
 
     def test_unload_rear_spool_with_a_cfs(self):
-        out = self.render('UNLOAD_FILAMENT', self.printer(state='standby'))
+        out = self.render('UNLOAD_FILAMENT', self.printer(state='standby'),
+                          SLOT='E')
         self.assertIn('_STAGE TEXT="Unloading the external spool"', out)
+        # never guessed: filament at the toolhead with no slot loaded
+        with self.assertRaises(MacroError) as cm:
+            self.render('UNLOAD_FILAMENT', self.printer(state='standby'))
+        self.assertIn('UNLOAD_FILAMENT SLOT=E', str(cm.exception))
+        out = self.render('UNLOAD_FILAMENT', self.printer(
+            state='standby', detected=False))
+        self.assertEqual(out, ['CFS_UNLOAD_ACTIVE'])
         out = self.render('UNLOAD_FILAMENT', self.printer(
             state='standby', active='C'))
         self.assertEqual(out, ['CFS_UNLOAD_ACTIVE'])

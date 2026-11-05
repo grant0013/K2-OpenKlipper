@@ -20,6 +20,32 @@ the framebuffer and talks to Moonraker.
   | --- | --- |
   | ![Status page with Print a file](img/screen/print-a-file-1-status.png) | ![The file list](img/screen/print-a-file-2-list.png) |
   | ![A file's details and Print](img/screen/print-a-file-3-detail.png) | ![A finished print: Print again or Other file](img/screen/print-a-file-4-finished.png) |
+- **Choosing the slots** (the detail view, like Creality's mapping step): a
+  file that lists its filaments shows a row for each one it prints (its
+  colour, number and material) with the slot it will print from. The guess
+  is a loaded CFS slot of the same material and the nearest colour, two
+  filaments sharing a slot only when nothing else fits; a one-filament file
+  whose material only the rear spool has gets the rear spool. Tap a slot to
+  move it to the next loaded slot, then the rear **Spool**, then round
+  again. A slot holding a different material is shown amber with a line
+  saying so (the print can still start). **Print** sets the map for that
+  file (`CFS_TOOL_MAP RESET=1 FILE=... T0=...`, see
+  [choosing the slots](INSTALL.md#choosing-the-slots-and-the-external-spool))
+  and starts it; the map is dropped if the print does not start, and after
+  it ends. A map set from Mainsail or the console for the same file (or for
+  any file) is the screen's starting point.
+- **The rear spool with a CFS fitted** prints every filament of the file,
+  as on Creality's firmware: picking Spool for one filament moves them all,
+  and picking a CFS slot again puts the others back on their slots. Until
+  the spool is in the toolhead, Print waits and **Load spool** runs
+  `LOAD_FILAMENT SLOT=E`: it unloads the CFS slot that is in, then (tapped
+  again once you have pushed the spool in from the back) loads the spool.
+  Without a CFS the slots are not tappable: every filament prints from the
+  rear spool.
+
+  | | |
+  | --- | --- |
+  | ![Filaments and the slots they print from](img/screen/print-a-file-5-filaments.png) | ![Every filament from the rear spool](img/screen/print-a-file-6-rear-spool.png) |
 - CFS slot sheet: edit the filament record, Load & purge, Purge, Unload, and
   **Calibrate PA** for the loaded slot.
 - Wi-Fi selection with an on-screen keyboard, through `wpa_supplicant`'s

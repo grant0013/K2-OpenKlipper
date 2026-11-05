@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased
+
+- **Choose the slot each filament prints from** (GitHub issue #3,
+  masteryodha: a file started from the touchscreen always printed from slot
+  A, and the rear spool could not be used with a CFS connected). Like
+  Creality's mapping step: the touchscreen's file details show the file's
+  filaments (colour, number, material) and the slot each will print from,
+  guessed by material and nearest colour among the loaded slots; tap a slot
+  to change it, and Print sets the map and starts. From Mainsail or the
+  console: `CFS_TOOL_MAP T0=C T1=E ...` (`RESET=1`, `FILE=`, no arguments
+  shows it). T0-T3 and START_PRINT follow the map (`printer.hark_cfs_slots
+  .tool_map`); it is kept through a power-loss resume and cleared when its
+  print ends, also after an error.
+- **The external spool with a CFS fitted** (slot `E`). As on Creality's
+  firmware a print uses the rear spool or the CFS, not both: mapping a
+  filament to `E` prints the whole file from it, with the box idle.
+  `LOAD_FILAMENT SLOT=E` unloads the CFS slot in the toolhead first, then
+  loads the rear spool; `UNLOAD_FILAMENT SLOT=E` unloads it; START_PRINT
+  stops before heating if a slot is still loaded or the spool is not at the
+  toolhead; a runout pauses for a new spool instead of a CFS refill.
+  Without a CFS, T1-T3 can now be mapped to the rear spool too (one colour)
+  instead of stopping the print. Not yet tried with a CFS on a real printer.
+- A mid-print change reads the file's flush matrix by its tools, not by
+  slot letter (they differ once filaments are mapped).
+- Tests: tests/test_cfs_tool_map.py (the map, and the T0-T3, START_PRINT,
+  runout and load/unload macros rendered from the real config), filament
+  step tests in tests/test_harkscreen_files.py.
+
 ## v0.4.20-alpha.1 (2026-11-05)
 
 - **Camera WebRTC mode (H.264), in testing** (GitHub issue #4, nur00's

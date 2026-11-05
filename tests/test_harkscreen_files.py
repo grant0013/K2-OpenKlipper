@@ -43,11 +43,28 @@ def thumb_png(color):
 
 
 THUMB = thumb_png((230, 120, 40, 255))
+# Multi-colour files as OrcaSlicer writes them (Moonraker's metadata): every
+# project filament is listed, an unused one has no weight
+MULTI = {
+    "Multi.gcode": {
+        "estimated_time": 7300, "filament_weight_total": 17.0,
+        "filament_type": '["PLA", "PETG", "PLA", "PLA"]',
+        "filament_colors": ["#000000", "#FFFFFF", "#E53935", "#1E88E5"],
+        "filament_weights": [10.0, 5.0, 0.0, 2.0], "layer_height": 0.2},
+    "Six.gcode": {
+        "filament_type": "PLA;PLA;PLA;PLA;PLA;PLA",
+        "filament_colors": ["#000000"] * 6},
+    "Red.gcode": {"filament_type": "PLA", "filament_colors": ["#E53935"]},
+}
 
 
 class FakeMoonraker(http.server.BaseHTTPRequestHandler):
     started = []
     refuse = None
+    # G-code scripts run, and the error for the ones refused: a function
+    # of the script returning a message, or None to run it
+    scripts = []
+    gcode_refuse = None
 
     def log_message(self, *args):
         pass
@@ -68,6 +85,9 @@ class FakeMoonraker(http.server.BaseHTTPRequestHandler):
             return self.reply(200, {"result": FILES})
         if url.path == "/server/files/metadata":
             name = q["filename"][0]
+            if name in MULTI:
+                return self.reply(200, {"result": dict(MULTI[name],
+                                                       filename=name)})
             if name.startswith("Part_"):
                 return self.reply(404, {"error": {"message": "no meta"}})
             meta = {"filename": name, "estimated_time": 5025,
@@ -87,6 +107,15 @@ class FakeMoonraker(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         url = urllib.parse.urlparse(self.path)
+        if url.path == "/printer/gcode/script":
+            length = int(self.headers.get("Content-Length") or 0)
+            script = json.loads(self.rfile.read(length))["script"]
+            msg = FakeMoonraker.gcode_refuse and \
+                FakeMoonraker.gcode_refuse(script)
+            if msg:
+                return self.reply(400, {"error": {"message": msg}})
+            FakeMoonraker.scripts.append(script)
+            return self.reply(200, {"result": "ok"})
         if url.path == "/printer/print/start":
             name = urllib.parse.parse_qs(url.query)["filename"][0]
             if FakeMoonraker.refuse:
@@ -130,6 +159,7 @@ class Base(unittest.TestCase):
 
     def setUp(self):
         FakeMoonraker.started, FakeMoonraker.refuse = [], None
+        FakeMoonraker.scripts, FakeMoonraker.gcode_refuse = [], None
 
 
 class MoonrakerTest(Base):
@@ -181,6 +211,81 @@ class FactsTest(unittest.TestCase):
         self.assertEqual(hs.Screen.file_facts({}), [])
 
 
+class FilamentMapTest(unittest.TestCase):
+    def test_file_filaments_from_orca_metadata(self):
+        self.assertEqual(hs.file_filaments(MULTI["Multi.gcode"]), [
+            {"tool": 0, "colour": "000000", "type": "PLA"},
+            {"tool": 1, "colour": "FFFFFF", "type": "PETG"},
+            {"tool": 3, "colour": "1E88E5", "type": "PLA"}])
+        # the forms other slicers and Moonraker versions give
+        self.assertEqual(hs.file_filaments({
+            "filament_type": "PLA;PETG;", "extruder_colors": "#FF0000;"
+            "#00ff0080"}), [
+            {"tool": 0, "colour": "FF0000", "type": "PLA"},
+            {"tool": 1, "colour": "00FF00", "type": "PETG"}])
+        self.assertEqual(hs.file_filaments({"filament_type": "PETG"}),
+                         [{"tool": 0, "colour": "", "type": "PETG"}])
+        self.assertEqual(hs.file_filaments({}), [])
+        # weights that do not match the list, or all zero: all filaments
+        self.assertEqual(len(hs.file_filaments({
+            "filament_type": "PLA;PLA", "filament_weights": [0, 0]})), 2)
+        self.assertEqual(len(hs.file_filaments({
+            "filament_type": "PLA;PLA", "filament_weights": [3]})), 2)
+
+    RECORDS = {
+        "A": {"loaded": True, "type": "PLA", "color": "101010"},
+        "B": {"loaded": True, "type": "PLA", "color": "F0F0F0"},
+        "C": {"loaded": True, "type": "PETG", "color": "FFFFFF"},
+        "D": {"loaded": False},
+        "E": {"loaded": True, "type": "TPU", "color": "E53935"}}
+
+    def fils(self, *spec):
+        return [{"tool": t, "colour": c, "type": k} for t, c, k in spec]
+
+    def test_guess_by_material_then_colour(self):
+        g = hs.guess_tool_map(self.fils((0, "FFFFFF", "PLA"),
+                                        (1, "000000", "PETG"),
+                                        (2, "000000", "PLA")),
+                              self.RECORDS, True)
+        # white PLA -> B, PETG -> the only PETG (C), black PLA -> A
+        self.assertEqual(g, {0: "B", 1: "C", 2: "A"})
+
+    def test_two_alike_share_a_slot_only_when_needed(self):
+        recs = {"A": {"loaded": True, "type": "PLA", "color": "000000"},
+                "B": {"loaded": True, "type": "PLA", "color": "000000"}}
+        g = hs.guess_tool_map(self.fils((0, "000000", "PLA"),
+                                        (1, "000000", "PLA")), recs, True)
+        self.assertEqual(g, {0: "A", 1: "B"})
+        g = hs.guess_tool_map(self.fils((0, "000000", "PLA"),
+                                        (1, "000000", "PLA")),
+                              {"C": recs["A"]}, True)
+        self.assertEqual(g, {0: "C", 1: "C"})
+
+    def test_nothing_recorded_keeps_a_to_d(self):
+        g = hs.guess_tool_map(self.fils((0, "", ""), (3, "", "")), {}, True)
+        self.assertEqual(g, {0: "A", 3: "D"})
+
+    def test_rear_spool_for_a_material_only_it_has(self):
+        self.assertEqual(hs.guess_tool_map(
+            self.fils((0, "E53935", "TPU")), self.RECORDS, True), {0: "E"})
+        # two filaments never guess the rear spool
+        self.assertNotIn("E", hs.guess_tool_map(
+            self.fils((0, "E53935", "TPU"), (1, "", "PLA")), self.RECORDS,
+            True).values())
+
+    def test_console_map_wins_and_no_cfs(self):
+        f = self.fils((0, "FFFFFF", "PLA"), (1, "000000", "PLA"))
+        self.assertEqual(hs.guess_tool_map(f, self.RECORDS, True,
+                                           {"T1": "C"}), {0: "B", 1: "C"})
+        self.assertEqual(hs.guess_tool_map(f, self.RECORDS, True,
+                                           {"T0": "E"}), {0: "E", 1: "E"})
+        self.assertEqual(hs.guess_tool_map(f, {}, False), {0: "E", 1: "E"})
+
+    def test_script(self):
+        self.assertEqual(hs.tool_map_script('a "b".gcode', {1: "C", 0: "E"}),
+                         'CFS_TOOL_MAP RESET=1 FILE="a b.gcode" T0=E T1=C')
+
+
 class ScreenTest(Base):
     shots = os.environ.get("HARKSCREEN_SHOTS")
 
@@ -216,6 +321,104 @@ class ScreenTest(Base):
                 return self.s.handle_tap((x0 + x1) // 2, (y0 + y1) // 2,
                                          self.mr)
         self.fail("no button %r in %r" % (action, self.actions()))
+
+    def slots_status(self, fitted=True, detected=True, active=None):
+        st = status()
+        st["k2_cfs"] = {"fitted": fitted, "active_slot": active}
+        st["hark_cfs_slots"] = {"slots": FilamentMapTest.RECORDS,
+                                "tool_map_set": {}, "tool_map_file": ""}
+        st["filament_switch_sensor filament_sensor"] = {
+            "filament_detected": detected}
+        return st
+
+    def open_detail(self, name, st):
+        self.s.open_files(self.mr, name)
+        self.assertTrue(wait_for(lambda: name in self.s.file_info))
+        self.render(st, "x")
+
+    def maps(self):
+        return [a for a in self.actions() if a[0] == "files_map"]
+
+    def test_filament_step_guess_change_and_print(self):
+        st = self.slots_status()
+        self.open_detail("Multi.gcode", st)
+        self.render(st, "8-file-filaments")
+        # black PLA -> A, white PETG -> C, blue PLA -> B (A is taken)
+        self.assertEqual(self.s.files["map"], {0: "A", 1: "C", 3: "B"})
+        # each chip moves to the next loaded slot (D is empty), then E
+        self.assertEqual(sorted(self.maps()), [
+            ("files_map", 0, "B"), ("files_map", 1, "E"),
+            ("files_map", 3, "C")])
+        self.tap(("files_map", 3, "C"))
+        self.render(st, "x")
+        self.assertEqual(self.s.files["map"], {0: "A", 1: "C", 3: "C"})
+        self.tap(("files_print", "Multi.gcode"))
+        self.assertTrue(wait_for(lambda: FakeMoonraker.started))
+        self.assertEqual(FakeMoonraker.scripts, [
+            'CFS_TOOL_MAP RESET=1 FILE="Multi.gcode" T0=A T1=C T3=C'])
+
+    def test_rear_spool_prints_every_filament(self):
+        st = self.slots_status(detected=False)
+        self.open_detail("Multi.gcode", st)
+        self.tap(("files_map", 1, "E"))
+        self.render(st, "9-file-rear-spool")
+        self.assertEqual(self.s.files["map"], {0: "E", 1: "E", 3: "E"})
+        # the spool is not in yet: Load spool, and no Print
+        self.assertIn(("gcode", "LOAD_FILAMENT SLOT=E"), self.actions())
+        self.assertNotIn(("files_print", "Multi.gcode"), self.actions())
+        st = self.slots_status(detected=True, active="A")
+        self.render(st, "x")
+        self.assertNotIn(("files_print", "Multi.gcode"), self.actions())
+        st = self.slots_status(detected=True)
+        self.render(st, "x")
+        self.assertIn(("files_print", "Multi.gcode"), self.actions())
+        # leaving the spool puts the others back on their CFS slots
+        self.tap(("files_map", 0, "A"))
+        self.render(st, "x")
+        self.assertEqual(self.s.files["map"], {0: "A", 1: "C", 3: "B"})
+
+    def test_mismatch_is_shown(self):
+        st = self.slots_status()
+        self.open_detail("Multi.gcode", st)
+        self.tap(("files_map", 1, "E"))
+        self.render(st, "x")
+        self.tap(("files_map", 1, "A"))         # PETG into a PLA slot
+        texts = []
+        orig = self.s.text
+        self.s.text = lambda d, xy, txt, *a, **k: (
+            texts.append(str(txt)), orig(d, xy, txt, *a, **k))
+        self.render(st, "10-file-mismatch")
+        self.s.text = orig
+        self.assertIn("Filament 2 is PETG but slot A holds PLA.", texts)
+        self.assertIn(("files_print", "Multi.gcode"), self.actions())
+
+    def test_no_cfs_prints_from_the_rear_spool(self):
+        st = self.slots_status(fitted=False)
+        self.open_detail("Multi.gcode", st)
+        self.render(st, "11-file-no-cfs")
+        self.assertEqual(self.maps(), [])
+        self.tap(("files_print", "Multi.gcode"))
+        self.assertTrue(wait_for(lambda: FakeMoonraker.started))
+        self.assertEqual(FakeMoonraker.scripts, [
+            'CFS_TOOL_MAP RESET=1 FILE="Multi.gcode" T0=E T1=E T3=E'])
+
+    def test_more_than_four_filaments(self):
+        st = self.slots_status()
+        self.open_detail("Six.gcode", st)
+        self.assertNotIn(("files_print", "Six.gcode"), self.actions())
+
+    def test_console_map_for_this_file_is_the_default(self):
+        st = self.slots_status()
+        st["hark_cfs_slots"].update(tool_map_set={"T0": "D"},
+                                    tool_map_file="Red.gcode")
+        self.open_detail("Red.gcode", st)
+        self.assertEqual(self.s.files["map"], {0: "D"})
+        st["hark_cfs_slots"]["tool_map_file"] = "Other.gcode"
+        self.s.open_files(self.mr, "Red.gcode")
+        self.render(st, "x")
+        # not for this file: the guess (red PLA: the darker PLA slot is
+        # nearer than the white one)
+        self.assertEqual(self.s.files["map"], {0: "A"})
 
     def test_idle_status_has_print_a_file(self):
         self.render(status(), "1-status-idle")
@@ -262,6 +465,9 @@ class ScreenTest(Base):
         self.assertTrue(wait_for(lambda: self.s.files is None))
         self.assertEqual(FakeMoonraker.started, ["Benchy_PLA_0.2mm.gcode"])
         self.assertEqual(self.s.running[0], "Starting print")
+        # "PLA;PLA;": two filaments, no slots recorded: A and B
+        self.assertEqual(FakeMoonraker.scripts, [
+            'CFS_TOOL_MAP RESET=1 FILE="Benchy_PLA_0.2mm.gcode" T0=A T1=B'])
 
     def test_refused_start_shows_why(self):
         FakeMoonraker.refuse = "File not found"
@@ -278,6 +484,11 @@ class ScreenTest(Base):
         self.assertTrue(wait_for(lambda: self.s.files.get("error")))
         self.render(st, "6-file-refused")
         self.assertIn("File not found", self.s.files["error"])
+        # no details, so no filament step: the map is just reset, and
+        # reset again when the print did not start
+        self.assertEqual(FakeMoonraker.scripts, [
+            'CFS_TOOL_MAP RESET=1 FILE="Part_00.gcode"',
+            'CFS_TOOL_MAP RESET=1 QUIET=1'])
         self.assertIn(("files_print", "Part_00.gcode"), self.actions())
 
     def test_print_again_opens_that_file(self):
