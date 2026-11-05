@@ -21,6 +21,24 @@ SLOTS = CFS_SLOTS + (EXTERNAL,)
 # slots A-D; CFS_TOOL_MAP points them at other slots, or at the external
 # spool, for the next print, like the mapping step of Creality's screen.
 TOOLS = ('T0', 'T1', 'T2', 'T3')
+# A map target is a slot id. CFS boxes chain on the bus at 0x01-0x04
+# (Creality numbers their slots T1A..T4D); box 1's slots are plain A-D, a
+# later box's carry its number ("2A".."4D"), E is the external spool. The
+# driver addresses box 1 only (k2_motor_bus cfs_addr), so only box 1's ids
+# are accepted today; the others are recognised and refused.
+CFS_BOXES = 1
+MAX_CFS_BOXES = 4
+SLOT_ID_RE = re.compile(r'^([1-9])?([A-D])$')
+
+
+def slot_id(box, letter):
+    return letter if box == 1 else '%d%s' % (box, letter)
+
+
+def map_targets(boxes=CFS_BOXES):
+    """Slot ids a tool can be mapped to, in order, the external spool last."""
+    return [slot_id(b, l) for b in range(1, boxes + 1)
+            for l in CFS_SLOTS] + [EXTERNAL]
 # A map is checked once a second while one is set: kept while its print
 # runs, cleared when that print ends (complete, cancelled or an error)
 MAP_POLL = 1.0
@@ -232,7 +250,7 @@ class HarkCfsSlots:
             self.revision = int(data.get('revision', 0))
             tm = data.get('tool_map') or {}
             self.tool_map = {t: v for t, v in (tm.get('map') or {}).items()
-                             if t in TOOLS and v in SLOTS}
+                             if t in TOOLS and v in map_targets()}
             self.tool_map_file = str(tm.get('file') or '')
         except (IOError, OSError, ValueError, KeyError):
             self.slots = self._seed_from_creality()
@@ -282,7 +300,11 @@ class HarkCfsSlots:
                 'tool_map_set': dict(self.tool_map),
                 'tool_map_file': self.tool_map_file,
                 # True when the print runs from the external spool alone
-                'tool_map_external': self.map_external(tools)}
+                'tool_map_external': self.map_external(tools),
+                # the tools a file can use and the slot ids they can map to
+                'map_tools': list(TOOLS),
+                'map_targets': map_targets() if self.cfs_fitted()
+                               else [EXTERNAL]}
 
     def cfs_fitted(self):
         cfs = self.printer.lookup_object('k2_cfs', None)
@@ -395,23 +417,41 @@ class HarkCfsSlots:
             check, self.reactor.monotonic() + 2.)
 
     def _tool_map_value(self, gcmd, tool, value):
+        """A slot id from A-D, 1A-4D (box and slot), 1-16 (Creality's
+        slot numbers) or E/EXT/SPOOL; '' for AUTO."""
         value = value.strip().upper()
         if value in ('', '-', 'AUTO', 'DEFAULT'):
             return ''
-        if value in ('EXT', 'EXTERNAL', 'SPOOL'):
-            value = EXTERNAL
-        if value in ('1', '2', '3', '4'):
-            value = CFS_SLOTS[int(value) - 1]
-        if value not in SLOTS:
-            raise gcmd.error("%s must be a slot A, B, C, D or E (the "
-                             "external spool)" % tool)
-        return value
+        if value in ('EXT', 'EXTERNAL', 'SPOOL', EXTERNAL):
+            return EXTERNAL
+        box, letter = None, None
+        if value.isdigit() and 1 <= int(value) <= 4 * MAX_CFS_BOXES:
+            box, letter = divmod(int(value) - 1, 4)
+            box, letter = box + 1, CFS_SLOTS[letter]
+        else:
+            m = SLOT_ID_RE.match(value)
+            if m:
+                box, letter = int(m.group(1) or 1), m.group(2)
+        if box is None or box > MAX_CFS_BOXES:
+            raise gcmd.error("%s must be a slot: %s, or E for the external "
+                             "spool" % (tool, ', '.join(map_targets()[:-1])))
+        if box > CFS_BOXES:
+            raise gcmd.error("%s=%s: only CFS box 1 is supported so far "
+                             "(slots %s)" % (tool, value, ', '.join(
+                                 map_targets()[:-1])))
+        return slot_id(box, letter)
 
     def cmd_CFS_TOOL_MAP(self, gcmd):
         params = gcmd.get_command_parameters()
         reset = gcmd.get_int('RESET', 0, minval=0, maxval=1)
         quiet = gcmd.get_int('QUIET', 0, minval=0, maxval=1)
-        given = {t: params[t] for t in TOOLS if t in params}
+        given = {}
+        for key, value in params.items():
+            if re.match(r'^T\d+$', key):
+                if key not in TOOLS:
+                    raise gcmd.error("This printer has tools %s-%s"
+                                     % (TOOLS[0], TOOLS[-1]))
+                given[key] = value
         filename = gcmd.get('FILE', None)
         if not given and filename is None and not reset:
             gcmd.respond_info("Tool map: %s" % self._describe_map())

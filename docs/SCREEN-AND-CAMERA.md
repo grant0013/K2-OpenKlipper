@@ -23,8 +23,8 @@ the framebuffer and talks to Moonraker.
 - **Choosing the slots** (the detail view, like Creality's mapping step): a
   file that lists its filaments shows a row for each one it prints (its
   colour, number and material) with the slot it will print from. The guess
-  is a loaded CFS slot of the same material and the nearest colour, two
-  filaments sharing a slot only when nothing else fits; a one-filament file
+  is a loaded CFS slot of the same material and the nearest colour (a free
+  slot before a taken one when they are as close); a one-filament file
   whose material only the rear spool has gets the rear spool. Tap a slot to
   move it to the next loaded slot, then the rear **Spool**, then round
   again. A slot holding a different material is shown amber with a line
@@ -41,7 +41,9 @@ the framebuffer and talks to Moonraker.
   `LOAD_FILAMENT SLOT=E`: it unloads the CFS slot that is in, then (tapped
   again once you have pushed the spool in from the back) loads the spool.
   Without a CFS the slots are not tappable: every filament prints from the
-  rear spool.
+  rear spool. The rows and the slots offered come from the printer
+  (`hark_cfs_slots.map_tools` / `map_targets`), not from the screen, so
+  more CFS boxes need no screen change.
 
   | | |
   | --- | --- |

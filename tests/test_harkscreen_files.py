@@ -281,6 +281,28 @@ class FilamentMapTest(unittest.TestCase):
                                            {"T0": "E"}), {0: "E", 1: "E"})
         self.assertEqual(hs.guess_tool_map(f, {}, False), {0: "E", 1: "E"})
 
+    def test_layout_from_the_printer(self):
+        self.assertEqual(hs.map_layout({}), (4, ["A", "B", "C", "D"]))
+        hs2 = {"map_tools": ["T%d" % i for i in range(8)],
+               "map_targets": ["A", "B", "C", "D", "2A", "2B", "2C", "2D",
+                               "E"]}
+        self.assertEqual(hs.map_layout(hs2), (8, hs2["map_targets"][:-1]))
+        self.assertEqual(hs.default_slot(5, hs2["map_targets"][:-1]), "2B")
+
+    def test_guess_across_boxes(self):
+        recs = dict(self.RECORDS, **{
+            "2B": {"loaded": True, "type": "PETG", "color": "000000"}})
+        targets = ["A", "B", "C", "D", "2A", "2B", "2C", "2D"]
+        g = hs.guess_tool_map(self.fils((0, "000000", "PETG"),
+                                        (5, "", "")), recs, True,
+                              targets=targets)
+        # black PETG -> box 2's PETG; the unknown one takes a free slot
+        # rather than share it
+        self.assertEqual(g, {0: "2B", 5: "A"})
+        self.assertEqual(hs.guess_tool_map(
+            self.fils((0, "", "")), recs, True, {"T0": "2A"}, targets),
+            {0: "2A"})
+
     def test_script(self):
         self.assertEqual(hs.tool_map_script('a "b".gcode', {1: "C", 0: "E"}),
                          'CFS_TOOL_MAP RESET=1 FILE="a b.gcode" T0=E T1=C')
@@ -406,6 +428,22 @@ class ScreenTest(Base):
         st = self.slots_status()
         self.open_detail("Six.gcode", st)
         self.assertNotIn(("files_print", "Six.gcode"), self.actions())
+
+    def test_slots_come_from_the_printer(self):
+        # a printer driving a second CFS box: its slots are choices too
+        st = self.slots_status()
+        st["hark_cfs_slots"].update(
+            map_tools=["T%d" % i for i in range(8)],
+            map_targets=["A", "B", "C", "D", "2A", "2B", "2C", "2D", "E"],
+            slots=dict(FilamentMapTest.RECORDS, **{
+                "2A": {"loaded": True, "type": "PLA", "color": "1E88E5"}}))
+        self.open_detail("Six.gcode", st)
+        self.render(st, "12-file-second-box")
+        self.assertIn(("files_print", "Six.gcode"), self.actions())
+        self.assertIn(("files_map", 0, "B"), self.maps())
+        self.s.files["map"][0] = "C"
+        self.render(st, "x")
+        self.assertIn(("files_map", 0, "2A"), self.maps())
 
     def test_console_map_for_this_file_is_the_default(self):
         st = self.slots_status()

@@ -10,7 +10,9 @@
   guessed by material and nearest colour among the loaded slots; tap a slot
   to change it, and Print sets the map and starts. From Mainsail or the
   console: `CFS_TOOL_MAP T0=C T1=E ...` (`RESET=1`, `FILE=`, no arguments
-  shows it). T0-T3 and START_PRINT follow the map (`printer.hark_cfs_slots
+  shows it). Slots are ids with room for more CFS boxes later (`A`-`D`
+  today, `2A`-`4D` recognised and refused). T0-T3 and START_PRINT follow
+  the map (`printer.hark_cfs_slots
   .tool_map`); it is kept through a power-loss resume and cleared when its
   print ends, also after an error.
 - **The external spool with a CFS fitted** (slot `E`). As on Creality's

@@ -217,6 +217,11 @@ CFS_TOOL_MAP                    ; show the map
 CFS_TOOL_MAP RESET=1            ; back to A-D
 ```
 
+- A slot is `A`-`D` (also `1A`-`1D`, or Creality's slot numbers `1`-`4`) or
+  `E`. Slot ids leave room for chained CFS boxes, as Creality numbers them
+  (T1A..T4D): `2A`-`4D` and `5`-`16` are recognised but refused for now,
+  since the driver addresses one box. `printer.hark_cfs_slots.map_targets`
+  lists the ids this printer takes, `map_tools` its tools.
 - Tools not named keep A-D. Two filaments can share a slot (no change
   between them). `T0=AUTO` drops one entry; `RESET=1` with tools replaces
   the whole map. `FILE=<path>` sets it for that file only: another file

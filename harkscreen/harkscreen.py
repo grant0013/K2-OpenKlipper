@@ -61,7 +61,8 @@ OBJECTS = {
     "k2_cfs": ["fitted", "online", "active_slot", "feed_slot", "running_out",
                "runout_next",
                "temperature", "humidity", "slot_stats", "change_pending"],
-    "hark_cfs_slots": ["slots", "tool_map_set", "tool_map_file"],
+    "hark_cfs_slots": ["slots", "tool_map_set", "tool_map_file",
+                       "map_tools", "map_targets"],
     "hark_plr": ["available", "filename", "z"],
     "filament_switch_sensor filament_sensor": ["filament_detected"],
     "k2_motor_bus": ["motors_ready"],
@@ -886,10 +887,24 @@ def colour_distance(a, b):
     return sum((x - y) ** 2 for x, y in zip(hex_rgb(a), hex_rgb(b)))
 
 
-def guess_tool_map(filaments, records, fitted, explicit=None):
+def map_layout(hs):
+    """(tool count, CFS slot ids) a map can use, from hark_cfs_slots: box 1's
+    A-D today, "2A".."4D" when more CFS boxes are driven. A Klipper from
+    before map_tools/map_targets: T0-T3 and A-D."""
+    tools = hs.get("map_tools") or ["T0", "T1", "T2", "T3"]
+    targets = [t for t in hs.get("map_targets") or "ABCD" if t != "E"]
+    return len(tools), targets or list("ABCD")
+
+
+def default_slot(tool, targets):
+    """The slot a tool prints from with no map: T0 the first slot, ..."""
+    return targets[tool % len(targets)]
+
+
+def guess_tool_map(filaments, records, fitted, explicit=None, targets=None):
     """A slot for each filament, like Creality's mapping step: a loaded CFS
-    slot of the same material and the nearest colour, two filaments
-    sharing one only when nothing else fits; the rear spool (E) for a
+    slot of the same material and the nearest colour, a free slot before
+    one already chosen when they are as close; the rear spool (E) for a
     one-filament file whose material only it has. explicit
     (CFS_TOOL_MAP's entries) wins where it names a tool. Without a CFS
     everything prints from the rear spool."""
@@ -897,11 +912,12 @@ def guess_tool_map(filaments, records, fitted, explicit=None):
     if not fitted:
         return {t: "E" for t in tools}
     explicit = explicit or {}
-    loaded = [s for s in "ABCD" if (records.get(s) or {}).get("loaded")]
+    targets = list(targets or "ABCD")
+    loaded = [s for s in targets if (records.get(s) or {}).get("loaded")]
     out = {}
     for f in filaments:
         t = f["tool"]
-        if explicit.get("T%d" % t) in ("A", "B", "C", "D", "E"):
+        if explicit.get("T%d" % t) in targets + ["E"]:
             out[t] = explicit["T%d" % t]
             continue
         best = None
@@ -910,10 +926,11 @@ def guess_tool_map(filaments, records, fitted, explicit=None):
             kind = (rec.get("type") or "").strip().upper()
             score = (bool(f["type"]) and kind != f["type"],
                      colour_distance(f["colour"], rec.get("color")),
-                     s in out.values(), s != "ABCD"[t], s)
+                     s in out.values(), s != default_slot(t, targets),
+                     targets.index(s))
             if best is None or score < best[0]:
                 best = (score, s)
-        out[t] = best[1] if best else "ABCD"[t]
+        out[t] = best[1] if best else default_slot(t, targets)
     if "E" in out.values():
         out = {t: "E" for t in tools}
     elif len(filaments) == 1 and f["type"] and not explicit:
@@ -3055,7 +3072,8 @@ class Screen:
 
         def run():
             mapped = False
-            default = all(slot == "ABCD"[t] for t, slot in
+            targets = (fs or {}).get("targets") or list("ABCD")
+            default = all(slot == default_slot(t, targets) for t, slot in
                           (mapping or {}).items())
             try:
                 try:
@@ -3089,22 +3107,25 @@ class Screen:
         fs = self.files
         if info is None:
             return None, None
-        fils = file_filaments(info["meta"])[:8]
+        fils = file_filaments(info["meta"])
         if fs.get("map_for") != path:
             hs = st.get("hark_cfs_slots") or {}
             explicit = hs.get("tool_map_set") or {}
             if hs.get("tool_map_file") not in ("", None, path):
                 explicit = {}
             fitted = (st.get("k2_cfs") or {}).get("fitted") is not False
-            usable = [f for f in fils if f["tool"] < 4]
-            fs["map"] = guess_tool_map(usable, hs.get("slots") or {},
-                                       fitted, explicit)
+            ntools, targets = map_layout(hs)
+            usable = [f for f in fils if f["tool"] < ntools]
+            records = hs.get("slots") or {}
+            fs["map"] = guess_tool_map(usable, records, fitted, explicit,
+                                       targets)
             # what a CFS slot choice falls back to after the rear spool
-            fs["guess_cfs"] = guess_tool_map(usable, hs.get("slots") or {},
-                                             fitted) if fitted else {}
+            fs["guess_cfs"] = guess_tool_map(usable, records, fitted,
+                                             None, targets) if fitted else {}
             if "E" in fs["guess_cfs"].values():
-                fs["guess_cfs"] = {f["tool"]: "ABCD"[f["tool"]]
+                fs["guess_cfs"] = {f["tool"]: default_slot(f["tool"], targets)
                                    for f in usable}
+            fs["targets"] = targets
             fs["map_for"] = path
         return fils, fs["map"]
 
@@ -3118,8 +3139,9 @@ class Screen:
             mapping = {t: "E" for t in mapping}
         else:
             if "E" in mapping.values():
+                targets = fs.get("targets") or list("ABCD")
                 mapping = dict((t, fs.get("guess_cfs", {}).get(
-                    t, "ABCD"[t])) for t in mapping)
+                    t, default_slot(t, targets))) for t in mapping)
             mapping[tool] = slot
         fs["map"] = mapping
 
@@ -3320,10 +3342,12 @@ class Screen:
         records = hs.get("slots") or {}
         cfs = st.get("k2_cfs") or {}
         fitted = cfs.get("fitted") is not False
-        usable = [f for f in fils if f["tool"] < 4]
-        loaded = [s for s in "ABCD" if (records.get(s) or {}).get("loaded")]
-        choices = (loaded or list("ABCD")) + ["E"] if fitted else ["E"]
-        rows = usable[:4]
+        ntools, targets = map_layout(hs)
+        usable = [f for f in fils if f["tool"] < ntools]
+        loaded = [s for s in targets if (records.get(s) or {}).get("loaded")]
+        choices = (loaded or targets) + ["E"] if fitted else ["E"]
+        # as many rows as fit at 36 px or more
+        rows = usable[:max(1, (y1 - y0) // 36)]
         rh = min(48, (y1 - y0) // max(1, len(rows)))
         cx = x0 + 150
         mismatch = None
@@ -3344,7 +3368,7 @@ class Screen:
             d.line((ax, mid, ax + 18, mid), fill=self.c["muted"], width=2)
             d.polygon([(ax + 22, mid), (ax + 15, mid - 5),
                        (ax + 15, mid + 5)], fill=self.c["muted"])
-            slot = mapping.get(t, "ABCD"[t])
+            slot = mapping.get(t, default_slot(t, targets))
             rec = records.get(slot) or {}
             kind = (rec.get("type") or "").strip().upper()
             label = "Spool" if slot == "E" else slot
@@ -3375,9 +3399,15 @@ class Screen:
             self.text(d, (sx + 32, mid), label, "s",
                       "warn" if bad else "text", anchor="lm",
                       width=chip[2] - sx - 44)
-        if len(usable) < len(fils) or len(fils) > len(rows):
-            return ("This file uses more than 4 filaments: slice it for 4 "
-                    "or fewer.", "error", True, False)
+        if len(usable) < len(fils):
+            return ("This file uses filament %d; this printer has %d: slice "
+                    "it for %d or fewer." % (max(f["tool"] for f in fils) + 1,
+                                             ntools, ntools),
+                    "error", True, False)
+        if len(rows) < len(usable):
+            return ("%d filaments do not fit here: set the slots with "
+                    "CFS_TOOL_MAP in Mainsail." % len(usable), "error", True,
+                    False)
         if "E" in mapping.values() and fitted:
             ready = (not cfs.get("active_slot") and (st.get(
                 "filament_switch_sensor filament_sensor") or {}).get(

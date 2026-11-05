@@ -212,8 +212,30 @@ class CfsToolMapTest(ToolMapBase):
         self.assertEqual(self.status()['tool_map_set'], {'T0': 'E'})
 
     def test_bad_slot(self):
-        with self.assertRaises(gcode_mod.CommandError):
-            self.gc('CFS_TOOL_MAP T0=F')
+        for bad in ('F', '7A', '0', '17', 'AB'):
+            with self.assertRaises(gcode_mod.CommandError):
+                self.gc('CFS_TOOL_MAP T0=%s' % bad)
+
+    def test_slot_ids_leave_room_for_more_boxes(self):
+        # box 1: A-D, 1A-1D, or Creality's slot numbers 1-4
+        self.gc('CFS_TOOL_MAP T0=1C T1=4 T2=b')
+        self.assertEqual(self.status()['tool_map_set'],
+                         {'T0': 'C', 'T1': 'D', 'T2': 'B'})
+        # boxes 2-4 (2A..4D, slots 5-16) are recognised but not driven yet
+        for later in ('2A', '4D', '5', '16'):
+            with self.assertRaises(gcode_mod.CommandError) as cm:
+                self.gc('CFS_TOOL_MAP T0=%s' % later)
+            self.assertIn('only CFS box 1', str(cm.exception))
+        self.assertEqual(slots_mod.map_targets(2)[4:],
+                         ['2A', '2B', '2C', '2D', 'E'])
+        st = self.status()
+        self.assertEqual(st['map_targets'], ['A', 'B', 'C', 'D', 'E'])
+        self.assertEqual(st['map_tools'], ['T0', 'T1', 'T2', 'T3'])
+
+    def test_tools_beyond_the_printer(self):
+        with self.assertRaises(gcode_mod.CommandError) as cm:
+            self.gc('CFS_TOOL_MAP T4=A')
+        self.assertIn('T0-T3', str(cm.exception))
 
     def test_not_while_printing_but_reset_is_allowed(self):
         self.gc('CFS_TOOL_MAP T0=B')
@@ -302,6 +324,7 @@ class NoCfsToolMapTest(ToolMapBase):
         with self.assertRaises(gcode_mod.CommandError) as cm:
             self.gc('CFS_TOOL_MAP T2=A')
         self.assertIn('no CFS', str(cm.exception))
+        self.assertEqual(self.status()['map_targets'], ['E'])
 
 
 class FlushMatrixToolsTest(unittest.TestCase):
