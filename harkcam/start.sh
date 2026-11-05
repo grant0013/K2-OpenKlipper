@@ -19,7 +19,15 @@ if [ "$MODE" = webrtc ]; then
     if [ -z "$(pidof cam_app)" ] || [ -z "$(pidof webrtc_local)" ]; then
         DEV=$(ls /dev/v4l/by-id 2>/dev/null | grep '^main-video' | head -1)
         ACTION=add MDEV=${DEV:-main-video0} /usr/bin/auto_uvc.sh >/dev/null 2>&1
+        sleep 2
     fi
+    # Klipper has CPU1: keep Creality's camera apps, every thread (new ones
+    # inherit it), on CPU0 with the rest of harkcam
+    for n in cam_app webrtc_local; do
+        for p in $(pidof $n); do
+            for t in /proc/$p/task/*; do taskset -p 0x1 ${t##*/} >/dev/null 2>&1; done
+        done
+    done
 else
     for n in cam_app webrtc_local; do p=$(pidof $n); [ -n "$p" ] && kill $p; done
 fi

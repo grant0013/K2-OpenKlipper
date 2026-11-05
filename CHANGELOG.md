@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.4.20-alpha.1 (2026-11-05)
 
 - **Camera WebRTC mode (H.264), in testing** (GitHub issue #4, nur00's
   measurements). `mode: webrtc` in `harkcam.cfg` hands the camera to
@@ -14,7 +14,8 @@
   viewer against about 820 for MJPEG, `webrtc_local` at 4% CPU. No
   snapshots in this mode (time-lapse and the AI watcher need
   `mode: mjpeg`, still the default). nginx's `/webcam/` (port 4408) now
-  passes WebSockets. tests/test_harkcam_webrtc.py.
+  passes WebSockets. Creality's camera apps are pinned to CPU0 (Klipper
+  has CPU1), like harkcam. tests/test_harkcam_webrtc.py.
 
 ## v0.4.19-alpha.1 (2026-11-05)
 
