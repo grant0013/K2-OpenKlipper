@@ -86,8 +86,10 @@ class ResumeReheatTest(unittest.TestCase):
 
 
 def paused(detected=False, enabled=True, state="paused", fitted=True,
-           active=None, feed="B", last="B", change_pending=False):
+           active=None, feed="B", last="B", change_pending=False,
+           external=False):
     return {
+        'hark_cfs_slots': {'tool_map_external': external},
         'print_stats': {'state': state},
         'filament_switch_sensor filament_sensor': {
             'enabled': enabled, 'filament_detected': detected},
@@ -129,6 +131,11 @@ class ResumeLoadTest(unittest.TestCase):
     def test_no_cfs_stays_paused(self):
         with self.assertRaisesRegex(MacroError, "rear holder"):
             render("_RESUME_LOAD", paused(fitted=False))
+
+    def test_a_rear_spool_print_stays_paused(self):
+        # the CFS must not load a slot into a print mapped to the rear spool
+        with self.assertRaisesRegex(MacroError, "SLOT=E"):
+            render("_RESUME_LOAD", paused(external=True))
 
     def test_no_slot_known_stays_paused(self):
         with self.assertRaisesRegex(MacroError, "no slot"):

@@ -1476,6 +1476,11 @@ class K2CFS:
             gcmd.respond_info("No CFS: the extruder feeds from the rear spool")
             return
         slot = gcmd.get('SLOT').upper()
+        if slot in ('E', 'EXT', 'EXTERNAL'):
+            # The external spool (CFS_TOOL_MAP ...=E): the extruder pulls it
+            # from the rear holder with the box idle
+            gcmd.respond_info("External spool: nothing for the CFS to feed")
+            return
         self._start_feed(
             gcmd, slot, require_confirm=True, require_selected=False)
 
@@ -3033,7 +3038,9 @@ class K2CFS:
         if (purge_length is None and full_length is None
                 and self.toolchange_purge_from_file):
             purge_length, full_length = self._file_purge(
-                gcmd, old_slot, slot)
+                gcmd, old_slot, slot,
+                gcmd.get_int('OLD_TOOL', None, minval=0, maxval=3),
+                gcmd.get_int('TOOL', None, minval=0, maxval=3))
         if purge_length is None and full_length is None:
             purge_length = purge_fallback
 
@@ -3233,9 +3240,11 @@ class K2CFS:
             return None
         return self.flush_cache[1]
 
-    def _file_purge(self, gcmd, old_slot, slot):
+    def _file_purge(self, gcmd, old_slot, slot, old_tool=None, tool=None):
         # Jacob10383's _purge_plan: flush volume (mm^3) for this change from
-        # the file's matrix over the filament area. T0-T3 are slots A-D.
+        # the file's matrix over the filament area. The matrix is indexed by
+        # the file's tools: OLD_TOOL/TOOL from the T macros, else T0-T3 as
+        # slots A-D (no CFS_TOOL_MAP).
         # Returns (short purge, full purge): between like materials it is a
         # SHORT purge clamped to 30-360 mm (the load's limit; Orca asks
         # 309 mm for black to white PLA); otherwise the stock purge, made
@@ -3243,6 +3252,8 @@ class K2CFS:
         meta = self._flush_matrix()
         matrix = meta and meta['matrix']
         src, dst = ord(old_slot) - ord('A'), ord(slot) - ord('A')
+        if old_tool is not None and tool is not None:
+            src, dst = old_tool, tool
         if not matrix or src >= len(matrix) or dst >= len(matrix[src]):
             gcmd.respond_info("CFS tool change: no usable flush matrix in "
                               "the print file; using the fixed purge")

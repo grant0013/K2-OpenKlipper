@@ -17,6 +17,31 @@ import json, logging, os, re, threading, time, urllib.request
 CFS_SLOTS = ('A', 'B', 'C', 'D')
 EXTERNAL = 'E'
 SLOTS = CFS_SLOTS + (EXTERNAL,)
+# The print file's filaments (tools T0-T3). By default T0-T3 print from
+# slots A-D; CFS_TOOL_MAP points them at other slots, or at the external
+# spool, for the next print, like the mapping step of Creality's screen.
+TOOLS = ('T0', 'T1', 'T2', 'T3')
+# A map target is a slot id. CFS boxes chain on the bus at 0x01-0x04
+# (Creality numbers their slots T1A..T4D); box 1's slots are plain A-D, a
+# later box's carry its number ("2A".."4D"), E is the external spool. The
+# driver addresses box 1 only (k2_motor_bus cfs_addr), so only box 1's ids
+# are accepted today; the others are recognised and refused.
+CFS_BOXES = 1
+MAX_CFS_BOXES = 4
+SLOT_ID_RE = re.compile(r'^([1-9])?([A-D])$')
+
+
+def slot_id(box, letter):
+    return letter if box == 1 else '%d%s' % (box, letter)
+
+
+def map_targets(boxes=CFS_BOXES):
+    """Slot ids a tool can be mapped to, in order, the external spool last."""
+    return [slot_id(b, l) for b in range(1, boxes + 1)
+            for l in CFS_SLOTS] + [EXTERNAL]
+# A map is checked once a second while one is set: kept while its print
+# runs, cleared when that print ends (complete, cancelled or an error)
+MAP_POLL = 1.0
 TYPE_ORDER = ('PLA', 'PETG', 'ABS', 'ASA', 'TPU', 'PLA-CF', 'PETG-CF')
 COLOURS = (
     ('Black', '000000'), ('White', 'FFFFFF'), ('Grey', '808080'),
@@ -126,6 +151,12 @@ class HarkCfsSlots:
         self.library = {}
         self.slots = {}
         self.revision = 0
+        # CFS_TOOL_MAP: tool -> slot set for the next print, and the file it
+        # was set for ('' = whatever prints next)
+        self.tool_map = {}
+        self.tool_map_file = ''
+        self.tool_map_used = False
+        self._map_timer = None
         self.orca_ids = load_orca_ids()
         self._orca_ids_lower = dict((k.lower(), v)
                                     for k, v in self.orca_ids.items())
@@ -137,6 +168,8 @@ class HarkCfsSlots:
         self._load_store()
         self.printer.register_event_handler('klippy:ready',
                                             self._publish_lanes)
+        self.printer.register_event_handler('klippy:ready',
+                                            self._ready_tool_map)
         for cmd, desc in (
                 ('CFS_SLOTS', "Show the CFS slots and edit what is loaded"),
                 ('CFS_SLOT_EDIT', "Step through the CFS slot editor"),
@@ -148,7 +181,11 @@ class HarkCfsSlots:
                 ('CFS_FILAMENT_SAVE', "Create or update a filament profile: "
                                       "[ID=] [BASE=] NAME= TYPE= BRAND= "
                                       "COLOR= NOZZLE= BED= PA= FLOW= ..."),
-                ('CFS_FILAMENT_DELETE', "Delete a custom filament: ID=")):
+                ('CFS_FILAMENT_DELETE', "Delete a custom filament: ID="),
+                ('CFS_TOOL_MAP', "Choose the slot each filament of the next "
+                                 "print uses: T0=A-E .. T3=A-E (E = external "
+                                 "spool), [FILE=], RESET=1; no arguments "
+                                 "shows the map")):
             self.gcode.register_command(
                 cmd, getattr(self, 'cmd_' + cmd), desc=desc)
 
@@ -211,6 +248,10 @@ class HarkCfsSlots:
                           for s in SLOTS}
             self.library = {f['id']: f for f in data.get('library', [])}
             self.revision = int(data.get('revision', 0))
+            tm = data.get('tool_map') or {}
+            self.tool_map = {t: v for t, v in (tm.get('map') or {}).items()
+                             if t in TOOLS and v in map_targets()}
+            self.tool_map_file = str(tm.get('file') or '')
         except (IOError, OSError, ValueError, KeyError):
             self.slots = self._seed_from_creality()
             self._save()
@@ -228,24 +269,42 @@ class HarkCfsSlots:
         if upgraded:
             self._save()
 
-    def _save(self):
-        self.revision += 1
+    def _save(self, slots_changed=True):
+        # slots_changed False: only the tool map changed, so the slot
+        # revision stays and OrcaSlicer's lanes are not posted again
+        if slots_changed:
+            self.revision += 1
         tmp = self.store_path + '.tmp'
         with open(tmp, 'w', encoding='utf-8') as f:
             json.dump({'revision': self.revision, 'slots': self.slots,
-                       'library': list(self.library.values())},
+                       'library': list(self.library.values()),
+                       'tool_map': {'map': self.tool_map,
+                                    'file': self.tool_map_file}},
                       f, indent=2, sort_keys=True)
         os.replace(tmp, self.store_path)
-        self._publish_lanes()
+        if slots_changed:
+            self._publish_lanes()
 
     def get_status(self, eventtime):
         # Klipper sends subscribers only the fields whose value changed since
         # the last report, comparing against the object it was given before.
         # Return copies so in-place edits are seen as changes. The static
         # 'materials' list is therefore sent once.
+        tools = self.tool_slots(eventtime)
         return {'slots': {k: dict(v) for k, v in self.slots.items()},
                 'library': [dict(f) for f in self.library.values()],
-                'revision': self.revision, 'materials': self.materials}
+                'revision': self.revision, 'materials': self.materials,
+                # the slot each tool prints from now ('' = it cannot print)
+                'tool_map': tools,
+                # what CFS_TOOL_MAP set, and for which file
+                'tool_map_set': dict(self.tool_map),
+                'tool_map_file': self.tool_map_file,
+                # True when the print runs from the external spool alone
+                'tool_map_external': self.map_external(tools),
+                # the tools a file can use and the slot ids they can map to
+                'map_tools': list(TOOLS),
+                'map_targets': map_targets() if self.cfs_fitted()
+                               else [EXTERNAL]}
 
     def cfs_fitted(self):
         cfs = self.printer.lookup_object('k2_cfs', None)
@@ -253,6 +312,191 @@ class HarkCfsSlots:
 
     def visible_slots(self):
         return CFS_SLOTS if self.cfs_fitted() else (EXTERNAL,)
+
+    # --- tool map (CFS_TOOL_MAP) ---------------------------------------
+    def _print_state(self, eventtime=None):
+        ps = self.printer.lookup_object('print_stats', None)
+        if ps is None:
+            return '', ''
+        st = ps.get_status(self.reactor.monotonic()
+                           if eventtime is None else eventtime)
+        return st.get('state', ''), st.get('filename', '')
+
+    def _map_in_force(self, eventtime=None):
+        """The CFS_TOOL_MAP entries that apply: all of them, unless the map
+        was set for one file and a different file is printing."""
+        if not self.tool_map:
+            return {}
+        if self.tool_map_file:
+            state, filename = self._print_state(eventtime)
+            if (state in ('printing', 'paused')
+                    and filename.lstrip('/') != self.tool_map_file):
+                return {}
+        return self.tool_map
+
+    def tool_slots(self, eventtime=None):
+        """Slot for each tool. With a CFS: the map's entries, the rest A-D,
+        or all the external spool when the map uses it (the CFS cannot feed
+        while the rear spool is in the toolhead, so a print uses one or the
+        other, as on Creality's firmware). Without a CFS: T0, and any tool
+        mapped to E, print from the rear spool; the others cannot."""
+        explicit = self._map_in_force(eventtime)
+        if not self.cfs_fitted():
+            return {t: EXTERNAL if (i == 0 or explicit.get(t) == EXTERNAL)
+                    else '' for i, t in enumerate(TOOLS)}
+        external = EXTERNAL in explicit.values()
+        return {t: explicit.get(t) or (EXTERNAL if external
+                                       else CFS_SLOTS[i])
+                for i, t in enumerate(TOOLS)}
+
+    def map_external(self, tools):
+        used = [s for s in tools.values() if s]
+        return bool(used) and all(s == EXTERNAL for s in used)
+
+    def _describe_map(self):
+        tools = self.tool_slots()
+        out = ', '.join('%s %s' % (t, 'external spool' if s == EXTERNAL
+                                   else (s or '-'))
+                        for t, s in tools.items())
+        if self.tool_map_file:
+            out += ' (for %s)' % self.tool_map_file
+        if not self.tool_map:
+            out += ' (default)'
+        return out
+
+    def _set_tool_map(self, mapping, filename):
+        self.tool_map = mapping
+        self.tool_map_file = filename
+        self.tool_map_used = False
+        self._save(slots_changed=False)
+        if mapping and self._map_timer is None:
+            self._map_timer = self.reactor.register_timer(
+                self._watch_tool_map, self.reactor.monotonic() + MAP_POLL)
+
+    def clear_tool_map(self):
+        if self.tool_map or self.tool_map_file:
+            self._set_tool_map({}, '')
+
+    def _watch_tool_map(self, eventtime):
+        # Kept while its print runs; cleared once that print is over, also
+        # when it ends in an error (no END_PRINT then)
+        if not self.tool_map:
+            self._map_timer = None
+            return self.reactor.NEVER
+        state, _ = self._print_state(eventtime)
+        if state in ('printing', 'paused'):
+            self.tool_map_used = True
+        elif self.tool_map_used:
+            self.clear_tool_map()
+            self.gcode.respond_info("Tool map cleared: the print is over")
+            self._map_timer = None
+            return self.reactor.NEVER
+        return eventtime + MAP_POLL
+
+    def _ready_tool_map(self):
+        # A map saved before a restart is kept only for a power-loss resume
+        # of its print (hark_plr reads its journal at ready too: look a
+        # moment later)
+        if not self.tool_map:
+            return
+
+        def check(eventtime):
+            plr = self.printer.lookup_object('hark_plr', None)
+            pending = plr is not None and plr.get_status(
+                eventtime).get('available')
+            if pending:
+                self._map_timer = self.reactor.register_timer(
+                    self._watch_tool_map, eventtime + MAP_POLL)
+                logging.info("hark_cfs_slots: tool map kept for the "
+                             "power-loss resume: %s", self.tool_map)
+            else:
+                logging.info("hark_cfs_slots: tool map from before the "
+                             "restart cleared: %s", self.tool_map)
+                self.clear_tool_map()
+        self.reactor.register_callback(
+            check, self.reactor.monotonic() + 2.)
+
+    def _tool_map_value(self, gcmd, tool, value):
+        """A slot id from A-D, 1A-4D (box and slot), 1-16 (Creality's
+        slot numbers) or E/EXT/SPOOL; '' for AUTO."""
+        value = value.strip().upper()
+        if value in ('', '-', 'AUTO', 'DEFAULT'):
+            return ''
+        if value in ('EXT', 'EXTERNAL', 'SPOOL', EXTERNAL):
+            return EXTERNAL
+        box, letter = None, None
+        if value.isdigit() and 1 <= int(value) <= 4 * MAX_CFS_BOXES:
+            box, letter = divmod(int(value) - 1, 4)
+            box, letter = box + 1, CFS_SLOTS[letter]
+        else:
+            m = SLOT_ID_RE.match(value)
+            if m:
+                box, letter = int(m.group(1) or 1), m.group(2)
+        if box is None or box > MAX_CFS_BOXES:
+            raise gcmd.error("%s must be a slot: %s, or E for the external "
+                             "spool" % (tool, ', '.join(map_targets()[:-1])))
+        if box > CFS_BOXES:
+            raise gcmd.error("%s=%s: only CFS box 1 is supported so far "
+                             "(slots %s)" % (tool, value, ', '.join(
+                                 map_targets()[:-1])))
+        return slot_id(box, letter)
+
+    def cmd_CFS_TOOL_MAP(self, gcmd):
+        params = gcmd.get_command_parameters()
+        reset = gcmd.get_int('RESET', 0, minval=0, maxval=1)
+        quiet = gcmd.get_int('QUIET', 0, minval=0, maxval=1)
+        given = {}
+        for key, value in params.items():
+            if re.match(r'^T\d+$', key):
+                if key not in TOOLS:
+                    raise gcmd.error("This printer has tools %s-%s"
+                                     % (TOOLS[0], TOOLS[-1]))
+                given[key] = value
+        filename = gcmd.get('FILE', None)
+        if not given and filename is None and not reset:
+            gcmd.respond_info("Tool map: %s" % self._describe_map())
+            return
+        state, printing = self._print_state()
+        if (given or filename is not None) and state in ('printing',
+                                                         'paused'):
+            raise gcmd.error("CFS_TOOL_MAP: the map is set before a print "
+                             "starts (%s is printing)" % printing)
+        mapping = {} if reset else dict(self.tool_map)
+        for tool, value in given.items():
+            slot = self._tool_map_value(gcmd, tool, value)
+            if slot:
+                mapping[tool] = slot
+            else:
+                mapping.pop(tool, None)
+        fitted = self.cfs_fitted()
+        used = set(mapping.values())
+        if not fitted and used - {EXTERNAL}:
+            raise gcmd.error("This printer has no CFS: filaments can only "
+                             "print from the external spool (E)")
+        if fitted and EXTERNAL in used and used - {EXTERNAL}:
+            raise gcmd.error(
+                "A print uses the external spool or the CFS, not both: the "
+                "CFS cannot feed while the rear spool is in the toolhead. "
+                "Map every filament to E, or none.")
+        if filename is None:
+            filename = '' if reset else self.tool_map_file
+        if not mapping:
+            filename = ''
+        self._set_tool_map(mapping, filename.strip().lstrip('/'))
+        if quiet:
+            return
+        msg = "Tool map: %s" % self._describe_map()
+        empty = sorted(s for s in used
+                       if not self.slots.get(s, {}).get('loaded'))
+        if empty:
+            msg += ("\nNote: no filament recorded in %s"
+                    % ', '.join('the external spool' if s == EXTERNAL
+                                else 'slot ' + s for s in empty))
+        if fitted and EXTERNAL in used:
+            msg += ("\nThe print runs from the external spool: unload the "
+                    "CFS slot and load the rear spool first "
+                    "(LOAD_FILAMENT SLOT=E)")
+        gcmd.respond_info(msg)
 
     # --- OrcaSlicer sync through Moonraker ------------------------------
     def _lane_values(self):

@@ -61,7 +61,8 @@ OBJECTS = {
     "k2_cfs": ["fitted", "online", "active_slot", "feed_slot", "running_out",
                "runout_next",
                "temperature", "humidity", "slot_stats", "change_pending"],
-    "hark_cfs_slots": ["slots"],
+    "hark_cfs_slots": ["slots", "tool_map_set", "tool_map_file",
+                       "map_tools", "map_targets"],
     "hark_plr": ["available", "filename", "z"],
     "filament_switch_sensor filament_sensor": ["filament_detected"],
     "k2_motor_bus": ["motors_ready"],
@@ -722,6 +723,21 @@ class Moonraker:
                 msg = "HTTP %d" % e.code
             raise RuntimeError(msg)
 
+    def run_gcode(self, script, timeout=30):
+        """Run G-code and wait for it; raises with Klipper's message."""
+        req = urllib.request.Request(
+            self.base + "/printer/gcode/script",
+            data=json.dumps({"script": script}).encode(),
+            headers={"Content-Type": "application/json"})
+        try:
+            urllib.request.urlopen(req, timeout=timeout).read()
+        except urllib.error.HTTPError as e:
+            try:
+                msg = json.load(e)["error"]["message"]
+            except Exception:
+                msg = "HTTP %d" % e.code
+            raise RuntimeError(msg)
+
     def timelapse(self):
         """moonraker-timelapse settings, or None without the add-on."""
         try:
@@ -827,6 +843,112 @@ def hex_rgb(value, fallback=(255, 255, 255)):
     except ValueError:
         return fallback
 
+
+
+def file_filaments(meta):
+    """The filaments a print file uses, from Moonraker's metadata, as
+    [{"tool": n, "colour": "RRGGBB" or "", "type": "PLA" or ""}]. OrcaSlicer
+    lists every filament of the project; the ones with no weight in
+    filament_weights are not printed and left out."""
+    def as_list(value):
+        if isinstance(value, (list, tuple)):
+            return [str(v) for v in value]
+        value = str(value or "").strip()
+        if value.startswith("["):
+            try:
+                return [str(v) for v in json.loads(value)]
+            except ValueError:
+                value = value.strip("[]")
+        return [v.strip(" \"'") for v in re.split(r"[;,]", value)]
+    colours = [c.strip().lstrip("#")[:6].upper() for c in as_list(
+        meta.get("filament_colors") or meta.get("extruder_colors"))]
+    colours = [c if re.fullmatch(r"[0-9A-F]{6}", c) else "" for c in colours]
+    kinds = [k.strip().upper() for k in as_list(meta.get("filament_type"))]
+    while colours and not colours[-1]:
+        colours.pop()
+    while kinds and not kinds[-1]:
+        kinds.pop()
+    count = max(len(colours), len(kinds))
+    weights = meta.get("filament_weights")
+    used = list(range(count))
+    if isinstance(weights, (list, tuple)) and len(weights) == count:
+        try:
+            picked = [i for i in used if float(weights[i] or 0) > 0]
+        except (TypeError, ValueError):
+            picked = []
+        used = picked or used
+    return [{"tool": i, "colour": colours[i] if i < len(colours) else "",
+             "type": kinds[i] if i < len(kinds) else ""} for i in used]
+
+
+def colour_distance(a, b):
+    if not a or not b:
+        return 0
+    return sum((x - y) ** 2 for x, y in zip(hex_rgb(a), hex_rgb(b)))
+
+
+def map_layout(hs):
+    """(tool count, CFS slot ids) a map can use, from hark_cfs_slots: box 1's
+    A-D today, "2A".."4D" when more CFS boxes are driven. A Klipper from
+    before map_tools/map_targets: T0-T3 and A-D."""
+    tools = hs.get("map_tools") or ["T0", "T1", "T2", "T3"]
+    targets = [t for t in hs.get("map_targets") or "ABCD" if t != "E"]
+    return len(tools), targets or list("ABCD")
+
+
+def default_slot(tool, targets):
+    """The slot a tool prints from with no map: T0 the first slot, ..."""
+    return targets[tool % len(targets)]
+
+
+def guess_tool_map(filaments, records, fitted, explicit=None, targets=None):
+    """A slot for each filament, like Creality's mapping step: a loaded CFS
+    slot of the same material and the nearest colour, a free slot before
+    one already chosen when they are as close; the rear spool (E) for a
+    one-filament file whose material only it has. explicit
+    (CFS_TOOL_MAP's entries) wins where it names a tool. Without a CFS
+    everything prints from the rear spool."""
+    tools = [f["tool"] for f in filaments]
+    if not fitted:
+        return {t: "E" for t in tools}
+    explicit = explicit or {}
+    targets = list(targets or "ABCD")
+    loaded = [s for s in targets if (records.get(s) or {}).get("loaded")]
+    out = {}
+    for f in filaments:
+        t = f["tool"]
+        if explicit.get("T%d" % t) in targets + ["E"]:
+            out[t] = explicit["T%d" % t]
+            continue
+        best = None
+        for s in loaded:
+            rec = records[s]
+            kind = (rec.get("type") or "").strip().upper()
+            score = (bool(f["type"]) and kind != f["type"],
+                     colour_distance(f["colour"], rec.get("color")),
+                     s in out.values(), s != default_slot(t, targets),
+                     targets.index(s))
+            if best is None or score < best[0]:
+                best = (score, s)
+        out[t] = best[1] if best else default_slot(t, targets)
+    if "E" in out.values():
+        out = {t: "E" for t in tools}
+    elif len(filaments) == 1 and f["type"] and not explicit:
+        ext = records.get("E") or {}
+        same = [s for s in loaded if (records[s].get("type") or "")
+                .strip().upper() == f["type"]]
+        if (not same and ext.get("loaded")
+                and (ext.get("type") or "").strip().upper() == f["type"]):
+            out = {tools[0]: "E"}
+    return out
+
+
+def tool_map_script(path, mapping):
+    """CFS_TOOL_MAP for the print about to start from the screen."""
+    line = 'CFS_TOOL_MAP RESET=1 FILE="%s"' % path.replace('"', "")
+    for t in sorted(mapping):
+        line += " T%d=%s" % (t, mapping[t])
+    return line
 
 
 def local_time(ts, zone):
@@ -1701,6 +1823,8 @@ class Screen:
                 self.draw_calib_pick(arg)
             elif kind == "slot":
                 self.draw_slot_menu(st)
+            elif kind == "fmap":
+                self.draw_map_box(arg, st)
             elif kind == "temp":
                 self.draw_temp_box(arg, st)
             elif kind == "fans":
@@ -1731,6 +1855,9 @@ class Screen:
         pick = self.calib_pick(st)
         if pick:
             return ("calib", pick)
+        if self.files and self.files.get("pick") and self.files.get(
+                "map_pick") is not None:
+            return ("fmap", self.files["map_pick"])
         if self.temp_pick:
             return ("temp", self.temp_pick)
         if self.fans_open:
@@ -2853,7 +2980,8 @@ class Screen:
         # a reason to redraw
         return [fs.get("pick"), page, fs.get("error"), fs.get("starting"),
                 None if fs.get("list") is None else len(fs["list"]),
-                [p in self.file_info for p in shown]]
+                [p in self.file_info for p in shown],
+                sorted((fs.get("map") or {}).items()), fs.get("map_pick")]
 
     def files_pages(self):
         n = len((self.files or {}).get("list") or [])
@@ -2938,23 +3066,90 @@ class Screen:
             fs["shown"] = True
 
     def start_print(self, mr, path):
+        """Set the filament map shown (CFS_TOOL_MAP, for this file only),
+        then start the print. A map that was set and a print that did not
+        start leave no map behind."""
         fs = self.files
+        mapping = None
         if fs is not None:
             fs["starting"] = True
+            if fs.get("map_for") == path:
+                mapping = fs.get("map")
 
         def run():
+            mapped = False
+            targets = (fs or {}).get("targets") or list("ABCD")
+            default = all(slot == default_slot(t, targets) for t, slot in
+                          (mapping or {}).items())
             try:
+                try:
+                    mr.run_gcode(tool_map_script(path, mapping or {}))
+                    mapped = True
+                except RuntimeError as e:
+                    # Klipper from before CFS_TOOL_MAP: fine for A-D
+                    if not (default and "Unknown command" in str(e)):
+                        raise
                 mr.start_print(path)
                 self.running = ("Starting print", time.time())
                 if self.files is fs:
                     self.files = None
             except Exception as e:
                 print("print %s: %s" % (path, e), flush=True)
+                if mapped:
+                    try:
+                        mr.run_gcode("CFS_TOOL_MAP RESET=1 QUIET=1")
+                    except Exception as e2:
+                        print("map reset: %s" % e2, flush=True)
                 if self.files is fs:
                     fs.update(starting=False,
                               error="Did not start: %s" % e)
             self.dirty = True
         threading.Thread(target=run, daemon=True).start()
+
+    def file_map(self, path, info, st):
+        """The filaments of the file on view and the slot each prints from
+        (fs["map"], tool -> slot), worked out once per file so a choice
+        made by tapping stays. None until the file's details are in."""
+        fs = self.files
+        if info is None:
+            return None, None
+        fils = file_filaments(info["meta"])
+        if fs.get("map_for") != path:
+            hs = st.get("hark_cfs_slots") or {}
+            explicit = hs.get("tool_map_set") or {}
+            if hs.get("tool_map_file") not in ("", None, path):
+                explicit = {}
+            fitted = (st.get("k2_cfs") or {}).get("fitted") is not False
+            ntools, targets = map_layout(hs)
+            usable = [f for f in fils if f["tool"] < ntools]
+            records = hs.get("slots") or {}
+            fs["map"] = guess_tool_map(usable, records, fitted, explicit,
+                                       targets)
+            # what a CFS slot choice falls back to after the rear spool
+            fs["guess_cfs"] = guess_tool_map(usable, records, fitted,
+                                             None, targets) if fitted else {}
+            if "E" in fs["guess_cfs"].values():
+                fs["guess_cfs"] = {f["tool"]: default_slot(f["tool"], targets)
+                                   for f in usable}
+            fs["targets"] = targets
+            fs["map_for"] = path
+        return fils, fs["map"]
+
+    def map_choose(self, tool, slot):
+        """A tap on a filament's slot: the rear spool prints every filament
+        (the CFS cannot feed alongside it); leaving it, the others go back
+        to their CFS slots."""
+        fs = self.files
+        mapping = dict(fs.get("map") or {})
+        if slot == "E":
+            mapping = {t: "E" for t in mapping}
+        else:
+            if "E" in mapping.values():
+                targets = fs.get("targets") or list("ABCD")
+                mapping = dict((t, fs.get("guess_cfs", {}).get(
+                    t, default_slot(t, targets))) for t in mapping)
+            mapping[tool] = slot
+        fs["map"] = mapping
 
     @staticmethod
     def file_facts(meta):
@@ -3094,30 +3289,146 @@ class Screen:
         listed = {f[0]: f for f in fs.get("list") or []}
         if path in listed:
             facts.append(("Saved", self.file_when(listed[path][1])))
-        first = 0
-        if info is not None and not info["meta"]:
-            self.text(d, (tx, y0 + 56), "No details for this file", "xs",
-                      "muted", width=x1 - pad - tx)
-            first = 1
-        for i, (label, value) in enumerate(facts[:5 - first]):
-            ly = y0 + 56 + (i + first) * 48
-            self.text(d, (tx, ly), label, "xs", "muted")
-            self.text(d, (tx, ly + 20), value, "s", width=x1 - pad - tx)
+        fils, mapping = self.file_map(path, info, st)
+        note = None
+        if fils:
+            # The filament step: facts on one line, then a row per filament
+            short = [v for k, v in facts if k in ("Print time", "Filament",
+                                                  "Layers")]
+            self.text(d, (tx, y0 + 56), "  ·  ".join(short), "xs", "muted",
+                      width=x1 - pad - tx)
+            note = self.draw_file_map(d, (tx, y0 + 84, x1 - pad, y1 - 100),
+                                      fils, mapping, st)
+        else:
+            first = 0
+            if info is not None and not info["meta"]:
+                self.text(d, (tx, y0 + 56), "No details for this file", "xs",
+                          "muted", width=x1 - pad - tx)
+                first = 1
+            for i, (label, value) in enumerate(facts[:5 - first]):
+                ly = y0 + 56 + (i + first) * 48
+                self.text(d, (tx, ly), label, "xs", "muted")
+                self.text(d, (tx, ly + 20), value, "s", width=x1 - pad - tx)
         err = fs.get("error")
-        self.text(d, (x0 + pad, y1 - 84), err or
-                  "Clear the bed before you start.", "xs",
-                  "error" if err else "muted", anchor="lm",
+        msg, colour, block, load = note or (
+            "Clear the bed before you start.", "muted", False, False)
+        self.text(d, (x0 + pad, y1 - 84), err or msg, "xs",
+                  "error" if err else colour, anchor="lm",
                   width=x1 - x0 - 2 * pad)
         state = st.get("print_stats", {}).get("state")
-        can = (not fs.get("starting") and not self.busy(st)
-               and state not in ("printing", "paused"))
+        idle = (not fs.get("starting") and not self.busy(st)
+                and state not in ("printing", "paused"))
         by = y1 - 58
-        bw = (x1 - x0 - pad * 3) // 2
-        self.button(d, (x0 + pad, by, x0 + pad + bw, by + 48), "Back",
-                    ("files_back",), "muted", True, "s")
-        self.button(d, (x0 + 2 * pad + bw, by, x1 - pad, by + 48),
+        if load:
+            # the rear spool goes in first (LOAD_FILAMENT SLOT=E takes a
+            # CFS slot out of the toolhead, then loads the spool)
+            bw = (x1 - x0 - pad * 4) // 3
+            boxes = [(x0 + pad + i * (bw + pad), by,
+                      x0 + pad + i * (bw + pad) + bw, by + 48)
+                     for i in range(3)]
+            boxes[2] = (boxes[2][0], by, x1 - pad, by + 48)
+            self.button(d, boxes[1], "Load spool",
+                        ("gcode", "LOAD_FILAMENT SLOT=E"), "accent", idle,
+                        "s")
+        else:
+            bw = (x1 - x0 - pad * 3) // 2
+            boxes = [(x0 + pad, by, x0 + pad + bw, by + 48), None,
+                     (x0 + 2 * pad + bw, by, x1 - pad, by + 48)]
+        self.button(d, boxes[0], "Back", ("files_back",), "muted", True, "s")
+        self.button(d, boxes[2],
                     "Starting…" if fs.get("starting") else "Print",
-                    ("files_print", path), "ok", can, "s")
+                    ("files_print", path), "ok", idle and not block, "s")
+
+    def draw_file_map(self, d, box, fils, mapping, st):
+        """A row per filament of the file: its colour and material, and the
+        slot it prints from (tap for a box of slots). Returns the line under
+        it as (text, colour, Print blocked, offer Load spool)."""
+        x0, y0, x1, y1 = box
+        hs = st.get("hark_cfs_slots") or {}
+        records = hs.get("slots") or {}
+        cfs = st.get("k2_cfs") or {}
+        fitted = cfs.get("fitted") is not False
+        ntools, targets = map_layout(hs)
+        usable = [f for f in fils if f["tool"] < ntools]
+        loaded = [s for s in targets if (records.get(s) or {}).get("loaded")]
+        choices = (loaded or targets) + ["E"] if fitted else ["E"]
+        # as many rows as fit at 36 px or more
+        rows = usable[:max(1, (y1 - y0) // 36)]
+        rh = min(48, (y1 - y0) // max(1, len(rows)))
+        cx = x0 + 150
+        mismatch = None
+        for i, f in enumerate(rows):
+            t = f["tool"]
+            ry = y0 + i * rh
+            mid = ry + (rh - 6) // 2
+            r = 14
+            sw = hex_rgb(f["colour"], self.c["panel_edge"])
+            d.ellipse((x0, mid - r, x0 + 2 * r, mid + r), fill=sw,
+                      outline=self.c["panel_edge"], width=2)
+            dark = sum(sw) < 380
+            self.text(d, (x0 + r, mid), str(t + 1), "xs",
+                      self.c["white"] if dark else (20, 24, 28), anchor="mm")
+            self.text(d, (x0 + 2 * r + 10, mid), f["type"] or "Filament",
+                      "s", anchor="lm", width=cx - x0 - 2 * r - 30)
+            ax = cx - 34
+            d.line((ax, mid, ax + 18, mid), fill=self.c["muted"], width=2)
+            d.polygon([(ax + 22, mid), (ax + 15, mid - 5),
+                       (ax + 15, mid + 5)], fill=self.c["muted"])
+            slot = mapping.get(t, default_slot(t, targets))
+            rec = records.get(slot) or {}
+            kind = (rec.get("type") or "").strip().upper()
+            label = "Spool" if slot == "E" else slot
+            label += " · " + (kind or ("rear holder" if slot == "E"
+                                       else "empty"))
+            bad = bool(f["type"] and kind and kind != f["type"])
+            if bad and mismatch is None:
+                mismatch = (t, f["type"], slot, kind)
+            chip = (cx, ry, x1, ry + rh - 6)
+            col = "warn" if bad else "accent"
+            if len(choices) > 1:
+                self.panel(d, chip, self.colour(col),
+                           fill=mix(self.c["panel"], self.colour(col), 0.08))
+                self.buttons.append((*chip, ("files_map_open", t)))
+            else:
+                d.rounded_rectangle(chip, radius=16, fill=self.c["background"],
+                                    outline=self.c["panel_edge"], width=2)
+            sx = chip[0] + 12
+            if rec.get("loaded"):
+                d.ellipse((sx, mid - 11, sx + 22, mid + 11),
+                          fill=hex_rgb(rec.get("color")),
+                          outline=self.c["panel_edge"], width=2)
+            else:
+                d.ellipse((sx, mid - 11, sx + 22, mid + 11),
+                          outline=self.c["panel_edge"], width=2)
+            self.text(d, (sx + 32, mid), label, "s",
+                      "warn" if bad else "text", anchor="lm",
+                      width=chip[2] - sx - 44)
+        if len(usable) < len(fils):
+            return ("This file uses filament %d; this printer has %d: slice "
+                    "it for %d or fewer." % (max(f["tool"] for f in fils) + 1,
+                                             ntools, ntools),
+                    "error", True, False)
+        if len(rows) < len(usable):
+            return ("%d filaments do not fit here: set the slots with "
+                    "CFS_TOOL_MAP in Mainsail." % len(usable), "error", True,
+                    False)
+        if "E" in mapping.values() and fitted:
+            ready = (not cfs.get("active_slot") and (st.get(
+                "filament_switch_sensor filament_sensor") or {}).get(
+                "filament_detected"))
+            if not ready:
+                return ("Prints from the rear spool: tap Load spool, then "
+                        "push it in when asked.", "warn", True, True)
+            return ("Prints every filament from the rear spool (Load spool "
+                    "first if it is new).", "muted", False, True)
+        if not fitted and len(rows) > 1:
+            return ("No CFS: every filament prints from the rear spool.",
+                    "muted", False, False)
+        if mismatch:
+            t, want, slot, have = mismatch
+            return ("Filament %d is %s but slot %s holds %s." % (
+                t + 1, want, slot, have), "warn", False, False)
+        return None
 
     # --- Wi-Fi ---------------------------------------------------------
     KB_LETTERS = ("1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm")
@@ -3252,6 +3563,73 @@ class Screen:
     def modal_dim(self):
         self.canvas = self.dimmed(0.65)
         return ImageDraw.Draw(self.canvas)
+
+    def draw_map_box(self, tool, st):
+        """Which slot a filament of the file prints from: every slot and the
+        rear spool, the current one marked. Empty slots show but cannot be
+        chosen."""
+        fs = self.files
+        fils, mapping = self.file_map(fs["pick"], self.file_info.get(
+            fs["pick"]), st)
+        f = next((f for f in fils if f["tool"] == tool), None) or {
+            "tool": tool, "type": "", "colour": ""}
+        hs = st.get("hark_cfs_slots") or {}
+        records = hs.get("slots") or {}
+        targets = map_layout(hs)[1]
+        loaded = [s for s in targets if (records.get(s) or {}).get("loaded")]
+        options = targets + ["E"]
+        current = mapping.get(tool, default_slot(tool, targets))
+        d = self.modal_dim()
+        self.buttons = []
+        box = (90, 40, W - 90, 440)
+        self.panel(d, box, self.c["accent"], True)
+        r, cy = 17, 84
+        x = box[0] + 30
+        sw = hex_rgb(f["colour"], self.c["panel_edge"])
+        d.ellipse((x, cy - r, x + 2 * r, cy + r), fill=sw,
+                  outline=self.c["panel_edge"], width=2)
+        self.text(d, (x + r, cy), str(tool + 1), "xs", self.c["white"]
+                  if sum(sw) < 380 else (20, 24, 28), anchor="mm")
+        self.text(d, (x + 2 * r + 14, cy), "Print %s from" % (
+            f["type"] or "filament %d" % (tool + 1)), "m", anchor="lm",
+            width=box[2] - x - 2 * r - 44)
+        cols = 2 if len(options) <= 6 else 3
+        rows = (len(options) + cols - 1) // cols
+        gap = 12
+        gx, gy = box[0] + 30, 124
+        bw = (box[2] - box[0] - 60 - (cols - 1) * gap) // cols
+        bh = min(72, (222 - (rows - 1) * gap) // rows)
+        for i, slot in enumerate(options):
+            cell = (gx + (i % cols) * (bw + gap),
+                    gy + (i // cols) * (bh + gap))
+            cell += (cell[0] + bw, cell[1] + bh)
+            rec = records.get(slot) or {}
+            kind = (rec.get("type") or "").strip().upper()
+            usable = slot == "E" or not loaded or slot in loaded
+            bad = bool(usable and f["type"] and kind and kind != f["type"])
+            on = slot == current
+            edge = self.colour("warn" if bad else "accent") if usable \
+                else None
+            mid = (cell[1] + cell[3]) // 2
+            self.panel(d, cell, edge if on else self.c["panel_edge"], fill=mix(
+                self.c["panel"], edge, 0.14) if on and edge else None)
+            sx = cell[0] + 14
+            if rec.get("loaded"):
+                d.ellipse((sx, mid - 12, sx + 24, mid + 12),
+                          fill=hex_rgb(rec.get("color")),
+                          outline=self.c["panel_edge"], width=2)
+            else:
+                d.ellipse((sx, mid - 12, sx + 24, mid + 12),
+                          outline=self.c["panel_edge"], width=2)
+            label = "Spool" if slot == "E" else slot
+            label += " · " + (kind or ("rear holder" if slot == "E"
+                                       else "empty"))
+            self.text(d, (sx + 36, mid), label, "s", "text" if usable
+                      else "muted", anchor="lm", width=cell[2] - sx - 48)
+            if usable:
+                self.buttons.append((*cell, ("files_map", tool, slot)))
+        self.button(d, (W // 2 - 110, 362, W // 2 + 110, 422), "Cancel",
+                    ("box_close",), "muted", True, "m")
 
     def draw_temp_box(self, heater, st):
         d = self.modal_dim()
@@ -3948,7 +4326,7 @@ class Screen:
                                                 + action[1]))
                 self.want_file_info(mr)
             elif kind == "files_pick" and self.files:
-                self.files.update(pick=action[1], error=None)
+                self.files.update(pick=action[1], error=None, map_for=None)
                 self.want_file_info(mr)
             elif kind == "files_back" and self.files:
                 self.files.update(pick=None, error=None)
@@ -3957,6 +4335,11 @@ class Screen:
                 self.files = None
             elif kind == "files_print":
                 self.start_print(mr, action[1])
+            elif kind == "files_map_open" and self.files:
+                self.files["map_pick"] = action[1]
+            elif kind == "files_map" and self.files:
+                self.map_choose(action[1], action[2])
+                self.files["map_pick"] = None
             elif kind == "temp_pick":
                 self.temp_pick = action[1]
                 self.temp_target = int(round(
@@ -3975,6 +4358,8 @@ class Screen:
                          "VARIABLE=manual VALUE=0")
             elif kind == "box_close":
                 self.temp_pick, self.fans_open = None, False
+                if self.files:
+                    self.files["map_pick"] = None
             elif kind == "usb_use":
                 self.remember_usb(action[1])
                 self.set_pref("gcode_storage", "usb", mr, self.last_st)

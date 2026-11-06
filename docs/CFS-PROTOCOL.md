@@ -384,7 +384,8 @@ Options in `[k2_cfs]`; defaults in brackets.
   `flush_volumes_matrix` (and `flush_multiplier`) from the end of the print
   file when the slicer passes no `PURGE`: volume / filament area. Like
   materials: SHORT purge, 30-240 mm. Otherwise the stock purge, longer if
-  the file asks. T0-T3 index the matrix as slots A-D.
+  the file asks. The matrix is indexed by the file's tools: the T macros pass
+  `TOOL=`/`OLD_TOOL=` to `CFS_TOOLCHANGE`; without them T0-T3 are slots A-D.
 - **Clog check** (`clog_detection` [off], `clog_extruder_length` [80],
   `clog_wheel_reset_length` [18], `print_poll_interval` [0 = 10 s]). Pauses
   when the extruder feeds 80 mm while the hub wheel moves under 18 mm (the

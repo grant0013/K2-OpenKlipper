@@ -204,6 +204,59 @@ connection).
    gauge, `PA_CAL_RUN SLOT=A` (see [PA calibration](PA-CALIBRATION.md)), and
    input shaping with `SHAPER_CALIBRATE`.
 
+## Choosing the slots and the external spool
+
+By default the file's filaments T0-T3 print from CFS slots A-D. To print
+them from other slots without slicing again, set a map before the print
+(the touchscreen's detail view does this when you press Print):
+
+```
+CFS_TOOL_MAP T0=C T1=A          ; filament 1 from slot C, filament 2 from A
+CFS_TOOL_MAP T0=E               ; the whole print from the rear spool
+CFS_TOOL_MAP                    ; show the map
+CFS_TOOL_MAP RESET=1            ; back to A-D
+```
+
+- A slot is `A`-`D` (also `1A`-`1D`, or Creality's slot numbers `1`-`4`) or
+  `E`. Slot ids leave room for chained CFS boxes, as Creality numbers them
+  (T1A..T4D): `2A`-`4D` and `5`-`16` are recognised but refused for now,
+  since the driver addresses one box. `printer.hark_cfs_slots.map_targets`
+  lists the ids this printer takes, `map_tools` its tools.
+- Tools not named keep A-D. Two filaments can share a slot (no change
+  between them). `T0=AUTO` drops one entry; `RESET=1` with tools replaces
+  the whole map. `FILE=<path>` sets it for that file only: another file
+  printing ignores it.
+- It holds for the next print and is cleared when that print ends (done,
+  cancelled, or stopped by an error), and by a restart unless a power-loss
+  resume of that print is waiting. It cannot be changed while printing.
+  START_PRINT prints the map in the console when it is not A-D.
+- `printer.hark_cfs_slots.tool_map` gives the slot each tool prints from
+  now, `tool_map_set` / `tool_map_file` what was set.
+
+**The external spool with a CFS fitted** (`E`, the rear spool holder): the
+CFS cannot feed while the rear spool is in the toolhead, so, like Creality's
+firmware, a print uses one or the other. Mapping any filament to `E` prints
+every filament from it (in one colour); mixing `E` with CFS slots is
+refused. Before the print:
+
+1. `LOAD_FILAMENT SLOT=E`: if a CFS slot is in the toolhead, it is cut and
+   rewound into the CFS first, and the command stops and asks you to push
+   the rear spool in from the back until it stops at the extruder.
+2. `LOAD_FILAMENT SLOT=E` again: heats, feeds and purges the spool at the
+   chute (as without a CFS).
+3. Start the print. START_PRINT checks, before heating, that no CFS slot is
+   loaded and the toolhead sensor sees filament; the box stays idle and the
+   spool is primed at the chute. Slot `E`'s record (pressure advance, flow,
+   retraction, temperatures) is used. A runout pauses for a new spool
+   (`UNLOAD_FILAMENT SLOT=E`, `LOAD_FILAMENT SLOT=E`, `RESUME`); there is no
+   CFS refill. After the print, `UNLOAD_FILAMENT SLOT=E` unloads the spool,
+   before loading a CFS slot again (a CFS load refuses while it is in).
+
+Not yet tried on a real printer with a CFS: whether the rear spool's path
+into the toolhead is clear once the CFS has rewound its slot, on the K2 and
+the K2 Plus. Creality's own firmware prints from the spool holder with the
+CFS connected, so the path is there; tell us on GitHub how it goes.
+
 ## Going back to stock
 
 SSH in as in step 3, then:
@@ -328,7 +381,9 @@ Without a CFS:
   pulls it back out of the gears; then pull it out from the back. Both work
   from a runout pause too, followed by `RESUME`.
 - **Printing**: slice for one filament (T0). The print start primes the spool
-  at the chute. A file that asks for T1-T3 stops with a message.
+  at the chute. A file that asks for T1-T3 stops with a message, unless those
+  filaments are mapped to the spool (`CFS_TOOL_MAP T1=E`, or Print on the
+  touchscreen, which does it): then they all print from it, in one colour.
 - **Filament settings**: the external spool has its own record, slot `E`
   (pressure advance, flow, retraction, temperatures), edited in the External
   spool card in Mainsail or on the touchscreen, or with
