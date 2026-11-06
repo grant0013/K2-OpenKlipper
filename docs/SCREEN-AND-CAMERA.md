@@ -109,14 +109,22 @@ is about 820), `webrtc_local` at 4% CPU, ping to the printer unchanged.
 1. In `harkcam.cfg` (Mainsail: Machine > config files) set `mode: webrtc`,
    then run `sh /mnt/UDISK/harkcam/start.sh` over SSH, or reboot.
 2. In Mainsail: Settings > Webcams > K2 Chamber: **Service** "WebRTC
-   (go2rtc)", **URL Stream** `http://<printer IP>:8080/api/ws?src=k2`.
-   Fluidd: the same camera type and URL.
+   (go2rtc)", **URL Stream** `http://<printer IP>:8080/?src=k2`. Fluidd: the
+   same camera type and URL. Use this type only: "WebRTC (MediaMTX)" is
+   refused, as `webrtc_local` never connects that way.
 3. `http://<printer IP>:8080/` is a test page that plays the stream on its
    own.
 
+**At most `max_streams` viewers (2).** Every viewer is its own session in
+`webrtc_local` and the work multiplies: three at 1080p on a K2 Plus filled
+the core that also serves WiFi and the MCU serial lines (issue #4), so a
+third is refused after waiting 3 s for a place. `start.sh` always runs
+`cam_app` at 1280x720; Creality's own start picks 1080p on some models.
+
 How it works: `start.sh` starts Creality's `cam_app` and `webrtc_local`
 through Creality's own `/usr/bin/auto_uvc.sh` (with the K2's crop
-settings). `harkcam.py` takes Mainsail's go2rtc WebSocket, collects the
+settings), after the MJPEG `ffmpeg` has let go of the camera, and tries
+again up to four times if either does not stay up. `harkcam.py` takes Mainsail's go2rtc WebSocket, collects the
 browser's offer and its ICE candidates for about a second, and passes them
 to `webrtc_local` in one base64 JSON call (`webrtc_local` takes no
 candidates afterwards and never connects without them: seen in its log,
@@ -124,10 +132,11 @@ candidates afterwards and never connects without them: seen in its log,
 LAN address behind a random `.local` name that `webrtc_local` cannot look
 up, so that name is replaced by the address the browser connected from.
 `webrtc_local` sends video only; the audio Mainsail asks for is refused in
-the answer. WHEP (`POST /whep`, Mainsail's "WebRTC (MediaMTX)") is there
-too, but Mainsail sends its WHEP offer before it has candidates, so that
-type does not connect to `webrtc_local`; the test page waits for its
-candidates and works over WHEP.
+the answer. WHEP (`POST /whep`) is there for the test page, which waits
+for its candidates. Mainsail's "WebRTC (MediaMTX)" type sends its offer
+before it has any, which left a session in `webrtc_local` running with no
+video and nobody watching (96% on that core until `webrtc_local` was
+restarted), so such an offer is refused before it gets there.
 
 The camera sends one format at a time, so in this mode there is **no MJPEG
 stream or snapshot**: time-lapse, the AI watcher and anything reading

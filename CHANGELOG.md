@@ -40,6 +40,19 @@
 - **`RESUME` reheats after a long pause.** The idle timeout turns the hotend
   off during a pause; `RESUME` brings the heaters back and waits for them.
 
+Camera `mode: webrtc`, from nur00's K2 Plus tests (GitHub issue #4):
+
+- **At most `max_streams` viewers.** Each viewer is its own session in
+  `webrtc_local`; three at 1080p filled the core that serves WiFi and the MCU
+  serial lines. A third viewer is now refused.
+- **Always 1280x720.** Creality's start picks 1080p on some models.
+- **The wrong camera type can no longer leak.** Mainsail's "WebRTC (MediaMTX)"
+  left a session running with no video and nobody watching. Its offer is now
+  refused with a message, and `start.sh` no longer tells you to use it.
+- **Switching from `mjpeg` by hand no longer leaves the camera stuck.**
+  `start.sh` waits for `ffmpeg` to let go of the camera, and retries `cam_app`
+  and `webrtc_local` up to four times if they do not stay up.
+
 Fixes from nur00's K2 Plus report (GitHub issue #4):
 
 - **Mesh retry no longer aborts the print.** A failed mesh check cleans the

@@ -37,6 +37,10 @@ OFFER = "\r\n".join([
     "a=fingerprint:sha-256 AA:BB", "a=setup:actpass", "a=mid:1",
     "a=sendrecv", "a=rtcp-mux", "a=rtpmap:111 opus/48000/2", ""])
 
+# The same after gathering, as the test page sends it
+GATHERED = OFFER.replace("a=mid:0\r\n", "a=mid:0\r\n"
+                         "a=candidate:1 1 udp 1 10.0.0.2 5000 typ host\r\n")
+
 # A plausible webrtc_local answer: one video section, its own mid, its own
 # bundle line, a host candidate
 CREALITY_ANSWER = "\r\n".join([
@@ -210,7 +214,7 @@ class WhepTest(unittest.TestCase):
         self.assertEqual(code, 204)
         self.assertIn("Location", h["Access-Control-Expose-Headers"])
         self.assertIsNone(h.get("Link"))           # no ICE servers
-        code, h, body = self.req("POST", "/whep", OFFER)
+        code, h, body = self.req("POST", "/whep", GATHERED)
         self.assertEqual(code, 201)
         self.assertEqual(h["Content-Type"], "application/sdp")
         self.assertTrue(h["Location"].startswith("whep/"))
@@ -227,9 +231,9 @@ class WhepTest(unittest.TestCase):
 
     def test_errors(self):
         FakeWebrtcLocal.reply = {"type": "error"}
-        self.assertEqual(self.req("POST", "/whep", OFFER)[0], 502)
+        self.assertEqual(self.req("POST", "/whep", GATHERED)[0], 502)
         hc.WEBRTC_URL = "http://127.0.0.1:9/call/webrtc_local"
-        code, _, body = self.req("POST", "/whep", OFFER)
+        code, _, body = self.req("POST", "/whep", GATHERED)
         self.assertEqual(code, 502)
         self.assertIn("webrtc_local", body)
         self.assertEqual(self.req("PATCH", "/whep")[0], 404)
@@ -243,7 +247,7 @@ class WhepTest(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertIn("RTCPeerConnection", body)
 
-    def ws(self, messages, wait_answer=True):
+    def ws(self, messages, wait_answer=True, keep=False):
         """A go2rtc-style WebSocket client: send messages, return replies."""
         sock = socket.create_connection(("127.0.0.1",
                                          self.srv.server_address[1]))
@@ -283,6 +287,8 @@ class WhepTest(unittest.TestCase):
                     if len(buf) >= off + n:
                         replies.append(json.loads(buf[off:off + n]))
                         break
+        if keep:
+            return replies, sock
         sock.sendall(bytes([0x88, 0x80]) + os.urandom(4))   # close
         sock.close()
         return replies
@@ -305,6 +311,49 @@ class WhepTest(unittest.TestCase):
                          {"type": "webrtc/candidate", "value":
                           "candidate:1 1 udp 1 10.0.0.2 5000 typ host"}])
         self.assertEqual(reply[0]["type"], "error")
+
+    def test_an_offer_without_candidates_never_reaches_webrtc_local(self):
+        # Mainsail's MediaMTX type: it would leave a session with no video
+        FakeWebrtcLocal.offers.clear()
+        code, _, body = self.req("POST", "/whep", OFFER)
+        self.assertEqual(code, 400)
+        self.assertIn("go2rtc", body)
+        self.assertEqual(FakeWebrtcLocal.offers, [])
+
+    def test_viewers_past_the_cap_are_refused(self):
+        msgs = [{"type": "webrtc/offer", "value": OFFER},
+                {"type": "webrtc/candidate", "value":
+                 "candidate:1 1 udp 1 10.0.0.2 5000 typ host"}]
+        saved = hc.VIEWERS, hc.VIEWER_WAIT
+        hc.VIEWERS, hc.VIEWER_WAIT = hc.Viewers(1), 0.2
+        try:
+            first, sock = self.ws(msgs, keep=True)
+            self.assertEqual(first[0]["type"], "webrtc/answer")
+            FakeWebrtcLocal.offers.clear()
+            second = self.ws(msgs)
+            self.assertEqual(second[0]["type"], "error")
+            self.assertIn("1 viewers", second[0]["value"])
+            self.assertEqual(FakeWebrtcLocal.offers, [])
+            # leaving gives the place back
+            sock.sendall(bytes([0x88, 0x80]) + os.urandom(4))
+            sock.close()
+            hc.VIEWER_WAIT = 3.0
+            third = self.ws(msgs)
+            self.assertEqual(third[0]["type"], "webrtc/answer")
+        finally:
+            hc.VIEWERS, hc.VIEWER_WAIT = saved
+
+    def test_a_failed_call_gives_the_place_back(self):
+        saved = hc.VIEWERS
+        hc.VIEWERS = hc.Viewers(1)
+        FakeWebrtcLocal.reply = {"type": "error"}
+        try:
+            self.ws([{"type": "webrtc/offer", "value": OFFER},
+                     {"type": "webrtc/candidate", "value":
+                      "candidate:1 1 udp 1 10.0.0.2 5000 typ host"}])
+            self.assertTrue(hc.VIEWERS.enter(1.0))
+        finally:
+            hc.VIEWERS = saved
 
     def test_whep_refused_in_mjpeg_mode(self):
         hc.MODE = "mjpeg"

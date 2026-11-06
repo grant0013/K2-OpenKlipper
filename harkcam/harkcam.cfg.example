@@ -12,11 +12,13 @@ size: 1280x720
 # printing; 15 slowed the printer's network enough to stop a print.
 fps: 10
 
-# Streams open at once (1 to 4). A new one closes the oldest.
+# Streams open at once (1 to 4). A new one closes the oldest. In webrtc mode
+# this is the most viewers at once, and one more is refused.
 max_streams: 2
 
 # mjpeg (default): MJPEG stream and snapshots (time-lapse, AI watcher).
-# webrtc: Creality's H.264 over WebRTC, about 224 KB/s a viewer instead of
-# 800+, but no snapshots. Set Mainsail's camera to "WebRTC (go2rtc)" with
-# URL http://<printer IP>:8080/api/ws?src=k2. See docs/SCREEN-AND-CAMERA.md.
+# webrtc: Creality's H.264 over WebRTC at 1280x720 15 fps, about 224 KB/s a
+# viewer instead of 800+, but no snapshots. Set Mainsail's or Fluidd's camera
+# to "WebRTC (go2rtc)" with URL http://<printer IP>:8080/?src=k2. See
+# docs/SCREEN-AND-CAMERA.md.
 mode: mjpeg

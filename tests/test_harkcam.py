@@ -4,6 +4,7 @@ import socket
 import tempfile
 import threading
 import time
+import subprocess
 import unittest
 import urllib.error
 import urllib.request
@@ -20,6 +21,15 @@ class SettingsTest(unittest.TestCase):
     def test_defaults_are_10_fps_two_streams(self):
         self.assertEqual(hc.settings(["harkcam.py"], {}),
                          (8080, "/dev/video0", "1280x720", 10, 2))
+
+    def test_start_sh_webrtc_steps(self):
+        start = (PATH.parent / "start.sh").read_text()
+        subprocess.run(["sh", "-n", str(PATH.parent / "start.sh")], check=True)
+        self.assertNotIn("MediaMTX", start)
+        self.assertIn('"WebRTC (go2rtc)"', start)
+        self.assertIn("-t 0 -w 1280 -h 720 -f 15 -c", start)
+        self.assertLess(start.index('p=$(pidof ffmpeg)'),
+                        start.index("    tries=0"))
 
     def test_start_sh_line_no_longer_forces_15_fps(self):
         start = (PATH.parent / "start.sh").read_text()

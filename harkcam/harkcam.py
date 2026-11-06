@@ -24,14 +24,20 @@ mode: webrtc hands the camera to Creality's own apps instead (cam_app, which
 has the camera compress to H.264, and webrtc_local, which sends it over
 WebRTC: about 51 KB/s a viewer against 800+ for MJPEG, measured by nur00 in
 issue #4). Mainsail and Fluidd cannot talk to webrtc_local, so this serves
-the WHEP protocol their "WebRTC (MediaMTX)" camera type uses and translates:
+their "WebRTC (go2rtc)" camera type (a WebSocket on /api/ws) and translates.
+webrtc_local never connects without the browser's candidates in the offer,
+and an offer without them leaves a session running with no video and nobody
+watching, so the WHEP form, which the test page uses, refuses such an offer
+(that is what Mainsail's "WebRTC (MediaMTX)" type sends):
   OPTIONS /whep        204, no ICE servers (the printer is on the LAN)
   POST /whep           browser offer (application/sdp) -> webrtc_local's
                        base64 JSON call -> answer, 201 with a Location
-  PATCH /whep/<id>     204: webrtc_local takes no trickled candidates; the
-                       browser's checks reach it and it learns them from those
+  PATCH /whep/<id>     204: webrtc_local takes no trickled candidates
   DELETE /whep/<id>    200
   /                    a test page that plays the stream
+Every viewer is its own session in webrtc_local and the work multiplies, so
+max_streams viewers at most; one over that is told no, not given the oldest
+one's place (closing a viewer's WebSocket would not end its session).
 webrtc_local only sends video, so other media in the offer (Mainsail asks
 for audio too) are left out of what it sees and refused in the answer. The
 camera does only one format at a time: no MJPEG snapshots in this mode.
@@ -308,6 +314,27 @@ class Streams:
                 self.open.remove(token)
 
 
+class Viewers:
+    """WebRTC viewers, cap at most. A viewer leaving a page and opening the
+    next one overlap, so a new one waits a moment for a place."""
+    def __init__(self, cap):
+        self.cap = cap
+        self.count = 0
+        self.cond = threading.Condition()
+
+    def enter(self, wait):
+        with self.cond:
+            if not self.cond.wait_for(lambda: self.count < self.cap, wait):
+                return False
+            self.count += 1
+            return True
+
+    def leave(self):
+        with self.cond:
+            self.count -= 1
+            self.cond.notify()
+
+
 class Camera(threading.Thread):
     """Runs ffmpeg and keeps the newest complete JPEG."""
     def __init__(self, device, size, fps):
@@ -355,6 +382,8 @@ CAM = PACER = STREAMS = None
 MODE, WEBRTC_URL = "mjpeg", DEFAULTS["webrtc_url"]
 WS_GATHER, WS_GATHER_MAX = 0.6, 3.0
 SESSIONS = {}           # WHEP session id -> start time (for the log)
+VIEWERS = Viewers(int(DEFAULTS["max_streams"]))
+VIEWER_WAIT = 3.0       # seconds a new WebRTC viewer waits for a place
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -467,20 +496,32 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 cands.append(m["value"])
         if not offer:
             return
-        try:
-            sdp, plan = offer_for_creality(offer, cands, ip)
-            answer = answer_for_browser(call_creality(WEBRTC_URL, sdp), plan)
-        except Exception as e:
-            print("ws: %s" % e, flush=True)
-            self.ws_send({"type": "error", "value": "webrtc_local: %s" % e})
+        if not VIEWERS.enter(VIEWER_WAIT):
+            print("ws: %s refused, %d viewers already" % (ip, VIEWERS.cap),
+                  flush=True)
+            self.ws_send({"type": "error", "value":
+                          "camera: %d viewers already (max_streams in "
+                          "harkcam.cfg)" % VIEWERS.cap})
             return
-        print("ws: %s, %d candidates" % (ip, sum(
-            1 for l in sdp.split("\r\n") if l.startswith("a=candidate"))),
-            flush=True)
-        self.ws_send({"type": "webrtc/answer", "value": answer})
-        # keep the socket open (the browser closes it); answer pings
-        while self.ws_recv() is not None:
-            pass
+        try:
+            try:
+                sdp, plan = offer_for_creality(offer, cands, ip)
+                answer = answer_for_browser(call_creality(WEBRTC_URL, sdp),
+                                            plan)
+            except Exception as e:
+                print("ws: %s" % e, flush=True)
+                self.ws_send({"type": "error",
+                              "value": "webrtc_local: %s" % e})
+                return
+            print("ws: %s, %d candidates" % (ip, sum(
+                1 for l in sdp.split("\r\n")
+                if l.startswith("a=candidate"))), flush=True)
+            self.ws_send({"type": "webrtc/answer", "value": answer})
+            # keep the socket open (the browser closes it); answer pings
+            while self.ws_recv() is not None:
+                pass
+        finally:
+            VIEWERS.leave()
 
     def whep(self):
         """The path is /whep or /whep/<id> (behind nginx's /webcam/)."""
@@ -505,6 +546,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.plain(409, "harkcam is in mode: mjpeg; set mode: "
                               "webrtc in harkcam.cfg for WebRTC")
         offer = self.read_exact(int(self.headers.get("Content-Length") or 0))
+        if b"a=candidate" not in offer:
+            return self.plain(400, "no ICE candidates in the offer: set the "
+                              "camera type to WebRTC (go2rtc)")
         try:
             sdp, plan = offer_for_creality(offer.decode(),
                                            client_ip=self.client_ip())
@@ -635,13 +679,14 @@ class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
 
 
 def main(argv):
-    global CAM, PACER, STREAMS, MODE, WEBRTC_URL
+    global CAM, PACER, STREAMS, VIEWERS, MODE, WEBRTC_URL
     cfg = read_cfg(CFG_PATH)
     port, device, size, fps, max_streams = settings(argv, cfg)
     MODE, WEBRTC_URL = mode_settings(cfg)
     if MODE == "webrtc":
-        print("harkcam: mode webrtc, WHEP on port %d -> %s"
-              % (port, WEBRTC_URL), flush=True)
+        print("harkcam: mode webrtc, up to %d viewers, port %d -> %s"
+              % (max_streams, port, WEBRTC_URL), flush=True)
+        VIEWERS = Viewers(max_streams)
         Server(("", port), Handler).serve_forever()
         return
     print("harkcam: %s %s at %d fps shared, up to %d streams, port %d"
