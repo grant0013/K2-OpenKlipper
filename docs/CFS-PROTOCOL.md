@@ -98,8 +98,10 @@ nozzle sensor sees filament and the hub sensor (`ff 08 01`) shows that slot
   which matches our `flags` and `uniid` fields. Lamar1007's two-box test on
   a K1 settled the first byte: boxes `0x01` and `0x02` both answer
   `00 a2 01 00 <uniid>` to `ff a2`, so it is a device type, not a count.
-  Each box reports only itself: `ff a2` broadcast to `0xfe` gets no reply,
-  and `ff 14` gives each box's own version and serial.
+  Each box reports only itself, and `ff 14` gives each box's own version
+  and serial. `ff a2` to `0xfe` is not a safe query: addressed boxes gave no
+  reply, and two unaddressed boxes collided into one garbled frame with a
+  bad CRC.
 - **Multiple boxes.** His firmware addresses up to four boxes (1-4) through
   `a0`/`a1`, and Lamar1007 confirms it from the K1 side: boxes chain on the
   bus at `0x01`-`0x04`, Creality's `auto_addr` assigns them at startup, and
@@ -130,8 +132,11 @@ found the same frames independently on a K1.
 - Only one box is handled. Up to four, chained at addresses `0x01`-`0x04`,
   is how Creality, Jacob10383's firmware and the K1 side use `a0`/`a1`;
   Creality's slot names run T1A-T4D (T1-T16) with the usual A-D masks in
-  each box. Collisions when several unaddressed boxes answer one discover
-  are not tested.
+  each box.
+- Several unaddressed boxes do not collide on the discover. On a K1 with two
+  boxes (Lamar1007), `00 a1 fe fe` to `0xfe` returned two clean frames, one
+  after the other. Both are `00 a1 01 00 <uniid>`, and the driver here still
+  reads only the first.
 
 ## Bootloader and flashing (CFSTool, K1; not used here)
 
@@ -149,6 +154,25 @@ verified on real hardware from 1.1.3 to 1.5.0. Summary of its notes:
 - After a flash the box does not answer on the bus until its power is cut
   (two users on K1, and Lamar1007: it does not re-enumerate on a soft
   reset, so it looks dead until power-cycled).
+- One box can enter the loader on its own: `f7 02 03 ff 56 cf` to box `0x02`
+  acknowledges with `00 56`, and box `0x01` stays in app mode. In the loader
+  the box has lost its address, and `a0` with its UniID (read with `a2` in
+  app mode) gets it back without `a1`, answering `00 a0 01 01 <uniid>` (mode
+  1). Version and sector reads work on that path.
+- **Do not flash on that path.** Every step acknowledged like a good flash,
+  but the loader then reported the version as `cfs0_050_G32-` and zeros, and
+  the box stayed in the loader even after a power cycle (Lamar1007, known-good
+  1.5.2). The same files flashed correctly with the broadcast `0xeb`, `a1`,
+  `a0` path, so use that one. He suspects `a1` in the loader arms the write
+  session; that is untested.
+- Soft starts from the loader did not work on a K1: `00 0b 01` sent to the
+  box's address got no reply, `00 f0 02` with no flash left it in the loader,
+  and the loader did not time out in 120 s. The `0xff` broadcast of `00 0b
+  01` that this driver uses was not tried there. Creality's `auto_addr`
+  brought an unflashed loader box back, and after a real flash only a power
+  cycle did.
+- A box stuck in the loader is addressed by stock Klipper at boot and then
+  ignores `a1`: power-cycle it with Klipper stopped so it is unaddressed.
 - `SYSTEM_RESET` is command `25`. Over CAN (the K1's IAP path) the same `F7`
   frame is sent wrapped, e.g. `cansend 0FE#F7FE04FF25A2FB`: `F7`, broadcast
   `0xfe`, length 4, `ff 25 a2`, CRC `fb` (checked).
@@ -156,7 +180,11 @@ verified on real hardware from 1.1.3 to 1.5.0. Summary of its notes:
   `cfs0_050_G32-cfs0_000_142.bin`. The `G30`/`G32` suffix is the hardware
   variant (the wrong one can brick the box), the last three digits of the
   app part are the version. Newer Creality bundles also list a `cfs6`
-  generation (`cfs6_100_G31`, `cfs6_220_000`) with its own scheme.
+  generation with its own scheme: K2 firmware 1.1.7.0 carries `cfs6_100_G31`
+  with `cfs6_222_000`, and 1.1.8.3 carries `cfs6_236_000` for it plus a new
+  `cfs6_100_G51` board with `cfs6_237_000`. `cfs0` stays at `G30` 1.5.0 and
+  `G32` 1.5.3. 1.1.8.3 also names a "CFS Nano" product; nothing else about
+  it is known here.
 - In app mode `06` and `07` are motor-control writes: do not probe unknown
   commands on a live box.
 - **On the K2** the CFS shares `/dev/ttyS5` with the closed-loop motors
@@ -224,10 +252,9 @@ treated as generic CFS commands.
 - connector pinout and signalling voltage
 - power requirements and safe external power sequencing
 - bus termination and topology limits
-- collision handling with more than one unaddressed box (single-box
-  addressing and cold boot are handled; see Addressing and cold boot)
 - compatibility across CFS hardware and firmware revisions beyond the
-  boxes seen so far (firmware 1.4.2 and 1.5.0; see the naming notes above)
+  boxes seen so far (firmware 1.4.2 to 1.5.3, on K1 and K2; see the naming
+  notes above), and anything about the `cfs6` generation on a real box
 - whether the K2's bus motors ignore the CFS loader frames
 - whether the protocol can safely coexist with other printer serial stacks
 
