@@ -36,6 +36,13 @@
 #   probe_count: 21, 21
 #   mesh_pps: 1, 1
 #
+# Extra seconds of motion kept queued, so a stall of the printer's own board
+# doesn't stop the print (default 0.5). Pause and cancel respond that much
+# later:
+#
+#   [printer]
+#   buffer_headroom: 1.0
+#
 # Idle settings. Chamber light off this many seconds after a print ends or
 # is cancelled (0 = stays on):
 #

@@ -55,10 +55,16 @@ class PrinterMotionQueuing:
         self.do_kick_flush_timer = True
         self.last_flush_time = self.last_step_gen_time = 0.
         self.need_flush_time = self.need_step_gen_time = 0.
+        self.sg_low_time = BGFLUSH_SG_LOW_TIME
+        self.sg_high_time = BGFLUSH_SG_HIGH_TIME
         # "Drip" timing (for homing and probing moves)
         self.drip_start_times = []
         # Register handlers
         printer.register_event_handler("klippy:shutdown", self._handle_shutdown)
+    def set_buffer_headroom(self, headroom):
+        # Generate steps this much further ahead (see toolhead.py)
+        self.sg_low_time = BGFLUSH_SG_LOW_TIME + headroom
+        self.sg_high_time = BGFLUSH_SG_HIGH_TIME + headroom
     # C trapq tracking
     def allocate_trapq(self):
         ffi_main, ffi_lib = chelper.get_ffi()
@@ -196,7 +202,7 @@ class PrinterMotionQueuing:
             aggr_sg_time = self.need_step_gen_time - 2.*self.kin_flush_delay
             if self.last_step_gen_time < aggr_sg_time:
                 # Actively stepping - want more aggressive flushing
-                want_sg_time = est_print_time + BGFLUSH_SG_HIGH_TIME
+                want_sg_time = est_print_time + self.sg_high_time
                 batch_time = BGFLUSH_SG_HIGH_TIME - BGFLUSH_SG_LOW_TIME
                 next_batch_time = self.last_step_gen_time + batch_time
                 if next_batch_time > est_print_time:
@@ -220,7 +226,7 @@ class PrinterMotionQueuing:
             # Reschedule timer
             aggr_sg_time = self.need_step_gen_time - 2.*self.kin_flush_delay
             if self.last_step_gen_time < aggr_sg_time:
-                waketime = self.last_step_gen_time - BGFLUSH_SG_LOW_TIME
+                waketime = self.last_step_gen_time - self.sg_low_time
             else:
                 self.do_kick_flush_timer = True
                 max_flush_time = self.need_flush_time + BGFLUSH_EXTRA_TIME

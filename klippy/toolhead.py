@@ -210,8 +210,15 @@ class ToolHead:
         self.printer = config.get_printer()
         self.reactor = self.printer.get_reactor()
         self.mcu = self.printer.lookup_object('mcu')
+        # Extra seconds of motion kept queued, so a host stall of about that
+        # much longer doesn't reach the MCUs. A slow host wants this: the
+        # K2's own board shut down on spikes of 0.7 s (GitHub issues #4, #5).
+        # Pause and cancel respond that much later.
+        self.buffer_headroom = config.getfloat('buffer_headroom', 0.,
+                                               minval=0., maxval=2.)
+        self.buffer_time_high = BUFFER_TIME_HIGH + self.buffer_headroom
         self.lookahead = LookAheadQueue()
-        self.lookahead.set_flush_time(BUFFER_TIME_HIGH)
+        self.lookahead.set_flush_time(self.buffer_time_high)
         self.commanded_pos = [0., 0., 0., 0.]
         # Velocity and acceleration control
         self.max_velocity = config.getfloat('max_velocity', above=0.)
@@ -236,6 +243,7 @@ class ToolHead:
         self.priming_timer = None
         # Setup for generating moves
         self.motion_queuing = self.printer.load_object(config, 'motion_queuing')
+        self.motion_queuing.set_buffer_headroom(self.buffer_headroom)
         self.motion_queuing.register_flush_callback(self._handle_step_flush,
                                                     can_add_trapq=True)
         self.trapq = self.motion_queuing.allocate_trapq()
@@ -311,7 +319,7 @@ class ToolHead:
         self._process_lookahead()
         self.special_queuing_state = "NeedPrime"
         self.need_check_pause = -1.
-        self.lookahead.set_flush_time(BUFFER_TIME_HIGH)
+        self.lookahead.set_flush_time(self.buffer_time_high)
         self.check_stall_time = 0.
         if is_runout and prev_print_time != self.print_time:
             self.check_stall_time = self.print_time
@@ -358,7 +366,7 @@ class ToolHead:
         if self.priming_timer is None:
             self.priming_timer = self.reactor.register_timer(
                 self._priming_handler)
-        will_pause_time = self.print_time - est_print_time - BUFFER_TIME_HIGH
+        will_pause_time = self.print_time - est_print_time - self.buffer_time_high
         wtime = eventtime + max(0., will_pause_time) + PRIMING_CMD_TIME
         self.reactor.update_timer(self.priming_timer, wtime)
     def _check_pause(self):
@@ -370,7 +378,7 @@ class ToolHead:
         did_pause = False
         while 1:
             est_print_time = self.mcu.estimated_print_time(eventtime)
-            pause_time = self.print_time - est_print_time - BUFFER_TIME_HIGH
+            pause_time = self.print_time - est_print_time - self.buffer_time_high
             if pause_time <= 0.:
                 break
             if not self.can_pause:
