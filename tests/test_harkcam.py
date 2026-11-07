@@ -93,6 +93,9 @@ class FakeCamera(threading.Thread):
         self.frame, self.count = None, 0
         self.cond = threading.Condition()
 
+    def fresh(self):
+        return self.frame is not None
+
     def run(self):
         while True:
             with self.cond:
@@ -100,6 +103,112 @@ class FakeCamera(threading.Thread):
                 self.count += 1
                 self.cond.notify_all()
             time.sleep(1 / 15)
+
+
+class DeviceHoldersTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = pathlib.Path(self.tmp.name)
+        self.video = self.root / "video0"
+        self.video.touch()
+        self.other = self.root / "video1"
+        self.other.touch()
+
+    def process(self, pid, comm, target):
+        d = self.root / "proc" / str(pid)
+        (d / "fd").mkdir(parents=True)
+        (d / "comm").write_text(comm + "\n")
+        (d / "fd" / "3").symlink_to(target)
+
+    def holders(self):
+        return hc.device_holders(str(self.video),
+                                 proc=str(self.root / "proc"))
+
+    def test_finds_cam_sub_app_on_our_camera(self):
+        self.process(1298, "cam_sub_app", self.video)
+        self.assertEqual(self.holders(), [1298])
+
+    def test_leaves_a_second_camera_alone(self):
+        self.process(1298, "cam_sub_app", self.other)
+        self.assertEqual(self.holders(), [])
+
+    def test_only_touches_creality_camera_apps(self):
+        self.process(55, "ffmpeg", self.video)
+        self.assertEqual(self.holders(), [])
+
+    def test_follows_a_by_id_link(self):
+        self.process(1298, "cam_sub_app", self.video)
+        link = self.root / "sub-video0"
+        link.symlink_to(self.video)
+        self.assertEqual(hc.device_holders(str(link),
+                                           proc=str(self.root / "proc")),
+                         [1298])
+
+
+class CameraStateTest(unittest.TestCase):
+    def camera(self):
+        self.now = 100.0
+        return hc.Camera("/dev/video0", "1280x720", 10,
+                         clock=lambda: self.now)
+
+    def test_no_frame_is_not_fresh(self):
+        self.assertFalse(self.camera().fresh())
+
+    def test_frame_goes_stale(self):
+        cam = self.camera()
+        cam.frame, cam.last = FRAME, self.now
+        self.assertTrue(cam.fresh())
+        self.now += hc.STALE_AFTER + 1
+        self.assertFalse(cam.fresh())
+
+    def test_silent_ffmpeg_counts_as_stuck(self):
+        cam = self.camera()
+        cam.proc = type("P", (), {"poll": lambda s: None})()
+        cam.started = self.now
+        self.assertFalse(cam.capture_stuck())
+        self.now += hc.CAPTURE_STUCK + 1
+        self.assertTrue(cam.capture_stuck())
+        cam.last = self.now
+        self.assertFalse(cam.capture_stuck())
+
+    def test_exited_ffmpeg_is_not_stuck(self):
+        cam = self.camera()
+        cam.proc = type("P", (), {"poll": lambda s: 1})()
+        self.now += 1000
+        self.assertFalse(cam.capture_stuck())
+
+
+class StoppedCameraTest(unittest.TestCase):
+    """The camera stopped: never pass the last frame off as live."""
+    @classmethod
+    def setUpClass(cls):
+        cls.saved = hc.CAM, hc.PACER, hc.STREAMS, hc.NO_FRAME_WAIT
+        cam = FakeCamera()
+        cam.frame, cam.count = FRAME, 1
+        cam.fresh = lambda: False
+        hc.CAM, hc.PACER, hc.STREAMS = cam, hc.Pacer(10), hc.Streams(2)
+        hc.NO_FRAME_WAIT = 0.1
+        cls.srv = hc.Server(("127.0.0.1", 0), hc.Handler)
+        cls.port = cls.srv.server_address[1]
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+        hc.CAM, hc.PACER, hc.STREAMS, hc.NO_FRAME_WAIT = cls.saved
+
+    def status(self, action):
+        url = "http://127.0.0.1:%d/?action=%s" % (self.port, action)
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            urllib.request.urlopen(url, timeout=5)
+        return caught.exception.code
+
+    def test_snapshot_says_503(self):
+        self.assertEqual(self.status("snapshot"), 503)
+
+    def test_new_stream_says_503(self):
+        self.assertEqual(self.status("stream"), 503)
 
 
 class LiveServerTest(unittest.TestCase):

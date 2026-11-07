@@ -97,6 +97,12 @@ and a print stopped with `Stepper too far in past` (issue #4). So:
   `size` (1280x720, 800x600, 640x480), `fps` (1 to 15) and `max_streams`
   (1 to 4). Run `sh /mnt/UDISK/harkcam/start.sh` or reboot after a change.
   `fps: 5` or `size: 640x480` leaves more room on a weak WiFi signal.
+- If the camera drops off USB and comes back, Creality's `cam_sub_app` or
+  `cam_app` can start by itself and take it. `harkcam` stops whichever holds
+  the camera and carries on, and restarts `ffmpeg` if it goes silent. While
+  no frames are arriving, snapshots and new streams answer 503 and open
+  streams close, so a frozen picture can't pass as live and an AI watcher
+  sees the camera as down.
 
 ### WebRTC mode (H.264, much lighter on WiFi) - in testing
 

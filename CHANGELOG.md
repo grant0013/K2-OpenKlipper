@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **The chamber camera recovers from a USB drop by itself.** A USB error made
+  the camera drop out and come back, Creality's `cam_sub_app` took it, and
+  `harkcam` served its last frame for 21 hours as if it were live, blinding
+  an AI print watcher. `harkcam` now stops a Creality camera app holding the
+  camera, restarts a silent `ffmpeg`, and answers 503 instead of an old frame.
+  The AI watcher now counts a repeated frame as no frame, so a frozen feed
+  raises its "watcher is blind" alert (`tools/ai-detect/watch.py`).
+
 - **Other brands sync to their own Orca preset**. A CFS slot holding a
   library filament from Elegoo, Bambu Lab, Polymaker, eSUN, SUNLU, JAYO or
   Overture now reaches OrcaSlicer with that preset's filament_id, so it

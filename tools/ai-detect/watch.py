@@ -191,7 +191,7 @@ def main():
     os.makedirs(OUT + "/hits/raw", exist_ok=True)
     print(f"k2-detect up, autopause={'ON' if AUTOPAUSE else 'OFF'}, "
           f"vision model {'up' if vlm.healthy() else 'DOWN'} at {vlm.URL}", flush=True)
-    j, blind, blind_sent = Judge(), 0, False
+    j, blind, blind_sent, last_frame = Judge(), 0, False, None
     seen_file, seen_start = None, time.time()
     sec = Second()
     v_file, pending, last_look, alone_run, alone_sent, last_v = None, None, 0.0, 0, set(), None
@@ -222,7 +222,10 @@ def main():
         score, dets, img, raw = None, [], None, None
         if state == "printing" and dur >= SKIP_FIRST:
             try:
-                raw = http(CAM)
+                frame = http(CAM)
+                if frame == last_frame:     # a real sensor never repeats a JPEG byte for byte
+                    raise RuntimeError("same frame as last time, the feed is frozen")
+                raw = last_frame = frame
                 img = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
                 dets = detect(net, img, thresh=THRESH)
                 score, blind = sum(d[1] for d in dets), 0

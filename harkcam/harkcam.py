@@ -43,7 +43,8 @@ for audio too) are left out of what it sees and refused in the answer. The
 camera does only one format at a time: no MJPEG snapshots in this mode.
 """
 import base64, hashlib, http.server, json, os, socket, socketserver
-import select, struct, subprocess, sys, threading, time, urllib.request
+import select, signal, struct, subprocess, sys, threading, time
+import urllib.request
 import uuid
 
 CFG_PATH = os.environ.get(
@@ -55,6 +56,13 @@ MODES = ("mjpeg", "webrtc")
 SIZES = ("640x480", "800x600", "1280x720")
 FPS_RANGE = (1, 15)
 MAX_WAIT = 3.0          # a snapshot queued longer than this gets a 503
+STALE_AFTER = 10.0      # no new frame for this long: the camera has stopped,
+                        # so say so rather than serve the last frame forever
+CAPTURE_STUCK = 15.0    # ffmpeg alive but silent this long: restart it
+NO_FRAME_WAIT = 5.0     # a new viewer waits this long for a live frame
+# Creality's apps start again by themselves when the camera drops off USB and
+# comes back, and whichever holds the device locks ffmpeg out
+CAMERA_APPS = ("cam_app", "cam_sub_app")
 
 
 def read_cfg(path):
@@ -335,10 +343,36 @@ class Viewers:
             self.cond.notify()
 
 
+def device_holders(device, names=CAMERA_APPS, proc="/proc"):
+    """Pids of the named programs that have this video device open."""
+    target = os.path.realpath(device)
+    pids = []
+    for pid in os.listdir(proc):
+        if not pid.isdigit():
+            continue
+        try:
+            with open(os.path.join(proc, pid, "comm")) as f:
+                if f.read().strip() not in names:
+                    continue
+            fds = os.path.join(proc, pid, "fd")
+            for fd in os.listdir(fds):
+                if os.path.realpath(os.path.join(fds, fd)) == target:
+                    pids.append(int(pid))
+                    break
+        except OSError:
+            pass            # it exited, or isn't ours to read
+    return pids
+
+
 class Camera(threading.Thread):
     """Runs ffmpeg and keeps the newest complete JPEG."""
-    def __init__(self, device, size, fps):
+    def __init__(self, device, size, fps, clock=time.monotonic):
         super().__init__(daemon=True)
+        self.device = device
+        self.clock = clock
+        self.last = None        # when the newest frame arrived
+        self.proc = None
+        self.started = 0.0
         self.cmd = ["ffmpeg", "-loglevel", "error", "-f", "v4l2",
                     "-input_format", "mjpeg", "-video_size", size,
                     "-framerate", str(fps), "-i", device, "-c:v", "copy",
@@ -347,10 +381,44 @@ class Camera(threading.Thread):
         self.count = 0
         self.cond = threading.Condition()
 
-    def run(self):
+    def fresh(self):
+        """True while frames are arriving."""
+        return (self.frame is not None and self.last is not None
+                and self.clock() - self.last <= STALE_AFTER)
+
+    def capture_stuck(self):
+        """True when a running ffmpeg has sent nothing for CAPTURE_STUCK."""
+        if self.proc is None or self.proc.poll() is not None:
+            return False
+        since = max(self.started, self.last or 0.0)
+        return self.clock() - since > CAPTURE_STUCK
+
+    def free_device(self):
+        """Stop a Creality app that took the camera. Returns its pids."""
+        pids = device_holders(self.device)
+        for pid in pids:
+            print("harkcam: camera held by pid %d, stopping it" % pid,
+                  flush=True)
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:
+                pass
+        return pids
+
+    def watch(self):
         while True:
-            proc = subprocess.Popen(self.cmd, stdout=subprocess.PIPE,
-                                    stderr=subprocess.DEVNULL)
+            time.sleep(5)
+            if self.capture_stuck():
+                print("harkcam: no frames from ffmpeg, restarting it",
+                      flush=True)
+                self.proc.kill()
+
+    def run(self):
+        threading.Thread(target=self.watch, daemon=True).start()
+        while True:
+            self.started = self.clock()
+            self.proc = proc = subprocess.Popen(
+                self.cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
             buf = b""
             while True:
                 chunk = proc.stdout.read(65536)
@@ -367,12 +435,15 @@ class Camera(threading.Thread):
                     buf = buf[end + 2:]
                     with self.cond:
                         self.frame = jpeg
+                        self.last = self.clock()
                         self.count += 1
                         self.cond.notify_all()
                 if len(buf) > 4 << 20:
                     buf = b""
             proc.wait()
-            time.sleep(2)   # camera unplugged or busy: retry
+            # Camera unplugged or busy: retry. Opened again too soon after
+            # one of Creality's apps stops, the camera can stick until a reboot.
+            time.sleep(5 if self.free_device() else 2)
 
 
 BOUNDARY = b"harkcamframe"
@@ -624,6 +695,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def stream(self):
+        # A camera that has just started gets a moment for its first frame
+        with CAM.cond:
+            CAM.cond.wait_for(CAM.fresh, timeout=NO_FRAME_WAIT)
+        if not CAM.fresh():
+            self.send_error(503, "No frames from the camera")
+            return
         self.send_response(200)
         self.send_header("Content-Type",
                          "multipart/x-mixed-replace; boundary=%s"
@@ -639,6 +716,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     CAM.cond.wait_for(lambda: CAM.count != seen, timeout=5)
                 if token["stop"]:
                     break
+                if CAM.count == seen:
+                    # Nothing new: never resend the last frame as if live.
+                    # Closing lets the viewer reconnect when it recovers.
+                    if not CAM.fresh():
+                        break
+                    continue
                 time.sleep(PACER.reserve())
                 with CAM.cond:
                     frame, seen = CAM.frame, CAM.count
@@ -661,8 +744,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         time.sleep(wait)
         frame = CAM.frame
-        if frame is None:
-            self.send_error(503, "No frame yet")
+        if not CAM.fresh():
+            self.send_error(503, "No frames from the camera")
             return
         self.send_response(200)
         self.send_header("Content-Type", "image/jpeg")
