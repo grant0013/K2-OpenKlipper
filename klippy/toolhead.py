@@ -210,10 +210,10 @@ class ToolHead:
         self.printer = config.get_printer()
         self.reactor = self.printer.get_reactor()
         self.mcu = self.printer.lookup_object('mcu')
-        # Extra seconds of motion kept queued, so a host stall of about that
-        # much longer doesn't reach the MCUs. A slow host wants this: the
-        # K2's own board shut down on spikes of 0.7 s (GitHub issues #4, #5).
-        # Pause and cancel respond that much later.
+        # Extra seconds of motion kept queued, aimed at the host spikes of
+        # about 0.7 s on the K2's own board (GitHub issues #4, #5). Stall
+        # tests on a PC host haven't shown fewer shutdowns yet. Pause and
+        # cancel respond that much later.
         self.buffer_headroom = config.getfloat('buffer_headroom', 0.,
                                                minval=0., maxval=2.)
         self.buffer_time_high = BUFFER_TIME_HIGH + self.buffer_headroom

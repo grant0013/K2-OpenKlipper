@@ -36,8 +36,8 @@
 #   probe_count: 21, 21
 #   mesh_pps: 1, 1
 #
-# Extra seconds of motion kept queued, so a stall of the printer's own board
-# doesn't stop the print (default 0.5). Pause and cancel respond that much
+# Extra seconds of motion kept queued, for stalls of the printer's own board
+# (default 0.5, benefit not proven yet). Pause and cancel respond that much
 # later:
 #
 #   [printer]
