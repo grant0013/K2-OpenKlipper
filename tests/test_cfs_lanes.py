@@ -45,6 +45,16 @@ class OrcaIdsTest(unittest.TestCase):
         self.assertEqual(lane['k2_filament'], 'cr-01001')
         self.assertEqual(lane['color'], '#FB8C00')
 
+    def test_library_brand_maps_to_orca_id(self):
+        s = make_slots({'A': rec('Elegoo PLA', 'lib-elegoo-pla')})
+        lane = s._lane_values()['lane1']
+        self.assertEqual(lane['filament_id'], 'OFvgE0Zh')
+
+    def test_brand_orca_does_not_know_has_no_id(self):
+        s = make_slots({'A': rec('DeepLee PLA+', 'lib-deeplee-pla-plus')})
+        lane = s._lane_values()['lane1']
+        self.assertEqual(lane['filament_id'], '')
+
     def test_custom_filament_uses_its_creality_base(self):
         lib = {'u-my-pla': {'id': 'u-my-pla', 'name': 'My PLA',
                             'based_on': 'Hyper PLA'}}

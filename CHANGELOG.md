@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Other brands sync to their own Orca preset**. A CFS slot holding a
+  library filament from Elegoo, Bambu Lab, Polymaker, eSUN, SUNLU, JAYO or
+  Overture now reaches OrcaSlicer with that preset's filament_id, so it
+  syncs as, say, "Elegoo PLA @System" instead of "Generic PLA". 61 of the
+  63 library filaments have an Orca preset; DeepLee has none and stays
+  generic.
+
 - **Choose the slot each filament prints from** (GitHub issue #3,
   masteryodha: a file started from the touchscreen always printed from slot
   A, and the rear spool could not be used with a CFS connected). Like
