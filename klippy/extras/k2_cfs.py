@@ -2191,6 +2191,21 @@ class K2CFS:
         origin_z = status['position'][2] - status['gcode_position'][2]
         return raw_z - origin_z + 0.001
 
+    def _raise_to_gate(self):
+        # purge_min_z is checked on the raw toolhead Z, which carries the bed
+        # mesh offset at this XY. A G-code Z can't allow for that in advance
+        # and the offset differs between the cut and the purge positions, so
+        # measure here: -0.0046 mm at the chute paused two colour changes at
+        # 4.496 of 4.500 (11-07).
+        short = (self.purge_min_z
+                 - self.printer.lookup_object('toolhead').get_position()[2])
+        if short <= 0.:
+            return
+        status = self.printer.lookup_object('gcode_move').get_status(0.)
+        self.gcode.run_script_from_command(
+            "G90\nG1 Z%.3f F600\nM400"
+            % (status['gcode_position'][2] + short + 0.001))
+
     def _flex_filament_path(self, gcmd, message):
         # Jacob10383's filament_retry_motion: sweep the toolhead across the
         # bed so the PTFE tube to the head changes shape, which frees
@@ -3096,11 +3111,13 @@ class K2CFS:
         try:
             if unload:
                 self._move_to_cut_start()
+                self._raise_to_gate()
                 unload_gcmd = self.gcode.create_gcode_command(
                     "CFS_CUT_UNLOAD", "",
                     {"SLOT": ctx['old_slot'], "CONFIRM": "1"})
                 self.cmd_CFS_CUT_UNLOAD(unload_gcmd)
             else:
+                self._raise_to_gate()
                 self._ensure_purge_position(
                     self.gcode.create_gcode_command(
                         "CFS_PURGE_POSITION", "", {"CONFIRM": "1"}))
@@ -3119,6 +3136,7 @@ class K2CFS:
                 load_params.update(LENGTH="%.1f" % full_length)
             load_gcmd = self.gcode.create_gcode_command(
                 "CFS_LOAD", "", load_params)
+            self._raise_to_gate()
             if load:
                 self._load_with_retries(load_gcmd)
             timings.append(reactor.monotonic())

@@ -11,6 +11,12 @@
   profiles, `docs/INSTALL.md` and `config/ORCA-K2-PROFILE.cfg` add `M400`
   before the `T` line. Re-import the profile when convenient; it is not
   needed for this fix.
+- **Low colour changes no longer pause on the bed mesh.** A change below
+  about Z 2.5 lifted to exactly `purge_min_z`, and a negative mesh offset at
+  the chute left it a hair short, so the load was refused and the print
+  paused (`CFS move requires Z >= 4.500 (current 4.496)`). The change now
+  measures the height at the cut position and again before the load, and
+  lifts by what is missing.
 - **Bed mesh note for a high `probe_count`** (GitHub issue #4, nur00):
   `config/printer-overrides.cfg.example` now says to use `mesh_pps: 1, 1`
   above about 13x13. 19x19 and 21x21 full-bed meshes at `mesh_pps: 2, 2` shut

@@ -120,6 +120,7 @@ def make_cfs(load_errors=0, state='printing'):
     cfs._slot_nozzle_temp = lambda slot: 240.
     cfs._gcode_z = lambda z: z
     cfs._move_to_cut_start = lambda: calls.append(('cut_start',))
+    cfs._raise_to_gate = lambda: None
     cfs._ensure_purge_position = lambda g: calls.append(('purge_pos',))
     cfs._best_effort_stop = lambda mask: calls.append(('stop', mask))
     left = [load_errors]
@@ -339,6 +340,35 @@ class ToolchangeWaitTest(unittest.TestCase):
         cfs.fitted = False
         cfs._select_tool(FakeCmd(), 'A')
         self.assertEqual(cfs.order, [])
+
+
+class ChuteGateTest(unittest.TestCase):
+    # 11-07: the bed mesh left the chute 0.0046 mm under purge_min_z and the
+    # load was refused, so the height is checked at each stop of a change
+    @staticmethod
+    def steps(cfs):
+        return [c[0] for c in cfs.calls if c[0] != 'fans']
+
+    @staticmethod
+    def note_gate(cfs):
+        cfs._raise_to_gate = lambda: cfs.calls.append(('gate',))
+
+    def test_checked_at_the_cut_and_again_before_the_load(self):
+        cfs = make_cfs()
+        self.note_gate(cfs)
+        cfs.cmd_CFS_TOOLCHANGE(FakeCmd({'SLOT': 'B'}))
+        self.assertEqual(self.steps(cfs), ['cut_start', 'gate', 'unload',
+                                           'gate', 'load', 'purge'])
+
+    def test_retry_checks_before_moving_to_the_chute(self):
+        cfs = make_cfs(load_errors=3)
+        cfs.cmd_CFS_TOOLCHANGE(FakeCmd({'SLOT': 'B'}))
+        cfs.printer.print_stats.status['state'] = 'paused'
+        del cfs.calls[:]
+        self.note_gate(cfs)
+        cfs.cmd_CFS_CHANGE_RETRY(FakeCmd())
+        self.assertEqual(self.steps(cfs),
+                         ['gate', 'purge_pos', 'gate', 'load', 'purge'])
 
 
 class StartGcodeWaitTest(unittest.TestCase):
