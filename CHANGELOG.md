@@ -2,14 +2,15 @@
 
 ## Unreleased
 
-- **More margin for the K2's slow board.** New `[printer] buffer_headroom`
-  (0.5 s in the K2 and K2 Plus configs, 0 on a host PC) keeps that much more
-  motion queued, aimed at the spikes of about 0.7 s behind GitHub issues #4
-  and #5. Stall tests on a host PC have not shown fewer shutdowns yet. Pause
-  and cancel respond up to that much later. New `[hark_cpu]` lets
-  the stepper threads use both cores while Python and the serial threads stay
-  on CPU1, which cut a batch run on the T113 by 13%; it does nothing on a host
-  PC.
+- **The stepper threads use both of the K2's cores.** klippy is pinned to
+  CPU1, so its one step generation thread per stepper queued up on one core
+  while Python waited for them. New `[hark_cpu]` frees those threads while
+  Python and the serial threads stay on CPU1, which cut a batch run on the
+  T113 by 12%. It does nothing on a host PC.
+- **`[printer] buffer_headroom` (experimental, off by default).** Keeps extra
+  seconds of motion queued. It is aimed at the host stalls in GitHub issues
+  #4 and #5, but stall tests on a host PC showed no fewer shutdowns, so no
+  config turns it on. Pause and cancel respond that much later.
 - **T0-T3 wait for the prime line before touching the CFS** (GitHub issue #5,
   Promotheux: every CFS print on a fresh install ended in `Stepper too far
   in past`). The `T<n>` line in the slicer's start G-code runs right after
