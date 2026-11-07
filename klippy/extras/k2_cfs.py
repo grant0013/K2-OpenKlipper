@@ -1490,6 +1490,9 @@ class K2CFS:
                 raise gcmd.error(
                     "No CFS on this printer: only T0 (the rear spool) exists")
             return
+        # Same reason as cmd_CFS_TOOLCHANGE: this is the T<n> after a
+        # START_PRINT with no TOOL=, and outside a print from a file
+        self.gcode.run_script_from_command("M400")
         self._start_feed(
             gcmd, slot, require_confirm=False, require_selected=True)
         gcmd.respond_info(
@@ -3013,6 +3016,13 @@ class K2CFS:
         if self.print_start_transaction:
             raise gcmd.error("A CFS transaction is already active")
 
+        # Finish the queued moves before touching the box. At a print start
+        # T<n> runs right after START_PRINT with the prime line still queued,
+        # then again for Orca's own first tool selection, and on a printer
+        # running Klipper on its own board that shut the MCUs down ("Stepper
+        # too far in past", GitHub issue #5). Harmless for a real change,
+        # which has to stop here anyway.
+        self.gcode.run_script_from_command("M400")
         mask = self.SLOT_MASKS[slot]
         active_mask = self._path_mask(self._measuring())
         nozzle_loaded = self._nozzle_has_filament() is True

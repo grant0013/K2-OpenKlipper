@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **T0-T3 wait for the prime line before touching the CFS** (GitHub issue #5,
+  Promotheux: every CFS print on a fresh install ended in `Stepper too far
+  in past`). The `T<n>` line in the slicer's start G-code runs right after
+  `START_PRINT`, with the prime line still queued, and the CFS work behind
+  it ran while those moves were executing. T0-T3 now wait for the moves
+  first, so a file sliced with an older profile is covered, and the Orca
+  profiles, `docs/INSTALL.md` and `config/ORCA-K2-PROFILE.cfg` add `M400`
+  before the `T` line. Re-import the profile when convenient; it is not
+  needed for this fix.
+- **Bed mesh note for a high `probe_count`** (GitHub issue #4, nur00):
+  `config/printer-overrides.cfg.example` now says to use `mesh_pps: 1, 1`
+  above about 13x13. 19x19 and 21x21 full-bed meshes at `mesh_pps: 2, 2` shut
+  a K2 Plus down as the mesh finished at a print start; 21x21 at `1, 1`
+  printed. The stall itself is not fixed yet.
+
 - **The chamber camera recovers from a USB drop by itself.** A USB error made
   the camera drop out and come back, Creality's `cam_sub_app` took it, and
   `harkcam` served its last frame for 21 hours as if it were live, blinding

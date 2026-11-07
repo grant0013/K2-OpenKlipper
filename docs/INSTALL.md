@@ -123,6 +123,7 @@ not import it? Start from Creality's profile for your printer, then in
 
    ```gcode
    START_PRINT EXTRUDER_TEMP=[nozzle_temperature_initial_layer] BED_TEMP=[bed_temperature_initial_layer_single] TOOL=[initial_no_support_extruder] TOWER_X={wipe_tower_x[0]} TOWER_Y={wipe_tower_y[0]} TOWER_W={if enable_prime_tower}[prime_tower_width]{else}0{endif}
+   M400
    T[initial_no_support_extruder]
    M204 S2000
    M83

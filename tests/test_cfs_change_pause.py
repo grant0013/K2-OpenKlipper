@@ -1,4 +1,5 @@
 import importlib
+import json
 import pathlib
 import sys
 import unittest
@@ -273,6 +274,104 @@ class ChangePauseTest(unittest.TestCase):
         cfs.printer.print_stats.status['state'] = 'cancelled'
         cfs.cmd_CFS_CHANGE_RETRY(FakeCmd())
         self.assertIsNone(cfs.pending_change)
+
+
+class ToolchangeWaitTest(unittest.TestCase):
+    # GitHub issue #5: T<n> right after START_PRINT ran the CFS work with the
+    # prime line still queued, and the MCUs shut down
+    def tracked(self, active):
+        cfs = make_cfs()
+        cfs.active = active
+        order = cfs.order = []
+        run = cfs.gcode.run_script_from_command
+
+        def script(text):
+            order.append(text)
+            run(text)
+        cfs.gcode.run_script_from_command = script
+        cfs._measuring = lambda: order.append('query') or {}
+        cfs._start_feed = lambda *a, **kw: order.append('arm')
+        return cfs
+
+    def test_already_loaded_waits_before_the_box_is_touched(self):
+        cfs = self.tracked(active=0x02)         # slot B, from START_PRINT
+        cmd = FakeCmd({'SLOT': 'B'})
+        cfs.cmd_CFS_TOOLCHANGE(cmd)
+        self.assertEqual(cfs.order, ['M400', 'query', 'arm'])
+        self.assertEqual(cmd.info, ['CFS slot B already loaded'])
+        self.assertEqual(cfs.calls, [])
+
+    def test_orcas_second_t_waits_too(self):
+        # The start G-code's T line, then Orca's own first tool selection
+        # with a Z move queued in between
+        cfs = self.tracked(active=0x02)
+        cfs.cmd_CFS_TOOLCHANGE(FakeCmd({'SLOT': 'B'}))
+        cfs.cmd_CFS_TOOLCHANGE(FakeCmd({'SLOT': 'B'}))
+        self.assertEqual(cfs.order, ['M400', 'query', 'arm'] * 2)
+
+    def test_real_change_still_runs_in_full(self):
+        cfs = self.tracked(active=0x01)         # slot A loaded, change to B
+        cfs.cmd_CFS_TOOLCHANGE(FakeCmd({'SLOT': 'B'}))
+        self.assertEqual(cfs.order[:2], ['M400', 'query'])
+        self.assertNotIn('arm', cfs.order)
+        self.assertIn('SAVE_GCODE_STATE NAME=K2_CFS_TOOLCHANGE',
+                      cfs.order[2])
+        steps = [c[0] for c in cfs.calls if c[0] != 'fans']
+        self.assertEqual(steps, ['cut_start', 'unload', 'load', 'purge'])
+        self.assertIn(('unload', 'A'), cfs.calls)
+        self.assertEqual(cfs.active, 0x02)
+
+    def test_refused_change_does_not_wait(self):
+        cfs = make_cfs(state='paused')
+        with self.assertRaises(RuntimeError):
+            cfs.cmd_CFS_TOOLCHANGE(FakeCmd({'SLOT': 'B'}))
+        self.assertEqual(cfs.gcode.scripts, [])
+
+    def test_select_tool_waits_before_arming(self):
+        # T<n> after a START_PRINT with no TOOL=, through M8800-M8803
+        cfs = self.tracked(active=0x02)
+        cfs.fitted = True
+        cfs._select_tool(FakeCmd(), 'B')
+        self.assertEqual(cfs.order, ['M400', 'arm'])
+
+    def test_select_tool_without_a_cfs_does_nothing(self):
+        cfs = self.tracked(active=0)
+        cfs.fitted = False
+        cfs._select_tool(FakeCmd(), 'A')
+        self.assertEqual(cfs.order, [])
+
+
+class StartGcodeWaitTest(unittest.TestCase):
+    # The shipped start G-code gives the same M400 for firmware that does
+    # not wait yet
+    ROOT = pathlib.Path(__file__).parents[1]
+    T_LINE = 'T[initial_no_support_extruder]'
+
+    def test_orca_profiles(self):
+        for name in ('Creality K2 OpenKlipper.json',
+                     'Creality K2 Plus OpenKlipper.json'):
+            profile = json.loads((self.ROOT / 'orca' / name).read_text(
+                encoding='utf-8'))
+            lines = profile['machine_start_gcode'].splitlines()
+            self.assertTrue(lines[0].startswith('START_PRINT '), name)
+            self.assertEqual(lines[1:3], ['M400', self.T_LINE], name)
+
+    def test_hand_setup_docs(self):
+        install = (self.ROOT / 'docs' / 'INSTALL.md').read_text(
+            encoding='utf-8')
+        self.assertIn(['M400', self.T_LINE],
+                      self.pairs(install, '   '))
+        notes = (self.ROOT / 'config' / 'ORCA-K2-PROFILE.cfg').read_text(
+            encoding='utf-8')
+        self.assertIn(['M400', self.T_LINE],
+                      self.pairs(notes, '# '))
+
+    @staticmethod
+    def pairs(text, prefix):
+        # Each line with the one after it, less the block's indent
+        lines = [line[len(prefix):] if line.startswith(prefix) else line
+                 for line in text.splitlines()]
+        return [list(pair) for pair in zip(lines, lines[1:])]
 
 
 if __name__ == '__main__':
