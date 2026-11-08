@@ -37,6 +37,31 @@ class CoolWipe(unittest.TestCase):
                 body, r"if printer\.extruder\.can_extrude %\}\n\s+G1 E-3 ")
 
 
+class MeshAttempt(unittest.TestCase):
+    def test_waits_after_the_mesh_and_the_check(self):
+        for cfg in ("mainline_stage2.cfg", "mainline_stage2_k2plus.cfg"):
+            body = macro(cfg, "_MESH_ATTEMPT")
+            for cmd in ("BED_MESH_CALIBRATE", "BED_MESH_CHECK"):
+                self.assertRegex(
+                    body, cmd + r" [^\n]*\n(\s*#[^\n]*\n)*\s+M400\n")
+
+
+class NozzleScrub(unittest.TestCase):
+    def test_stays_down_until_cool_then_lifts(self):
+        for cfg in ("mainline_stage2.cfg", "mainline_stage2_k2plus.cfg"):
+            body = macro(cfg, "_NOZZLE_CLEAR_SCRUB")
+            self.assertRegex(
+                body, r"M400\n\s+M109 S\{cool\}\n\s+M106 S0\n[^\n]*\n"
+                      r"\s+G1 Z5 F300\n")
+
+    def test_print_start_scrubs_hot_and_presses_deeper(self):
+        for cfg in ("mainline_stage2.cfg", "mainline_stage2_k2plus.cfg"):
+            text = (ROOT / "config" / cfg).read_text()
+            self.assertNotIn("NOZZLE_CLEAR HOT=140", text)
+            self.assertIn("PRESS={params.PRESS|default(0.32)}", text)
+            self.assertNotIn("variable_scrub_strip: False", text)
+
+
 class CamRoute(unittest.TestCase):
     def test_only_video_reaches_go2rtc(self):
         text = (ROOT / "system-nginx.conf").read_text()

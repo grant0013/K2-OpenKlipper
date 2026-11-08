@@ -29,8 +29,9 @@ measurement and no ooze on the measured bed.
    and a strain-gauge tap at the bed centre. On the first print with the
    bottom reference, the tap landed 0.064 mm from the reference's
    prediction.
-7. **`NOZZLE_CLEAR`.** Probe the bed's rear strip and scrape the nozzle on it
-   at 140 °C, then go straight into the **adaptive mesh** (covering the
+7. **`NOZZLE_CLEAR`.** Tap for height left of the rear strip, scrape the
+   nozzle on the strip from 180 °C with the fans on, and let it cool to
+   140 °C pressed on the strip before lifting. Then go straight into the **adaptive mesh** (covering the
    prime tower too, see below) and `BED_MESH_CHECK`.
 8. Reheat over the chute and run the third 90 mm flush block
    (`_CREALITY_FLUSH`), then Creality's own prime line along the front edge
@@ -56,7 +57,7 @@ Set them in `printer-overrides.cfg` under `[gcode_macro START_PRINT]`.
   (and the cold-start soak) the head goes to the bed centre, then
   `NOZZLE_CLEAR METHOD=detect HOT=140 COOL=140` runs the full
   `PRTOUCH_SCRUB` (firm-press tab detection, slope-following scrub on
-  X155-165, repeated until the strip contact stops dropping; see
+  X160-170, repeated until the strip contact stops dropping; see
   [PRTOUCH.md](PRTOUCH.md)). Step 6 then taps Z with the scrubbed nozzle and
   step 7 goes straight to the mesh, so no second Z tap is needed.
   `scrub_until_clean` is ignored in this mode. The scrub taps use the Z from

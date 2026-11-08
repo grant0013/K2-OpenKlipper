@@ -29,6 +29,7 @@ START_GCODE = "\n".join([
     " TOOL=[initial_no_support_extruder]"
     " TOWER_X={wipe_tower_x[0]} TOWER_Y={wipe_tower_y[0]}"
     " TOWER_W={if enable_prime_tower}[prime_tower_width]{else}0{endif}",
+    "M400",
     "T[initial_no_support_extruder]",
     "M204 S2000",
     "M83",

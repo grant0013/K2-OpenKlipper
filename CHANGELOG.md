@@ -2,6 +2,60 @@
 
 ## Unreleased
 
+- **Printing by object now gets the full purge at a colour change.** Between
+  two slots of the same material the purge could be as short as 30 mm, which
+  relies on a prime tower or infill taking the rest. By object has neither,
+  so the next object's first layers blended (a grey to black PETG job at
+  flush multiplier 0.3). These files now purge at least the stock 160 mm,
+  and a flush multiplier below 1 is ignored. Painted prints are unchanged.
+- **The nozzle scrub follows Creality's own sequence and presses harder.**
+  Traced from the stock `prtouch_v3` code: hot strokes start at the stock
+  position and run 10 mm right, then fans on and cool strokes further right,
+  Y fixed, then the nozzle stays down on the strip until it reaches 140 C.
+  K2 X160-170 then X175-180, K2 Plus X185-195 then X200-205. `NOZZLE_CLEAR`
+  now scrubs from 180 C at print start (it was 140 C) and presses 0.32 mm
+  below its height tap (`PRESS=`, was 0.1), which cleaned the tip on one K2
+  where 0.1 did not. Stock presses 0.6. Print start takes about a minute
+  longer. The K2 Plus now scrubs by default too, untested on that printer
+  (`variable_scrub_strip: False` turns it off).
+- **The print-start mesh waits for the toolhead around `BED_MESH_CHECK`**
+  (GitHub issue #4, mylife4aiurr). With `M400` after `BED_MESH_CALIBRATE` and
+  after `BED_MESH_CHECK`, a 21x21 mesh at `mesh_pps: 2, 2` finished without
+  the `Stepper too far in past` shutdown it had before. That is one run on
+  one K2 Plus. `mesh_pps: 1, 1` remains the advice for dense meshes.
+- **K2 Plus guide: set the measured `position_endstop` even when it is close
+  to 349.5.** The guide said to change it only above 1 mm; 0.6 mm was enough
+  to fail the nozzle tap on one printer (GitHub issue #3).
+- **The stepper threads use both of the K2's cores.** klippy is pinned to
+  CPU1, so its one step generation thread per stepper queued up on one core
+  while Python waited for them. New `[hark_cpu]` frees those threads while
+  Python and the serial threads stay on CPU1, which cut a batch run on the
+  T113 by 12%. It does nothing on a host PC.
+- **`[printer] buffer_headroom` (experimental, off by default).** Keeps extra
+  seconds of motion queued. It is aimed at the host stalls in GitHub issues
+  #4 and #5, but stall tests on a host PC showed no fewer shutdowns, so no
+  config turns it on. Pause and cancel respond that much later.
+- **T0-T3 wait for the prime line before touching the CFS** (GitHub issue #5,
+  Promotheux: every CFS print on a fresh install ended in `Stepper too far
+  in past`). The `T<n>` line in the slicer's start G-code runs right after
+  `START_PRINT`, with the prime line still queued, and the CFS work behind
+  it ran while those moves were executing. T0-T3 now wait for the moves
+  first, so a file sliced with an older profile is covered, and the Orca
+  profiles, `docs/INSTALL.md` and `config/ORCA-K2-PROFILE.cfg` add `M400`
+  before the `T` line. Re-import the profile when convenient; it is not
+  needed for this fix.
+- **Low colour changes no longer pause on the bed mesh.** A change below
+  about Z 2.5 lifted to exactly `purge_min_z`, and a negative mesh offset at
+  the chute left it a hair short, so the load was refused and the print
+  paused (`CFS move requires Z >= 4.500 (current 4.496)`). The change now
+  measures the height at the cut position and again before the load, and
+  lifts by what is missing.
+- **Bed mesh note for a high `probe_count`** (GitHub issue #4, nur00):
+  `config/printer-overrides.cfg.example` now says to use `mesh_pps: 1, 1`
+  above about 13x13. 19x19 and 21x21 full-bed meshes at `mesh_pps: 2, 2` shut
+  a K2 Plus down as the mesh finished at a print start; 21x21 at `1, 1`
+  printed. The stall itself is not fixed yet.
+
 - **The chamber camera recovers from a USB drop by itself.** A USB error made
   the camera drop out and come back, Creality's `cam_sub_app` took it, and
   `harkcam` served its last frame for 21 hours as if it were live, blinding

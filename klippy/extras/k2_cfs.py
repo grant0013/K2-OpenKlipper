@@ -180,7 +180,8 @@ def read_flush_metadata(path, limit=1024 * 1024):
 
 def parse_flush_metadata(text):
     fields = dict(re.findall(
-        r"^;[ \t]*(flush_volumes_matrix|flush_multiplier)[ \t]*=[ \t]*"
+        r"^;[ \t]*(flush_volumes_matrix|flush_multiplier|print_sequence)"
+        r"[ \t]*=[ \t]*"
         r"([^\r\n]*)", text, re.M))
     try:
         volumes = [float(v) for v in
@@ -198,7 +199,8 @@ def parse_flush_metadata(text):
         multiplier = 1.
     if not multiplier > 0.:
         multiplier = 1.
-    return {'matrix': matrix, 'multiplier': multiplier}
+    by_object = fields.get('print_sequence', '').strip().lower() == 'by object'
+    return {'matrix': matrix, 'multiplier': multiplier, 'by_object': by_object}
 
 
 # Creality RFID record layout: (field, offset, length) in the 40-character
@@ -1490,6 +1492,9 @@ class K2CFS:
                 raise gcmd.error(
                     "No CFS on this printer: only T0 (the rear spool) exists")
             return
+        # Same reason as cmd_CFS_TOOLCHANGE: this is the T<n> after a
+        # START_PRINT with no TOOL=, and outside a print from a file
+        self.gcode.run_script_from_command("M400")
         self._start_feed(
             gcmd, slot, require_confirm=False, require_selected=True)
         gcmd.respond_info(
@@ -2187,6 +2192,21 @@ class K2CFS:
         status = self.printer.lookup_object('gcode_move').get_status(0.)
         origin_z = status['position'][2] - status['gcode_position'][2]
         return raw_z - origin_z + 0.001
+
+    def _raise_to_gate(self):
+        # purge_min_z is checked on the raw toolhead Z, which carries the bed
+        # mesh offset at this XY. A G-code Z can't allow for that in advance
+        # and the offset differs between the cut and the purge positions, so
+        # measure here: -0.0046 mm at the chute paused two colour changes at
+        # 4.496 of 4.500 (11-07).
+        short = (self.purge_min_z
+                 - self.printer.lookup_object('toolhead').get_position()[2])
+        if short <= 0.:
+            return
+        status = self.printer.lookup_object('gcode_move').get_status(0.)
+        self.gcode.run_script_from_command(
+            "G90\nG1 Z%.3f F600\nM400"
+            % (status['gcode_position'][2] + short + 0.001))
 
     def _flex_filament_path(self, gcmd, message):
         # Jacob10383's filament_retry_motion: sweep the toolhead across the
@@ -2990,7 +3010,8 @@ class K2CFS:
         # CFS_PRINT_START, so the standalone cut/load/purge gates still apply
         # everywhere else.
         # PURGE=<mm>: a shorter chute purge for a colour change between
-        # like materials, with the prime tower doing the rest of the flush.
+        # like materials, with the prime tower doing the rest of the flush
+        # (a file printed by object has none, so it gets the full purge).
         # PURGE_FALLBACK=<mm>: the same, used only when
         # toolchange_purge_from_file finds nothing in the print file.
         purge_length = gcmd.get_float('PURGE', None, minval=30., maxval=360.)
@@ -3013,6 +3034,13 @@ class K2CFS:
         if self.print_start_transaction:
             raise gcmd.error("A CFS transaction is already active")
 
+        # Finish the queued moves before touching the box. At a print start
+        # T<n> runs right after START_PRINT with the prime line still queued,
+        # then again for Orca's own first tool selection, and on a printer
+        # running Klipper on its own board that shut the MCUs down ("Stepper
+        # too far in past", GitHub issue #5). Harmless for a real change,
+        # which has to stop here anyway.
+        self.gcode.run_script_from_command("M400")
         mask = self.SLOT_MASKS[slot]
         active_mask = self._path_mask(self._measuring())
         nozzle_loaded = self._nozzle_has_filament() is True
@@ -3043,6 +3071,12 @@ class K2CFS:
                 gcmd.get_int('TOOL', None, minval=0, maxval=3))
         if purge_length is None and full_length is None:
             purge_length = purge_fallback
+        if purge_length is not None and self._file_by_object():
+            full_length = self._by_object_full(purge_length)
+            purge_length = None
+            gcmd.respond_info(
+                "CFS tool change: printing by object, so nothing else clears"
+                " the old colour; purging %.0f mm" % full_length)
 
         toolhead = self.printer.lookup_object('toolhead')
         start = toolhead.get_position()
@@ -3086,11 +3120,13 @@ class K2CFS:
         try:
             if unload:
                 self._move_to_cut_start()
+                self._raise_to_gate()
                 unload_gcmd = self.gcode.create_gcode_command(
                     "CFS_CUT_UNLOAD", "",
                     {"SLOT": ctx['old_slot'], "CONFIRM": "1"})
                 self.cmd_CFS_CUT_UNLOAD(unload_gcmd)
             else:
+                self._raise_to_gate()
                 self._ensure_purge_position(
                     self.gcode.create_gcode_command(
                         "CFS_PURGE_POSITION", "", {"CONFIRM": "1"}))
@@ -3109,6 +3145,7 @@ class K2CFS:
                 load_params.update(LENGTH="%.1f" % full_length)
             load_gcmd = self.gcode.create_gcode_command(
                 "CFS_LOAD", "", load_params)
+            self._raise_to_gate()
             if load:
                 self._load_with_retries(load_gcmd)
             timings.append(reactor.monotonic())
@@ -3240,6 +3277,13 @@ class K2CFS:
             return None
         return self.flush_cache[1]
 
+    def _file_by_object(self):
+        meta = self._flush_matrix()
+        return bool(meta and meta.get('by_object'))
+
+    def _by_object_full(self, length):
+        return min(max(length, self.purge_extrude_length, 140.), 360.)
+
     def _file_purge(self, gcmd, old_slot, slot, old_tool=None, tool=None):
         # Jacob10383's _purge_plan: flush volume (mm^3) for this change from
         # the file's matrix over the filament area. The matrix is indexed by
@@ -3248,7 +3292,10 @@ class K2CFS:
         # Returns (short purge, full purge): between like materials it is a
         # SHORT purge clamped to 30-360 mm (the load's limit; Orca asks
         # 309 mm for black to white PLA); otherwise the stock purge, made
-        # longer when the file asks for more.
+        # longer when the file asks for more. Printing by object also gets
+        # the full purge, from the matrix without a multiplier below 1 (that
+        # relies on infill or a tower taking the rest): the next object's
+        # first layers would show whatever is left (HT-P-2026-0455, 11-08).
         meta = self._flush_matrix()
         matrix = meta and meta['matrix']
         src, dst = ord(old_slot) - ord('A'), ord(slot) - ord('A')
@@ -3260,17 +3307,20 @@ class K2CFS:
             return None, None
         extruder = self.printer.lookup_object('extruder')
         area = getattr(extruder, 'filament_area', math.pi * .875 ** 2)
-        volume = matrix[src][dst] * meta['multiplier']
+        by_object = meta.get('by_object')
+        multiplier = max(meta['multiplier'], 1.) if by_object \
+            else meta['multiplier']
+        volume = matrix[src][dst] * multiplier
         length = volume / area
         slots = self.printer.lookup_object('hark_cfs_slots', None)
         records = slots.get_status(0.)['slots'] if slots is not None else {}
         old_type = (records.get(old_slot, {}).get('type') or '').upper()
         new_type = (records.get(slot, {}).get('type') or '').upper()
-        if old_type and old_type == new_type:
+        if old_type and old_type == new_type and not by_object:
             short, full = min(max(length, 30.), 360.), None
         else:
             short = None
-            full = min(max(length, self.purge_extrude_length, 140.), 360.)
+            full = self._by_object_full(length)
         gcmd.respond_info(
             "CFS tool change purge from the file's flush matrix: T%d>T%d "
             "%.0f mm^3 = %.0f mm, purging %.0f mm"

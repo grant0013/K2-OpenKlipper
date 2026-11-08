@@ -36,9 +36,9 @@ The config is generated from the K2 one by `tools/k2plus/make_k2plus_cfg.py`
   measured 349.85 / 350.10 and Creality's config puts the bottom at 350, less
   a little (too low is safe: the bed stops short and the nozzle tap fails
   instead of touching). Step 6 checks it on your printer.
-- **Rear cleaning strip scrub is off** (`scrub_strip: False`): the strip
-  positions were confirmed on the tested printer, but the scrub itself has
-  not been run on a K2 Plus. Step 7 is where to try it.
+- **Rear cleaning strip scrub is on, and has not been run on a K2 Plus.**
+  The positions and depth come from Creality's code and a K2. Step 7 checks
+  the positions before your first print, and please report what it does.
 - Not ported yet: belt tension tool, Creality's per-motor gain change (stock
   runs one X/Y motor at a lower position gain while printing; this config
   leaves the motor firmware default, which is what the K2 uses).
@@ -126,12 +126,16 @@ Now check the bottom switches:
     KZ_ALIGN_MEASURE CONFIRM=1
 
 The bed goes down slowly until each switch triggers and the console prints
-where, with a suggested `position_endstop`. Send the output. Only if the
-suggestion is more than 1 mm away from 349.5, put it in
-**printer-overrides.cfg** (Mainsail > Machine), save and restart:
+where, with a suggested `position_endstop`. Send the output. If the
+suggestion is not 349.5, put it in **printer-overrides.cfg** (Mainsail >
+Machine), save and restart:
 
     [k2_z_align]
     position_endstop: 351.20
+
+A small difference can matter. On one K2 Plus, 350.10 instead of 349.5 was
+enough for the nozzle tap to fail with `No trigger on probe after full
+movement`, and setting the measured value fixed it.
 
 Then check the full homing sequence that every print starts with:
 
@@ -143,21 +147,24 @@ Send the output of all three.
 
 ## Step 7: the rear cleaning strip
 
-Stock measures the strip at X150 Y355 and scrubs the nozzle on it at X185
-Y355.5 (Creality's built-in default). After `G28`, look at both from close
-to the bed (at Z10 the nozzle seems further back than it is):
+Stock taps for height around X150 Y355, left of the strip, so the nozzle
+being off the strip there is expected. It then scrubs from X185 to X205 at
+Y355.5 (Creality's built-in default). After `G28`, look at both ends of the
+scrub from close to the bed (at Z10 the nozzle seems further back than it
+is):
 
     G90
     G1 Z2 F600
-    G1 X150 Y355 F3000
     G1 X185 Y355.5 F3000
+    G1 X205 Y355.5 F3000
     G1 Z10 F600
 
-Send a photo at each. Once the nozzle is over the strip at both, the scrub
-goes on with, in printer-overrides.cfg:
+Send a photo at each. Every print start scrubs on the strip, so if the
+nozzle isn't over the strip at both, turn it off in printer-overrides.cfg
+until that's sorted, and tell me:
 
     [gcode_macro START_PRINT]
-    variable_scrub_strip: True
+    variable_scrub_strip: False
 
 ## Step 8: mesh, then a first print
 

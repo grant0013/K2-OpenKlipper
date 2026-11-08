@@ -26,6 +26,16 @@
 #   variable_mesh_max_deviation: 0.85
 #   variable_mesh_max_slope: 0.009
 #
+# A denser bed mesh: with a probe_count above about 13, 13 use mesh_pps 1, 1.
+# The default 2, 2 adds little at that spacing and costs a lot of work on the
+# printer's own board: one K2 Plus shut down with "Stepper too far in past" as
+# a full-bed 19x19 or 21x21 mesh finished at the start of a print, and printed
+# fine at 21x21 with this:
+#
+#   [bed_mesh]
+#   probe_count: 21, 21
+#   mesh_pps: 1, 1
+#
 # Idle settings. Chamber light off this many seconds after a print ends or
 # is cancelled (0 = stays on):
 #

@@ -94,7 +94,7 @@ first.
    `scrub_detect_deflection` (0.035 mm) the strip gives way like a flexible
    tab and the scrub presses `scrub_tab_depth` (0.15 mm) below the measured
    contact; otherwise `scrub_no_tab_depth` (0.05 mm).
-4. Tap both line ends (`scrub_x_start` 155, `scrub_x_end` 165). Ends more than
+4. Tap both line ends (`scrub_x_start` 160, `scrub_x_end` 170). Ends more than
    0.5 mm apart, or a centre more than 0.5 mm from the ends, stop the scrub.
 5. Run start -> centre -> end -> centre -> start at `scrub_speed` (10 mm/s),
    each point at its measured contact minus the depth, so the moves follow
@@ -117,8 +117,8 @@ start carries on to its Z tap; it only raises if the printer shut down or an
 axis lost its home. A full run is about 10-14 taps, roughly a minute.
 
 The line defaults are the strip coordinates the stock-style `NOZZLE_CLEAR`
-already scrubs: X155-165 around stock `prth_clr_pose` X160 (the smooth right
-tab) and its Y264.5-266.5 zigzag around stock Y265.5. The K2 Plus values
+already scrubs: X160-170 from stock `prth_clr_pose` X160 (the smooth right
+tab), with Y264.5-266.5 around stock Y265.5. The K2 Plus values
 (X173-223, Y353-356) are for its bigger bed. Untested on the K2: the
 deflection threshold and depths are the K2 Plus values.
 
