@@ -138,6 +138,46 @@ found the same frames independently on a K1.
   after the other. Both are `00 a1 01 00 <uniid>`, and the driver here still
   reads only the first.
 
+## Stock K1 filament change (Lamar1007, K1, not checked on a K2)
+
+Read from Creality's K1 `box_wrapper` log, 116 real colour changes with box 2
+at `0x02` on CFS 1.5.2/1.5.3. Full write-up:
+[PROTOCOL.md, "Filament change (stock K1 sequence)"](https://github.com/Lamar1007/CFSTool/blob/main/PROTOCOL.md).
+One change, slot C to slot D, about 70 s:
+
+| Step | Frames | Notes |
+| --- | --- | --- |
+| Cut | none | printer only |
+| Unload C | `ff 04 00 01` | no slot active |
+| | `ff 11 04 00` | prepare, about 1 s, then the extruder retracts 20 mm |
+| | `ff 11 04 01` | the box winds it back; the reply comes when done, about 30 s |
+| Load D | `ff 08 00` to `0f` | |
+| | `ff 10 08 00 00` | stage 0, reply after about 10 s |
+| | `ff 10 08 04 00` | |
+| | `ff 10 08 05 00` | polled every 2 s until the printer sees filament at the head; the reply is the measuring wheel |
+| | `ff 10 08 06 00` | stop. Creality's log calls this "stage7", on the bus it is stage 06 |
+| Finish | `ff 05` | buffer, `00` = middle |
+| | `ff 04 08 00` | slot D printing |
+| Purge | none | printer only, flush matrix x 0.7 |
+
+- The measuring wheel (`0x0e` and `0x10` stage 5) is a big-endian float, for
+  example `c5 e9 9b 73` = -7475.43, the same value `box_wrapper` logs. The
+  unit is not confirmed.
+- In the `0x0a` box state, byte 1 is the temperature in C and byte 2 the
+  humidity in %.
+- The loader-to-application broadcast `f7 ff 04 00 0b 01 c8` only affects a
+  box in the loader. With two boxes on the bus, the box in the loader
+  answered `0xa1` from its application 3 s later and the other was untouched.
+  It is Creality's own `CMD_LOADER_TO_APP`, sent about once a second (every
+  10 s while printing) when a reply marks a box as mode 1. Whether it also
+  starts a freshly flashed application is still open.
+- Creality's K1 address scheme: type 1 box `0x01`-`0x04` (type broadcast
+  `0xfe`), type 2 closed-loop motor `0x81`-`0x84` (`0xfd`), type 3
+  belt-tension motor `0x91`/`0x92` (`0xfc`), `0xff` everything. UUIDs are
+  saved in `printer.cfg` (`[auto_addr] mb_addr_table_uniids`) and re-assigned
+  with `0xa0` at start-up without an enumerate, so box N stays the same box.
+  `0xa3` is `CMD_GET_ADDR_TABLE`.
+
 ## Bootloader and flashing (CFSTool, K1; not used here)
 
 This driver never flashes the CFS. CFSTool (MIT) flashes it on K1 printers,

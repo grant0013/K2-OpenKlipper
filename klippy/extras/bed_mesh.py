@@ -652,6 +652,10 @@ class BedMeshCalibrate:
             raise gcmd.error(str(e))
         self.probe_mgr.start_probe(gcmd)
     def probe_finalize(self, positions):
+        # Building a dense mesh holds the reactor for up to a second on the
+        # K2's board. Let the last lift finish first, or its steps aren't
+        # generated in time: "Stepper too far in past" (GitHub issue #4).
+        self.printer.lookup_object('toolhead').wait_moves()
         z_offset = 0.
         positions = [[round(p.bed_x, 2), round(p.bed_y, 2), p.bed_z]
                      for p in positions]
