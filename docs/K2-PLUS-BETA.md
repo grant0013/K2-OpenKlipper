@@ -126,12 +126,16 @@ Now check the bottom switches:
     KZ_ALIGN_MEASURE CONFIRM=1
 
 The bed goes down slowly until each switch triggers and the console prints
-where, with a suggested `position_endstop`. Send the output. Only if the
-suggestion is more than 1 mm away from 349.5, put it in
-**printer-overrides.cfg** (Mainsail > Machine), save and restart:
+where, with a suggested `position_endstop`. Send the output. If the
+suggestion is not 349.5, put it in **printer-overrides.cfg** (Mainsail >
+Machine), save and restart:
 
     [k2_z_align]
     position_endstop: 351.20
+
+A small difference can matter. On one K2 Plus, 350.10 instead of 349.5 was
+enough for the nozzle tap to fail with `No trigger on probe after full
+movement`, and setting the measured value fixed it.
 
 Then check the full homing sequence that every print starts with:
 

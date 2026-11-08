@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **The print-start mesh waits for the toolhead around `BED_MESH_CHECK`**
+  (GitHub issue #4, mylife4aiurr). With `M400` after `BED_MESH_CALIBRATE` and
+  after `BED_MESH_CHECK`, a 21x21 mesh at `mesh_pps: 2, 2` finished without
+  the `Stepper too far in past` shutdown it had before. That is one run on
+  one K2 Plus. `mesh_pps: 1, 1` remains the advice for dense meshes.
+- **K2 Plus guide: set the measured `position_endstop` even when it is close
+  to 349.5.** The guide said to change it only above 1 mm; 0.6 mm was enough
+  to fail the nozzle tap on one printer (GitHub issue #3).
 - **The stepper threads use both of the K2's cores.** klippy is pinned to
   CPU1, so its one step generation thread per stepper queued up on one core
   while Python waited for them. New `[hark_cpu]` frees those threads while

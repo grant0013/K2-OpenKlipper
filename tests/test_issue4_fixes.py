@@ -37,6 +37,15 @@ class CoolWipe(unittest.TestCase):
                 body, r"if printer\.extruder\.can_extrude %\}\n\s+G1 E-3 ")
 
 
+class MeshAttempt(unittest.TestCase):
+    def test_waits_after_the_mesh_and_the_check(self):
+        for cfg in ("mainline_stage2.cfg", "mainline_stage2_k2plus.cfg"):
+            body = macro(cfg, "_MESH_ATTEMPT")
+            for cmd in ("BED_MESH_CALIBRATE", "BED_MESH_CHECK"):
+                self.assertRegex(
+                    body, cmd + r" [^\n]*\n(\s*#[^\n]*\n)*\s+M400\n")
+
+
 class CamRoute(unittest.TestCase):
     def test_only_video_reaches_go2rtc(self):
         text = (ROOT / "system-nginx.conf").read_text()
