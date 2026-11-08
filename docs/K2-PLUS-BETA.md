@@ -147,14 +147,16 @@ Send the output of all three.
 
 ## Step 7: the rear cleaning strip
 
-Stock measures the strip at X150 Y355 and scrubs the nozzle on it at X185
-Y355.5 (Creality's built-in default). After `G28`, look at both from close
-to the bed (at Z10 the nozzle seems further back than it is):
+Stock taps for height around X150 Y355, left of the strip, so the nozzle
+being off the strip there is expected. It then scrubs from X185 to X205 at
+Y355.5 (Creality's built-in default). After `G28`, look at both ends of the
+scrub from close to the bed (at Z10 the nozzle seems further back than it
+is):
 
     G90
     G1 Z2 F600
-    G1 X150 Y355 F3000
     G1 X185 Y355.5 F3000
+    G1 X205 Y355.5 F3000
     G1 Z10 F600
 
 Send a photo at each. Once the nozzle is over the strip at both, the scrub

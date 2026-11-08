@@ -56,7 +56,7 @@ Set them in `printer-overrides.cfg` under `[gcode_macro START_PRINT]`.
   (and the cold-start soak) the head goes to the bed centre, then
   `NOZZLE_CLEAR METHOD=detect HOT=140 COOL=140` runs the full
   `PRTOUCH_SCRUB` (firm-press tab detection, slope-following scrub on
-  X155-165, repeated until the strip contact stops dropping; see
+  X160-170, repeated until the strip contact stops dropping; see
   [PRTOUCH.md](PRTOUCH.md)). Step 6 then taps Z with the scrubbed nozzle and
   step 7 goes straight to the mesh, so no second Z tap is needed.
   `scrub_until_clean` is ignored in this mode. The scrub taps use the Z from

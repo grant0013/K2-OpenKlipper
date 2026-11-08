@@ -219,14 +219,14 @@ class PRTouchMainlineProbe:
         )
         # PRTOUCH_SCRUB (K2 Plus firmware method, opt-in through NOZZLE_CLEAR
         # METHOD=detect). The line defaults are the strip coordinates the
-        # stock-style scrub already uses: X155-165 (around stock
-        # prth_clr_pose X160, the smooth right tab) and its Y264.5-266.5
-        # zigzag around stock Y265.5. The K2 Plus values (X173-223,
+        # stock-style scrub already uses: X160-170 (from stock
+        # prth_clr_pose X160, the smooth right tab) and Y264.5-266.5
+        # around stock Y265.5. The K2 Plus values (X173-223,
         # Y353-356) are for its bigger bed.
         self.scrub_x_start = config.getfloat(
-            "scrub_x_start", 155., minval=0., maxval=360.)
+            "scrub_x_start", 160., minval=0., maxval=360.)
         self.scrub_x_end = config.getfloat(
-            "scrub_x_end", 165., minval=0., maxval=360.)
+            "scrub_x_end", 170., minval=0., maxval=360.)
         self.scrub_y_min = config.getfloat(
             "scrub_y_min", 264.5, minval=0., maxval=400.)
         self.scrub_y_max = config.getfloat(

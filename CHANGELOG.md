@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **The nozzle scrub follows Creality's own X path.** Traced from the stock
+  `prtouch_v3` code: hot strokes start at the stock position and run 10 mm
+  right, cool strokes run further right, and Y stays fixed. K2 X160-170 then
+  X175-180, K2 Plus X185-195 then X200-205. The old path was centred on the
+  stock position. Depth is unchanged: stock scrubs 0.6 mm below its height
+  taps, ours 0.1 mm, and the deeper value has not been tested.
 - **The print-start mesh waits for the toolhead around `BED_MESH_CHECK`**
   (GitHub issue #4, mylife4aiurr). With `M400` after `BED_MESH_CALIBRATE` and
   after `BED_MESH_CHECK`, a 21x21 mesh at `mesh_pps: 2, 2` finished without

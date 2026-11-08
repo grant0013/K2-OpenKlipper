@@ -340,38 +340,54 @@ timeout: 90
     ("strip probe point (clean check)",
      "        G90\n        G1 X85 Y265.5 F6000\n",
      "        G90\n        G1 X150 Y355 F6000\n"),
-    ("strip scrub: +-5 mm round stock's prth_clr_pose 185,355.5 (built into\n"
+    ("strip scrub: stock path from prth_clr_pose 185,355.5 (built into\n"
      "Creality's prtouch_v3 module, which the K2 Plus config does not\n"
-     "override; 150,355 is only where it measures the strip). Only runs once\n"
+     "override; 150,355 is only where it taps for height). Only runs once\n"
      "scrub_strip is turned on (below)",
-     """    G1 X165 Y265.5 F6000
+     """    # Stock path, traced from Creality's prtouch_v3: hot strokes start at
+    # prth_clr_pose 160,265.5,10 (the smooth right tab) and run right, cool strokes
+    # are further right, Y stays fixed
+    G1 X160 Y265.5 F6000
     G1 Z{z + 1} F600
     G1 Z{z} F300
     {% for i in range(20) %}
         {% if i == 6 %}
             M104 S{params.COOL|float}
         {% endif %}
-        G1 X155 Y{264.5 + i % 3} F12000
-        G1 X165 Y{264.5 + (i + 1) % 3} F12000
-""", """    G1 X190 Y355.5 F6000
+        {% if i < 6 %}
+            G1 X170 F12000
+            G1 X160 F12000
+        {% else %}
+            G1 X180 F12000
+            G1 X175 F12000
+        {% endif %}
+""", """    # Stock path, traced from Creality's prtouch_v3: hot strokes start at
+    # prth_clr_pose 185,355.5,10 (the smooth right tab) and run right, cool strokes
+    # are further right, Y stays fixed
+    G1 X185 Y355.5 F6000
     G1 Z{z + 1} F600
     G1 Z{z} F300
     {% for i in range(20) %}
         {% if i == 6 %}
             M104 S{params.COOL|float}
         {% endif %}
-        G1 X180 Y{354.5 + i % 3} F12000
-        G1 X190 Y{354.5 + (i + 1) % 3} F12000
+        {% if i < 6 %}
+            G1 X195 F12000
+            G1 X185 F12000
+        {% else %}
+            G1 X205 F12000
+            G1 X200 F12000
+        {% endif %}
 """),
     ("detect scrub line: stock prth_clr_pose 185,355.5, not the K2's strip\n"
      "(Y265 is the middle of the K2 Plus bed)",
-     """#scrub_x_start: 155
-#scrub_x_end: 165
+     """#scrub_x_start: 160
+#scrub_x_end: 170
 #scrub_y_min: 264.5
 #scrub_y_max: 266.5
 """, """# K2 Plus: stock prth_clr_pose 185,355.5 (the K2 defaults are mid-bed here)
-scrub_x_start: 180
-scrub_x_end: 190
+scrub_x_start: 185
+scrub_x_end: 195
 scrub_y_min: 354.5
 scrub_y_max: 356.5
 """),
@@ -613,7 +629,11 @@ def main():
     out = apply(text)
     check = ('position_max: 262', 'gear_ratio', 'tmc2208 stepper_z',
              'Y261', 'X205', 'Y265.5', 'X130 Y125')
-    left = [c for c in check if c in out]
+    # X205 is a K2 park position, but also the end of the K2 Plus scrub
+    start = out.index('[gcode_macro _NOZZLE_CLEAR_SCRUB]')
+    end = out.index('[gcode_macro _HEAT_SOAK]', start)
+    checked = out[:start] + out[end:]
+    left = [c for c in check if c in checked]
     if left:
         sys.exit("make_k2plus_cfg: K2 values left in the output: %s" % left)
     with open(DST, 'w', encoding='utf-8', newline='\n') as f:
