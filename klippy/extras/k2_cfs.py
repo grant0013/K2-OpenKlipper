@@ -180,7 +180,8 @@ def read_flush_metadata(path, limit=1024 * 1024):
 
 def parse_flush_metadata(text):
     fields = dict(re.findall(
-        r"^;[ \t]*(flush_volumes_matrix|flush_multiplier)[ \t]*=[ \t]*"
+        r"^;[ \t]*(flush_volumes_matrix|flush_multiplier|print_sequence)"
+        r"[ \t]*=[ \t]*"
         r"([^\r\n]*)", text, re.M))
     try:
         volumes = [float(v) for v in
@@ -198,7 +199,8 @@ def parse_flush_metadata(text):
         multiplier = 1.
     if not multiplier > 0.:
         multiplier = 1.
-    return {'matrix': matrix, 'multiplier': multiplier}
+    by_object = fields.get('print_sequence', '').strip().lower() == 'by object'
+    return {'matrix': matrix, 'multiplier': multiplier, 'by_object': by_object}
 
 
 # Creality RFID record layout: (field, offset, length) in the 40-character
@@ -3008,7 +3010,8 @@ class K2CFS:
         # CFS_PRINT_START, so the standalone cut/load/purge gates still apply
         # everywhere else.
         # PURGE=<mm>: a shorter chute purge for a colour change between
-        # like materials, with the prime tower doing the rest of the flush.
+        # like materials, with the prime tower doing the rest of the flush
+        # (a file printed by object has none, so it gets the full purge).
         # PURGE_FALLBACK=<mm>: the same, used only when
         # toolchange_purge_from_file finds nothing in the print file.
         purge_length = gcmd.get_float('PURGE', None, minval=30., maxval=360.)
@@ -3068,6 +3071,12 @@ class K2CFS:
                 gcmd.get_int('TOOL', None, minval=0, maxval=3))
         if purge_length is None and full_length is None:
             purge_length = purge_fallback
+        if purge_length is not None and self._file_by_object():
+            full_length = self._by_object_full(purge_length)
+            purge_length = None
+            gcmd.respond_info(
+                "CFS tool change: printing by object, so nothing else clears"
+                " the old colour; purging %.0f mm" % full_length)
 
         toolhead = self.printer.lookup_object('toolhead')
         start = toolhead.get_position()
@@ -3268,6 +3277,13 @@ class K2CFS:
             return None
         return self.flush_cache[1]
 
+    def _file_by_object(self):
+        meta = self._flush_matrix()
+        return bool(meta and meta.get('by_object'))
+
+    def _by_object_full(self, length):
+        return min(max(length, self.purge_extrude_length, 140.), 360.)
+
     def _file_purge(self, gcmd, old_slot, slot, old_tool=None, tool=None):
         # Jacob10383's _purge_plan: flush volume (mm^3) for this change from
         # the file's matrix over the filament area. The matrix is indexed by
@@ -3276,7 +3292,10 @@ class K2CFS:
         # Returns (short purge, full purge): between like materials it is a
         # SHORT purge clamped to 30-360 mm (the load's limit; Orca asks
         # 309 mm for black to white PLA); otherwise the stock purge, made
-        # longer when the file asks for more.
+        # longer when the file asks for more. Printing by object also gets
+        # the full purge, from the matrix without a multiplier below 1 (that
+        # relies on infill or a tower taking the rest): the next object's
+        # first layers would show whatever is left (HT-P-2026-0455, 11-08).
         meta = self._flush_matrix()
         matrix = meta and meta['matrix']
         src, dst = ord(old_slot) - ord('A'), ord(slot) - ord('A')
@@ -3288,17 +3307,20 @@ class K2CFS:
             return None, None
         extruder = self.printer.lookup_object('extruder')
         area = getattr(extruder, 'filament_area', math.pi * .875 ** 2)
-        volume = matrix[src][dst] * meta['multiplier']
+        by_object = meta.get('by_object')
+        multiplier = max(meta['multiplier'], 1.) if by_object \
+            else meta['multiplier']
+        volume = matrix[src][dst] * multiplier
         length = volume / area
         slots = self.printer.lookup_object('hark_cfs_slots', None)
         records = slots.get_status(0.)['slots'] if slots is not None else {}
         old_type = (records.get(old_slot, {}).get('type') or '').upper()
         new_type = (records.get(slot, {}).get('type') or '').upper()
-        if old_type and old_type == new_type:
+        if old_type and old_type == new_type and not by_object:
             short, full = min(max(length, 30.), 360.), None
         else:
             short = None
-            full = min(max(length, self.purge_extrude_length, 140.), 360.)
+            full = self._by_object_full(length)
         gcmd.respond_info(
             "CFS tool change purge from the file's flush matrix: T%d>T%d "
             "%.0f mm^3 = %.0f mm, purging %.0f mm"

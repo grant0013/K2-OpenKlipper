@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Printing by object now gets the full purge at a colour change.** Between
+  two slots of the same material the purge could be as short as 30 mm, which
+  relies on a prime tower or infill taking the rest. By object has neither,
+  so the next object's first layers blended (a grey to black PETG job at
+  flush multiplier 0.3). These files now purge at least the stock 160 mm,
+  and a flush multiplier below 1 is ignored. Painted prints are unchanged.
 - **The nozzle scrub follows Creality's own X path.** Traced from the stock
   `prtouch_v3` code: hot strokes start at the stock position and run 10 mm
   right, cool strokes run further right, and Y stays fixed. K2 X160-170 then

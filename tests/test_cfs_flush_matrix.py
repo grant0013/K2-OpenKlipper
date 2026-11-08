@@ -58,6 +58,53 @@ def plan(old, new):
     return cfs._file_purge(Gcmd(), old, new)
 
 
+# HT-P-2026-0455 (11-08): grey to black PETG, by object, flush x0.3. It purged
+# 30 mm, and the next object's first layers blended.
+BY_OBJECT_TAIL = """G1 X10
+; flush_multiplier = 0.3
+; flush_volumes_matrix = 0,171,106,102,72,0,126,158,210,63,0,149,147,73,87,0
+; print_sequence = by object
+"""
+
+
+def by_object_cfs(tail=BY_OBJECT_TAIL):
+    with tempfile.NamedTemporaryFile('w', suffix='.gcode',
+                                     delete=False) as f:
+        f.write(tail)
+    cfs = cfs_mod.K2CFS.__new__(cfs_mod.K2CFS)
+    cfs.printer = FakePrinter(f.name, {'B': 'PETG', 'D': 'PETG'})
+    cfs.flush_cache = None
+    cfs.purge_extrude_length = 140.
+    return cfs
+
+
+class ByObjectPurgeTest(unittest.TestCase):
+    def test_same_material_gets_the_full_purge(self):
+        short, full = by_object_cfs()._file_purge(Gcmd(), 'D', 'B')
+        self.assertIsNone(short)
+        self.assertEqual(full, 140.)
+
+    def test_a_low_multiplier_is_ignored(self):
+        tail = BY_OBJECT_TAIL.replace(
+            "0,171,106,102,72,0,126,158,210,63,0,149,147,73,87,0",
+            "0,0,0,0,0,0,0,0,0,0,0,0,0,743,0,0")
+        short, full = by_object_cfs(tail)._file_purge(Gcmd(), 'D', 'B')
+        self.assertIsNone(short)
+        self.assertAlmostEqual(full, 743 / 2.405, places=1)
+
+    def test_other_sequences_keep_the_short_purge(self):
+        tail = BY_OBJECT_TAIL.replace("by object", "by layer")
+        short, full = by_object_cfs(tail)._file_purge(Gcmd(), 'D', 'B')
+        self.assertEqual(short, 30.)
+        self.assertIsNone(full)
+
+    def test_a_slicer_length_is_raised_too(self):
+        cfs = by_object_cfs()
+        self.assertTrue(cfs._file_by_object())
+        self.assertEqual(cfs._by_object_full(30.), 140.)
+        self.assertEqual(cfs._by_object_full(300.), 300.)
+
+
 class FlushMatrixTest(unittest.TestCase):
     def test_on_by_default(self):
         # read in K2CFS.__init__; checked here against the source default
