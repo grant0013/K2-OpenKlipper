@@ -29,8 +29,9 @@ measurement and no ooze on the measured bed.
    and a strain-gauge tap at the bed centre. On the first print with the
    bottom reference, the tap landed 0.064 mm from the reference's
    prediction.
-7. **`NOZZLE_CLEAR`.** Probe the bed's rear strip and scrape the nozzle on it
-   at 140 °C, then go straight into the **adaptive mesh** (covering the
+7. **`NOZZLE_CLEAR`.** Tap for height left of the rear strip, scrape the
+   nozzle on the strip from 180 °C with the fans on, and let it cool to
+   140 °C pressed on the strip before lifting. Then go straight into the **adaptive mesh** (covering the
    prime tower too, see below) and `BED_MESH_CHECK`.
 8. Reheat over the chute and run the third 90 mm flush block
    (`_CREALITY_FLUSH`), then Creality's own prime line along the front edge

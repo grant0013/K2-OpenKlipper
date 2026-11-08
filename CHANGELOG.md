@@ -8,12 +8,16 @@
   so the next object's first layers blended (a grey to black PETG job at
   flush multiplier 0.3). These files now purge at least the stock 160 mm,
   and a flush multiplier below 1 is ignored. Painted prints are unchanged.
-- **The nozzle scrub follows Creality's own X path.** Traced from the stock
-  `prtouch_v3` code: hot strokes start at the stock position and run 10 mm
-  right, cool strokes run further right, and Y stays fixed. K2 X160-170 then
-  X175-180, K2 Plus X185-195 then X200-205. The old path was centred on the
-  stock position. Depth is unchanged: stock scrubs 0.6 mm below its height
-  taps, ours 0.1 mm, and the deeper value has not been tested.
+- **The nozzle scrub follows Creality's own sequence and presses harder.**
+  Traced from the stock `prtouch_v3` code: hot strokes start at the stock
+  position and run 10 mm right, then fans on and cool strokes further right,
+  Y fixed, then the nozzle stays down on the strip until it reaches 140 C.
+  K2 X160-170 then X175-180, K2 Plus X185-195 then X200-205. `NOZZLE_CLEAR`
+  now scrubs from 180 C at print start (it was 140 C) and presses 0.32 mm
+  below its height tap (`PRESS=`, was 0.1), which cleaned the tip on one K2
+  where 0.1 did not. Stock presses 0.6. Print start takes about a minute
+  longer. The K2 Plus now scrubs by default too, untested on that printer
+  (`variable_scrub_strip: False` turns it off).
 - **The print-start mesh waits for the toolhead around `BED_MESH_CHECK`**
   (GitHub issue #4, mylife4aiurr). With `M400` after `BED_MESH_CALIBRATE` and
   after `BED_MESH_CHECK`, a 21x21 mesh at `mesh_pps: 2, 2` finished without

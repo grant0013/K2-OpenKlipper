@@ -36,9 +36,9 @@ The config is generated from the K2 one by `tools/k2plus/make_k2plus_cfg.py`
   measured 349.85 / 350.10 and Creality's config puts the bottom at 350, less
   a little (too low is safe: the bed stops short and the nozzle tap fails
   instead of touching). Step 6 checks it on your printer.
-- **Rear cleaning strip scrub is off** (`scrub_strip: False`): the strip
-  positions were confirmed on the tested printer, but the scrub itself has
-  not been run on a K2 Plus. Step 7 is where to try it.
+- **Rear cleaning strip scrub is on, and has not been run on a K2 Plus.**
+  The positions and depth come from Creality's code and a K2. Step 7 checks
+  the positions before your first print, and please report what it does.
 - Not ported yet: belt tension tool, Creality's per-motor gain change (stock
   runs one X/Y motor at a lower position gain while printing; this config
   leaves the motor firmware default, which is what the K2 uses).
@@ -159,11 +159,12 @@ is):
     G1 X205 Y355.5 F3000
     G1 Z10 F600
 
-Send a photo at each. Once the nozzle is over the strip at both, the scrub
-goes on with, in printer-overrides.cfg:
+Send a photo at each. Every print start scrubs on the strip, so if the
+nozzle isn't over the strip at both, turn it off in printer-overrides.cfg
+until that's sorted, and tell me:
 
     [gcode_macro START_PRINT]
-    variable_scrub_strip: True
+    variable_scrub_strip: False
 
 ## Step 8: mesh, then a first print
 

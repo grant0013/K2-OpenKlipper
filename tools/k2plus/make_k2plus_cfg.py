@@ -342,42 +342,56 @@ timeout: 90
      "        G90\n        G1 X150 Y355 F6000\n"),
     ("strip scrub: stock path from prth_clr_pose 185,355.5 (built into\n"
      "Creality's prtouch_v3 module, which the K2 Plus config does not\n"
-     "override; 150,355 is only where it taps for height). Only runs once\n"
-     "scrub_strip is turned on (below)",
-     """    # Stock path, traced from Creality's prtouch_v3: hot strokes start at
-    # prth_clr_pose 160,265.5,10 (the smooth right tab) and run right, cool strokes
-    # are further right, Y stays fixed
+     "override; 150,355 is only where it taps for height). scrub_strip\n"
+     "(below) turns it off",
+     """    # Stock order, traced from Creality's prtouch_v3: hot strokes start at
+    # prth_clr_pose 160,265.5,10 (the smooth right tab) and run right, then fans on,
+    # cool strokes further right with Y fixed, then stay down on the tab while
+    # the nozzle cools so whatever is left sets flat and comes away with it
     G1 X160 Y265.5 F6000
     G1 Z{z + 1} F600
     G1 Z{z} F300
-    {% for i in range(20) %}
-        {% if i == 6 %}
-            M104 S{params.COOL|float}
-        {% endif %}
-        {% if i < 6 %}
-            G1 X170 F12000
-            G1 X160 F12000
-        {% else %}
-            G1 X180 F12000
-            G1 X175 F12000
-        {% endif %}
-""", """    # Stock path, traced from Creality's prtouch_v3: hot strokes start at
-    # prth_clr_pose 185,355.5,10 (the smooth right tab) and run right, cool strokes
-    # are further right, Y stays fixed
+    SET_VELOCITY_LIMIT ACCEL=5000
+    {% for i in range(6) %}
+        G1 X170 F12000
+        G1 X160 F12000
+    {% endfor %}
+    M400
+    M106 S127
+    SET_FAN_SPEED FAN=auxiliary_fan SPEED=1
+    G1 Z5 F300
+    M109 S{[hot, 170]|min}
+    G1 X180 Y265.5 F6000
+    G1 Z{z + 1} F600
+    G1 Z{z} F300
+    {% for i in range(6) %}
+        G1 X175 F12000
+        G1 X180 F12000
+    {% endfor %}
+""", """    # Stock order, traced from Creality's prtouch_v3: hot strokes start at
+    # prth_clr_pose 185,355.5,10 (the smooth right tab) and run right, then fans on,
+    # cool strokes further right with Y fixed, then stay down on the tab while
+    # the nozzle cools so whatever is left sets flat and comes away with it
     G1 X185 Y355.5 F6000
     G1 Z{z + 1} F600
     G1 Z{z} F300
-    {% for i in range(20) %}
-        {% if i == 6 %}
-            M104 S{params.COOL|float}
-        {% endif %}
-        {% if i < 6 %}
-            G1 X195 F12000
-            G1 X185 F12000
-        {% else %}
-            G1 X205 F12000
-            G1 X200 F12000
-        {% endif %}
+    SET_VELOCITY_LIMIT ACCEL=5000
+    {% for i in range(6) %}
+        G1 X195 F12000
+        G1 X185 F12000
+    {% endfor %}
+    M400
+    M106 S127
+    SET_FAN_SPEED FAN=auxiliary_fan SPEED=1
+    G1 Z5 F300
+    M109 S{[hot, 170]|min}
+    G1 X205 Y355.5 F6000
+    G1 Z{z + 1} F600
+    G1 Z{z} F300
+    {% for i in range(6) %}
+        G1 X200 F12000
+        G1 X205 F12000
+    {% endfor %}
 """),
     ("detect scrub line: stock prth_clr_pose 185,355.5, not the K2's strip\n"
      "(Y265 is the middle of the K2 Plus bed)",
@@ -391,12 +405,11 @@ scrub_x_end: 195
 scrub_y_min: 354.5
 scrub_y_max: 356.5
 """),
-    ("strip scrub OFF until the strip position is confirmed on a K2 Plus",
+    ("strip scrub on, with a switch to turn it off on a K2 Plus",
      "variable_scrub_method: 'fixed'\n",
      "variable_scrub_method: 'fixed'\n"
-     "# K2 Plus beta: the rear cleaning strip scrub stays off until its\n"
-     "# position is confirmed (docs/K2-PLUS-BETA.md, step 6)\n"
-     "variable_scrub_strip: False\n"),
+     "# K2 Plus: False skips the rear cleaning strip scrub\n"
+     "variable_scrub_strip: True\n"),
     ("START_PRINT: skip the strip scrub while scrub_strip is off",
      """    {% if scrub_method == "detect" %}
         # Already scrubbed before the tap.
