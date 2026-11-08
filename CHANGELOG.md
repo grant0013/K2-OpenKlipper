@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.4.21-alpha.1 (2026-11-08)
 
 - **Printing by object now gets the full purge at a colour change.** Between
   two slots of the same material the purge could be as short as 30 mm, which
@@ -15,8 +15,8 @@
   K2 X160-170 then X175-180, K2 Plus X185-195 then X200-205. `NOZZLE_CLEAR`
   now scrubs from 180 C at print start (it was 140 C) and presses 0.32 mm
   below its height tap (`PRESS=`, was 0.1), which cleaned the tip on one K2
-  where 0.1 did not. Stock presses 0.6. Print start takes about a minute
-  longer. The K2 Plus now scrubs by default too, untested on that printer
+  where 0.1 did not. Stock presses 0.6. The tap and scrub take about 2
+  minutes 20 seconds. The K2 Plus now scrubs by default too, untested on that printer
   (`variable_scrub_strip: False` turns it off).
 - **The print-start mesh waits for the toolhead around `BED_MESH_CHECK`**
   (GitHub issue #4, mylife4aiurr). With `M400` after `BED_MESH_CALIBRATE` and
