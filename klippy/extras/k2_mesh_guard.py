@@ -141,14 +141,27 @@ class K2MeshGuard:
             gcmd.respond_info("PRTouch mesh guard: no abnormal points")
             return self.original_finalize(positions)
         if len(outliers) > self.max_points:
-            details = ", ".join(
-                "(%.1f,%.1f residual=%+.3f)"
-                % (item["x"], item["y"], item["residual"])
-                for item in outliers
+            # Real curve looks abnormal too, above all at the edges, where a
+            # point only has neighbours on one side. Stopping here left a
+            # warped bed with no mesh at all (GitHub issue #3), so re-check
+            # the worst points and let BED_MESH_CHECK judge the result.
+            total = len(outliers)
+            logging.info(
+                "PRTouch mesh guard: %d abnormal points: %s", total,
+                ", ".join(
+                    "(%.1f,%.1f residual=%+.3f)"
+                    % (item["x"], item["y"], item["residual"])
+                    for item in outliers
+                ),
             )
-            raise gcmd.error(
-                "PRTouch mesh guard found %d abnormal points (limit %d): %s"
-                % (len(outliers), self.max_points, details)
+            outliers = sorted(
+                outliers, key=lambda item: abs(item["residual"]), reverse=True
+            )[:self.max_points]
+            gcmd.respond_info(
+                "PRTouch mesh guard: %d points differ from their neighbours "
+                "by more than %.3f mm, so the bed may be warped or dirty. "
+                "Re-checking the worst %d and carrying on."
+                % (total, self.threshold, len(outliers))
             )
 
         gcmd.respond_info(
