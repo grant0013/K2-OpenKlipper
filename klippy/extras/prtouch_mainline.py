@@ -15,6 +15,11 @@ from .prtouch_open import scrub
 from .prtouch_open import tap_select
 
 _NO_TRIGGER_ERROR = "No trigger on probe after full movement"
+_NO_TRIGGER_HINT = (
+    "PRTouch: the nozzle used its full travel without feeling the bed. If it"
+    " stopped short of the bed, run KZ_ALIGN_MEASURE CONFIRM=1 and set the"
+    " suggested position_endstop in printer-overrides.cfg. If it reached the"
+    " bed, clean the nozzle tip while it is hot.")
 # Z moves to and from the scrub start height, like the macros' G1 Z5 F600.
 _SCRUB_CLEAR_Z_SPEED = 10.
 
@@ -382,6 +387,8 @@ class PRTouchMainlineProbe:
                         or not self.driver.last_cleanup_ok
                         or distance > self.no_trigger_retry_max_distance
                         or retry >= self.no_trigger_retries):
+                    if str(e) == _NO_TRIGGER_ERROR:
+                        gcmd.respond_info(_NO_TRIGGER_HINT)
                     raise
             retry += 1
             gcmd.respond_info(

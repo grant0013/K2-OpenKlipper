@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- **The last probe lift finishes before a bed mesh is built** (GitHub issue
+  #4). Building a dense mesh holds up Klipper for up to a second on the K2's
+  board, and the `M400`s added in v0.4.21-alpha.1 only ran after the build.
+- **The mesh guard no longer stops a mesh on a warped bed** (GitHub issue
+  #3). It compares each point to its neighbours, so real curve looks
+  abnormal, above all at the edges, and with more than
+  `mesh_guard_max_points` of those it gave up with no mesh at all. It now
+  warns, re-checks the worst points and carries on, and `BED_MESH_CHECK`
+  still judges the result.
+- **A probe that runs out of travel now says what to check**: the bed
+  stopping short (`position_endstop`, `KZ_ALIGN_MEASURE`) or a dirty nozzle.
+
 ## v0.4.21-alpha.1 (2026-11-08)
 
 - **Printing by object now gets the full purge at a colour change.** Between
