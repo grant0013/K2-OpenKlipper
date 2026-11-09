@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.4.23-alpha.1 (2026-11-09)
 
 - **The host-link relay reconnects after a USB drop.** It kept the dead USB
   ports open after a disconnect, so Klipper could not reach the boards again
