@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.4.22-alpha.1 (2026-11-09)
 
 - **The last probe lift finishes before a bed mesh is built** (GitHub issue
   #4). Building a dense mesh holds up Klipper for up to a second on the K2's
