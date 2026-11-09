@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.4.24-alpha.1 (2026-11-09)
 
 - **The max flow test goes further.** The ramp now runs to 40 mm^3/s instead
   of 24, where nearly half of the runs on one K2 found no limit. It is one
