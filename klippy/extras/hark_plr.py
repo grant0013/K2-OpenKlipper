@@ -21,7 +21,10 @@
 # k2_z_align notes each Z motor's step count at the switches, and the
 # journal holds where that point lies in the nozzle-tap frame the print
 # used, so KZ_ALIGN_BOTTOM followed by that offset gives the print's own Z.
-# Then: home X and Y, heat the bed, raise the bed to clear the part with the
+# Nothing moves before that: the nozzle stopped on the part and the plastic
+# set round it, so the bed and then the nozzle come up to print temperature
+# first, or lowering the bed pulls the part off with the nozzle.
+# Then: home X and Y, raise the bed to clear the part with the
 # nozzle over the chute, heat and prime (the CFS slot loaded and purged, or
 # the rear spool primed), wipe, go back over the part, down to the saved
 # height, restore the print's state and carry on from the saved place in
@@ -451,20 +454,26 @@ class HarkPLR:
         # Everything a resume needs from the slicer's start is in the
         # journal; start from plain defaults
         self._run("M107\nM220 S100\nM221 S100\nG90\nM83")
-        self._run("M140 S%.1f\nM104 S%.1f"
-                  % (bed, min(nozzle, self.nozzle_standby)))
         if chamber > 40. and self.printer.lookup_object(
                 'heater_generic chamber_heater', None) is not None:
             self._run("CHAMBER_HEAT TARGET=%.1f" % chamber)
-        # Z from the bottom switches (the bed goes away from the nozzle),
-        # then into the frame the print used
-        gcmd.respond_info("Power-loss recovery: Z from the bottom switches")
-        self._run("KZ_ALIGN_BOTTOM CONFIRM=1")
-        self._apply_z_frame(gcmd, journal['z_frame'])
-        self._run("G28 X Y")
+        # The nozzle is set into the part until it is back at print
+        # temperature, and the part holds best on a hot bed: heat both
+        # before anything moves
         if bed > 0.:
             gcmd.respond_info("Power-loss recovery: heating the bed")
             self._run("M190 S%.1f" % bed)
+        gcmd.respond_info("Power-loss recovery: heating the nozzle to %.0fC"
+                          " to free it from the part" % nozzle)
+        self._run("M109 S%.1f" % nozzle)
+        # Z from the bottom switches (the bed goes away from the nozzle),
+        # then into the frame the print used. Off the part now, so it can
+        # wait at standby for the moves that follow
+        gcmd.respond_info("Power-loss recovery: Z from the bottom switches")
+        self._run("KZ_ALIGN_BOTTOM CONFIRM=1")
+        self._run("M104 S%.1f" % min(nozzle, self.nozzle_standby))
+        self._apply_z_frame(gcmd, journal['z_frame'])
+        self._run("G28 X Y")
         self._restore_mesh(journal.get('mesh'))
         # Over the chute, raise the bed to clear the part
         clear_z = max(saved[2], float(journal.get('max_z', 0.))) \

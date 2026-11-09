@@ -293,11 +293,22 @@ class HarkPLRTest(unittest.TestCase):
         plr.cmd_PLR_RESUME(Cmd())
         text = "\n".join(gcode.scripts)
         order = [text.index(k) for k in (
-            "KZ_ALIGN_BOTTOM", "G28 X Y", "M190 S60.0", "CFS_PURGE_POSITION",
-            "M109 S220.0", "SET_PRESSURE_ADVANCE", "G1 X100.000 Y120.000",
-            "RESTORE_GCODE_STATE NAME=_HARK_PLR", "M23 part.gcode",
-            "M26 S300", "M24")]
+            "M190 S60.0", "M109 S220.0", "KZ_ALIGN_BOTTOM", "G28 X Y",
+            "CFS_PURGE_POSITION", "SET_PRESSURE_ADVANCE",
+            "G1 X100.000 Y120.000", "RESTORE_GCODE_STATE NAME=_HARK_PLR",
+            "M23 part.gcode", "M26 S300", "M24")]
         self.assertEqual(order, sorted(order))
+        # the nozzle is stuck in the part until it is at print temperature,
+        # so nothing moves before that wait
+        hot = text.index("M109 S220.0")
+        for move in ("KZ_ALIGN_BOTTOM", "G28", "G1 "):
+            self.assertGreater(text.index(move), hot, move)
+        # off the part it waits at standby, then heats again to prime
+        self.assertLess(text.index("KZ_ALIGN_BOTTOM"),
+                        text.index("M104 S140.0"))
+        self.assertLess(text.index("M104 S140.0"), text.index("G28 X Y"))
+        self.assertGreater(text.index("M109 S220.0", hot + 1),
+                           text.index("CFS_PURGE_POSITION"))
         # the bed goes up clear of the part before anything moves over it
         self.assertIn("G1 Z5.400", text)
         self.assertNotIn("NOZZLE_WIPE", text)
