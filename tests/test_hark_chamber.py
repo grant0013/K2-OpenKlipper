@@ -166,6 +166,17 @@ class ChamberTest(unittest.TestCase):
         self.assertEqual(heater.target, 0.)
         self.assertIn("over", ch.fault)
 
+    def test_overtemp_trips_with_the_heater_commanded_off(self):
+        # watermark control has cut the power long before target + 10:
+        # this is what a stuck-on driver looks like
+        ch, heater, _, tach, _ = make()
+        ch._request(50., "test")
+        heater.power, tach.speed, heater.temp = 0., 3000, 61.
+        for t in range(0, 32):
+            ch._supervise(float(t))
+        self.assertEqual(heater.target, 0.)
+        self.assertIn("over", ch.fault)
+
     def test_new_request_clears_fault(self):
         ch, heater, _, _, _ = make()
         ch._trip("test")

@@ -275,13 +275,22 @@ class HarkCfsSlots:
         if slots_changed:
             self.revision += 1
         tmp = self.store_path + '.tmp'
-        with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump({'revision': self.revision, 'slots': self.slots,
-                       'library': list(self.library.values()),
-                       'tool_map': {'map': self.tool_map,
-                                    'file': self.tool_map_file}},
-                      f, indent=2, sort_keys=True)
-        os.replace(tmp, self.store_path)
+        try:
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump({'revision': self.revision, 'slots': self.slots,
+                           'library': list(self.library.values()),
+                           'tool_map': {'map': self.tool_map,
+                                        'file': self.tool_map_file}},
+                          f, indent=2, sort_keys=True)
+            os.replace(tmp, self.store_path)
+        except OSError as exc:
+            # A full or read-only disk must not shut Klipper down (this also
+            # runs from timers and mid-print commands)
+            logging.exception("hark_cfs_slots: could not save %s",
+                              self.store_path)
+            self.gcode.respond_raw(
+                "!! Could not save the CFS slot records (%s): this change"
+                " is lost at the next restart" % (exc,))
         if slots_changed:
             self._publish_lanes()
 

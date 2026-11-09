@@ -35,6 +35,13 @@ class HarkCompat:
         })
 
     def cmd_HARK_DUMP_DICTS(self, gcmd):
+        try:
+            written = self._dump_dicts()
+        except OSError as exc:
+            raise gcmd.error("HARK_DUMP_DICTS: %s" % (exc,))
+        gcmd.respond_info("Dumped: " + ", ".join(written))
+
+    def _dump_dicts(self):
         os.makedirs(DICT_DIR, exist_ok=True)
         written = []
         for name, mcu in self.printer.lookup_objects('mcu'):
@@ -49,7 +56,7 @@ class HarkCompat:
             with open(fname, 'wb') as f:
                 f.write(raw)
             written.append("%s (%d bytes)" % (fname, len(raw)))
-        gcmd.respond_info("Dumped: " + ", ".join(written))
+        return written
 
 
 def load_config(config):

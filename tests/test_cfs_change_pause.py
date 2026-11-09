@@ -123,6 +123,8 @@ def make_cfs(load_errors=0, state='printing'):
     cfs._raise_to_gate = lambda: None
     cfs._ensure_purge_position = lambda g: calls.append(('purge_pos',))
     cfs._best_effort_stop = lambda mask: calls.append(('stop', mask))
+    cfs._start_feed = lambda g, slot, require_confirm, require_selected: \
+        calls.append(('feed', slot))
     left = [load_errors]
 
     def unload(g):
@@ -251,6 +253,37 @@ class ChangePauseTest(unittest.TestCase):
         steps = [c[0] for c in cfs.calls if c[0] in
                  ('unload', 'load', 'purge')]
         self.assertEqual(steps, ['purge'])
+
+    def test_loaded_by_hand_arms_the_feed_before_the_purge(self):
+        # the failure left the box idle: a purge alone would print unfed
+        cfs = make_cfs(load_errors=3)
+        cfs.cmd_CFS_TOOLCHANGE(FakeCmd({'SLOT': 'B'}))
+        cfs.printer.print_stats.status['state'] = 'paused'
+        cfs.nozzle, cfs.active = True, cfs.SLOT_MASKS['B']
+        del cfs.calls[:]
+        cfs.cmd_CFS_CHANGE_RETRY(FakeCmd())
+        steps = [c for c in cfs.calls if c[0] in ('feed', 'purge')]
+        self.assertEqual(steps, [('feed', 'B'), ('purge',)])
+
+    def test_a_full_retry_does_not_arm_twice(self):
+        cfs = make_cfs(load_errors=3)
+        cfs.cmd_CFS_TOOLCHANGE(FakeCmd({'SLOT': 'B'}))
+        cfs.printer.print_stats.status['state'] = 'paused'
+        del cfs.calls[:]
+        cfs.cmd_CFS_CHANGE_RETRY(FakeCmd())
+        self.assertNotIn('feed', [c[0] for c in cfs.calls])
+
+    def test_failed_change_records_the_targets_for_resume(self):
+        # RESUME reheats to these after an idle timeout
+        cfs = make_cfs(load_errors=3)
+        cfs.printer.objects['heater_bed'] = Obj({'target': 65.})
+        cfs.cmd_CFS_TOOLCHANGE(FakeCmd({'SLOT': 'B'}))
+        text = "\n".join(cfs.gcode.scripts)
+        self.assertIn(
+            "MACRO=PAUSE VARIABLE=extruder_target VALUE=240.0", text)
+        self.assertIn("MACRO=PAUSE VARIABLE=bed_target VALUE=65.0", text)
+        self.assertLess(text.index("VARIABLE=bed_target"),
+                        text.index("PAUSE_BASE"))
 
     def test_old_slot_still_in_nozzle_does_a_full_change(self):
         cfs = make_cfs(load_errors=3)

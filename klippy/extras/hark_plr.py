@@ -61,6 +61,10 @@ class _LineWatch:
         return result
 
 
+# Clearance kept between the part and the nozzle in the Z reference (mm)
+HEIGHT_MARGIN = 1.
+
+
 class HarkPLR:
     def __init__(self, config):
         self.printer = config.get_printer()
@@ -399,7 +403,25 @@ class HarkPLR:
             raise ValueError(
                 "no Z reference was saved (the print did not start from"
                 " the bottom switches in that session)")
+        self._check_height(journal, frame)
         return journal['file']['path']
+
+    def _check_height(self, journal, frame):
+        # The Z reference ends with the bed raised retract_dist off the
+        # switches while the nozzle is still over the part: a part taller
+        # than that would be driven into the nozzle.
+        z_align = self.printer.lookup_object('k2_z_align', None)
+        retract = getattr(z_align, 'retract_dist', 0.)
+        if not retract:
+            return
+        offsets = [float(v) for v in frame['motors'].values()]
+        limit = sum(offsets) / len(offsets) - retract - HEIGHT_MARGIN
+        tallest = max(float(journal['gcode']['last_position'][2]),
+                      float(journal.get('max_z', 0.)))
+        if tallest > limit:
+            raise ValueError(
+                "the part is %.1f mm tall and the Z reference would push"
+                " it into the nozzle above %.1f mm" % (tallest, limit))
 
     def cmd_PLR_RESUME(self, gcmd):
         if gcmd.get_int('CONFIRM', 0, minval=0, maxval=1) != 1:
@@ -435,6 +457,9 @@ class HarkPLR:
         self.last_written = None
         self._run("M23 %s" % (path,))
         self._run("M26 S%d" % (journal['file']['position'],))
+        # After M23, which clears the excluded list along with the file
+        for name in journal.get('excluded') or []:
+            self._run("EXCLUDE_OBJECT NAME=%s" % name)
         self.status['available'] = False
         gcmd.respond_info("Power-loss recovery: carrying on with %s" % path)
         self._run("M24")
@@ -504,8 +529,6 @@ class HarkPLR:
             self._run("SET_VELOCITY_LIMIT VELOCITY=%.3f ACCEL=%.3f"
                       " MINIMUM_CRUISE_RATIO=%.3f"
                       " SQUARE_CORNER_VELOCITY=%.3f" % tuple(lim))
-        for name in journal.get('excluded') or []:
-            self._run("EXCLUDE_OBJECT NAME=%s" % name)
         # Over the part at the clear height, then straight down
         self._run("G1 X%.3f Y%.3f F%.1f\nG1 Z%.3f F%.1f\nM400"
                   % (saved[0], saved[1], self.travel_speed * 60.,

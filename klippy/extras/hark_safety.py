@@ -34,6 +34,9 @@ import logging
 from . import k2_motor_proto as proto
 
 ACTIONS = {'cancel': 'cancel', 'pause': 'pause', 'log': 'log'}
+# No homing move lasts this long: a count still up after it is a home that
+# failed (Klipper only sends home_rails_end on success)
+HOMING_STALE = 120.
 
 
 class HarkSafety:
@@ -69,6 +72,9 @@ class HarkSafety:
                                             self._homing_begin)
         self.printer.register_event_handler("homing:home_rails_end",
                                             self._homing_end)
+        # A failed G28 ends in motor_off and never sends home_rails_end
+        self.printer.register_event_handler("stepper_enable:motor_off",
+                                            self._motors_off)
         self.tripped = False
         self.fan_on_since = {}
         self.fan_zero_since = {}
@@ -97,8 +103,17 @@ class HarkSafety:
         self.homing = max(0, self.homing - 1)
         self.homing_changed = self.reactor.monotonic()
 
+    def _motors_off(self):
+        self.homing = 0
+        self.homing_changed = self.reactor.monotonic()
+
     def bus_quiet(self, eventtime):
         """Homing, stall homing armed, or just changed: hands off the bus."""
+        if self.homing > 0 and eventtime - self.homing_changed > HOMING_STALE:
+            # Never left on by a failed home: that would end motor watching
+            # for the rest of the session
+            logging.info("hark_safety: stale homing count cleared")
+            self.homing = 0
         armed = bool(getattr(self.bus, 'stall_armed', False))
         changed = max(self.homing_changed,
                       getattr(self.bus, 'stall_changed', 0.))
@@ -157,7 +172,8 @@ class HarkSafety:
             if eventtime - zero >= self.fan_fail_time:
                 self._trip(self.fan_action,
                            "the %s is switched on but has not turned for "
-                           "%.0f s" % (name, eventtime - zero))
+                           "%.0f s" % (name, eventtime - zero),
+                           nozzle_off=name == 'hotend fan')
                 return
 
     def _status(self, name):
@@ -266,7 +282,7 @@ class HarkSafety:
             self.gcode.respond_raw("!! Safety watch: %s" % (msg,))
 
     # --- actions -------------------------------------------------------
-    def _trip(self, action, why):
+    def _trip(self, action, why, nozzle_off=False):
         self.last['event'] = "%s: %s" % (action, why)
         logging.warning("hark_safety: %s -> %s", why, action)
         if action == 'log':
@@ -276,6 +292,11 @@ class HarkSafety:
         if action == 'pause':
             msg = "Print paused by the safety watch: %s" % why
             script = "PAUSE"
+            if nozzle_off:
+                # A hot nozzle with no heatsink airflow must not wait out
+                # the idle timeout. PAUSE saved the target: RESUME reheats
+                script += "\nM104 S0"
+                msg += ". Nozzle heater off, Resume reheats it"
         else:
             msg = "Print cancelled by the safety watch: %s" % why
             script = "CANCEL_PRINT SAFE=1\nTURN_OFF_HEATERS"

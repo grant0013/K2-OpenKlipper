@@ -3153,6 +3153,12 @@ class K2CFS:
             self._raise_to_gate()
             if load:
                 self._load_with_retries(load_gcmd)
+            else:
+                # Filament already at the nozzle (loaded by hand, or the
+                # failure came after the load). The failure left the box
+                # idle: arm the feed again or the print runs without it.
+                self._start_feed(load_gcmd, slot, require_confirm=False,
+                                 require_selected=True)
             timings.append(reactor.monotonic())
             self.cmd_CFS_PURGE(load_gcmd)
             timings.append(reactor.monotonic())
@@ -3204,6 +3210,15 @@ class K2CFS:
         self.status['last_change_error'] = reason[:200]
         logging.info("k2_cfs: colour change %s failed, pausing: %s",
                      self.status['change_pending'], reason)
+        # What the PAUSE macro would record: RESUME reheats to these after
+        # an idle timeout, and old values would be from an earlier pause
+        bed = self.printer.lookup_object('heater_bed', None)
+        bed_target = bed.get_status(0.).get('target', 0.) if bed else 0.
+        self.gcode.run_script_from_command(
+            "SET_GCODE_VARIABLE MACRO=PAUSE VARIABLE=extruder_target"
+            " VALUE=%.1f\n"
+            "SET_GCODE_VARIABLE MACRO=PAUSE VARIABLE=bed_target VALUE=%.1f"
+            % (ctx['purge_temp'], bed_target))
         self.gcode.run_script_from_command("PAUSE_BASE")
         gcmd.respond_raw(
             "!! Colour change to slot %s failed: %s Print paused at the"
@@ -3366,6 +3381,8 @@ class K2CFS:
             self._require_hot_extruder(gcmd)
             if self._nozzle_has_filament() is True:
                 raise gcmd.error("the nozzle sensor still sees filament")
+            # A runout low in the print pauses below purge_min_z
+            self._raise_to_gate()
             self._ensure_purge_position(gcmd)
             if self.runout_push_length > 0:
                 self.gcode.run_script_from_command(
@@ -3528,13 +3545,17 @@ class K2CFS:
                 self._load_with_retries(gcmd)
 
             self.cmd_CFS_PURGE(gcmd)
-        except Exception:
+        except Exception as exc:
             self._best_effort_stop(mask)
             self.status.update({
                 'feed_enabled': False,
                 'box_mode_code': self.BOX_MODE_IDLE,
                 'box_mode': 'idle',
             })
+            if isinstance(exc, RuntimeError):
+                # A bus or box status error: a readable G-code error, not
+                # Klipper's "Internal error" shutdown
+                raise gcmd.error(str(exc))
             raise
         finally:
             self.print_start_transaction = False

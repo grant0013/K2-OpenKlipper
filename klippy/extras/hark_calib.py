@@ -326,7 +326,10 @@ class HarkCalib:
         if kind not in KINDS:
             raise gcmd.error("KIND must be flow or retraction")
         slot = gcmd.get('SLOT').upper()
-        values = [float(v) for v in gcmd.get('VALUES').split(',') if v]
+        try:
+            values = [float(v) for v in gcmd.get('VALUES').split(',') if v]
+        except ValueError:
+            raise gcmd.error("VALUES must be numbers separated by commas")
         _, what, item = KINDS[kind]
         self.pending = {'kind': kind, 'slot': slot, 'values': values,
                         'label': "Pick the best %s for slot %s"

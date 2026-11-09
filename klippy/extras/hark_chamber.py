@@ -192,11 +192,13 @@ class HarkChamber:
             self.power_since = self.zero_since = None
         # Over-temperature: the chamber well over what was asked for
         limit = max(self.applied, self.min_heat_target) + self.overtemp_margin
-        if power > 0. and self.applied > 0. and temp > limit:
+        # On temperature alone: watermark control has cut the power long
+        # before this, so a power test could never fire for a stuck heater
+        if self.applied > 0. and temp > limit:
             if self.over_since is None:
                 self.over_since = eventtime
             if eventtime - self.over_since >= self.overtemp_time:
-                self._trip("chamber %.1fC, over %.0fC while heating"
+                self._trip("chamber %.1fC, over the %.0fC limit"
                            % (temp, limit))
         else:
             self.over_since = None
