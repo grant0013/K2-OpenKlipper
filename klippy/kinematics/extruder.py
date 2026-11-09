@@ -205,7 +205,7 @@ class PrinterExtruder:
         self.max_flow = gcmd.get_float('FLOW', self.max_flow, minval=0.)
         gcmd.respond_info("%s max flow: %s" % (
             self.name, ("%.1f mm^3/s" % self.max_flow) if self.max_flow
-            else "no cap"))
+            else "none set"))
     def get_status(self, eventtime):
         sts = self.heater.get_status(eventtime)
         sts['can_extrude'] = self.heater.can_extrude

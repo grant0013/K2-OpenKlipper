@@ -7,6 +7,14 @@
 # less a margin, and APPLY=1 sets it for the print (SET_MAX_FLOW; START_PRINT
 # and END_PRINT clear it).
 #
+# The ramp is one continuous run and is never picked up again after it stops:
+# in a 3 s pause the melt softens, and the steps after it read 10-25% low
+# (Elegoo PETG 250 C 11-09: 303k at 20 after a pause, 339k without one). Force
+# falling away under the line is a limit as well as force going over it, and
+# a sudden loss of force, within a step or from one step to the next, stops
+# the ramp at once: the filament has stopped being pushed through (the idea
+# is FlowTune's, github.com/MisterSheikh/klipper-flowtune).
+#
 #   FLOW_CAL_RUN [FLOWS=6,8,...] [STEP_TIME=2] [KNEE=8] [MARGIN=1] [APPLY=0]
 #
 # Needs the feed armed and the nozzle at print temperature (the
@@ -41,6 +49,9 @@ def line_fit(points):
 
 
 MIN_FIT_POINTS = 3
+# Scatter of the low flows around their line, times this, is the smallest
+# excess that counts: a noisy baseline can't call a knee at knee_percent
+NOISE_FACTOR = 2.
 
 
 def excess_percent(points, fit_max):
@@ -61,6 +72,38 @@ def excess_percent(points, fit_max):
     return out
 
 
+def baseline_scatter(points, fit_max):
+    """Largest distance of a low-flow step from their line, in percent."""
+    low = [p for p in points if p[0] <= fit_max]
+    if len(low) < MIN_FIT_POINTS:
+        return 0.
+    a, b = line_fit(low)
+    return max(abs(v - (a + b * f)) / (a + b * f) * 100.
+               for f, v in low if a + b * f)
+
+
+def force_released(points, release_pct=10.):
+    """The newest step pushed more but the force fell by release_pct."""
+    if len(points) < 2:
+        return False
+    (f0, v0), (f1, v1) = points[-2:]
+    return f1 > f0 and v0 > 0. and 100. * (v0 - v1) / v0 >= release_pct
+
+
+def step_released(window, rest, release_pct=10.):
+    """The force fell by release_pct from the start of a step to its end."""
+    third = len(window) // 3
+    if third < 3:
+        return False
+    first = abs(median(window[:third]) - rest)
+    last = abs(median(window[-third:]) - rest)
+    return first > 0. and 100. * (first - last) / first >= release_pct
+
+
+def cap_from_knee(knee, margin, min_cap):
+    return max(min_cap, math.floor((knee - margin) * 2.) / 2.)
+
+
 def pick_cap(points, knee_pct=4., margin=3., fit_max=12., min_cap=4.,
              final=True):
     """From [(flow, force)] in ramp order: (cap, knee_flow, rows).
@@ -68,26 +111,39 @@ def pick_cap(points, knee_pct=4., margin=3., fit_max=12., min_cap=4.,
     knee_flow is where the force passes knee_pct above the low-flow line,
     placed between the two steps either side of the crossing (the bend is
     gradual, and reading it at whole steps moved the answer a step between
-    two runs on the same filament, 11-03); None when the ramp never bent.
+    two runs on the same filament, 11-03); None when the ramp never left its
+    line. Force falling under the line by as much counts too, with the limit
+    at the last step still on it: the filament is no longer being pushed
+    through as commanded, which is no reason to call the hotend unlimited.
     cap is knee_flow less margin, down to the half, or None without a knee
     (no limit found in the ramp). A single step over the line is not a
     knee until the step after it is over as well, so one noisy step does
     not stop the ramp; with final=True (the ramp is over) a last step over
     the line counts on its own."""
     rows = excess_percent(points, fit_max)
+
+    def needed(i):
+        # Each step is judged against the scatter of the steps before it
+        return max(knee_pct,
+                   NOISE_FACTOR * baseline_scatter(points[:i], fit_max))
+
     knee = None
     prev = None
     for i, (f, v, ex) in enumerate(rows):
-        if ex > knee_pct and prev is not None:
+        need = needed(i)
+        sign = 1. if ex > 0. else -1.
+        if abs(ex) > need and prev is not None:
             confirmed = ((final and i + 1 >= len(rows))
                          or (i + 1 < len(rows)
-                             and rows[i + 1][2] > knee_pct))
+                             and sign * rows[i + 1][2] > needed(i + 1)))
             if not confirmed:
                 prev = (f, ex)
                 continue
             pf, pex = prev
-            if ex > pex:
-                knee = pf + (f - pf) * (knee_pct - pex) / (ex - pex)
+            if sign < 0.:
+                knee = float(pf)
+            elif ex > pex:
+                knee = pf + (f - pf) * (need - pex) / (ex - pex)
             else:
                 knee = float(f)
             knee = max(float(pf), min(float(f), knee))
@@ -95,8 +151,7 @@ def pick_cap(points, knee_pct=4., margin=3., fit_max=12., min_cap=4.,
         prev = (f, ex)
     if knee is None:
         return None, None, rows
-    cap = max(min_cap, math.floor((knee - margin) * 2.) / 2.)
-    return cap, round(knee, 2), rows
+    return cap_from_knee(knee, margin, min_cap), round(knee, 2), rows
 
 
 class HarkFlowCal:
@@ -107,7 +162,8 @@ class HarkFlowCal:
         # From 8: the first auto run (11-03) read 6 low because the prime's
         # pressure had not relaxed, and a 2 s step is short for 6 mm^3/s
         self.flows = config.getfloatlist(
-            'flows', (8., 10., 12., 14., 16., 18., 20., 22., 24.))
+            'flows', (8., 10., 12., 14., 16., 18., 20., 22., 24., 27., 30.,
+                      34., 38., 40.))
         # 3 s: with 2 s steps the pressure at 16+ mm^3/s was still climbing
         # when the step ended, so the ramp bent two steps late (11-03)
         self.step_time = config.getfloat('step_time', 3., minval=0.8,
@@ -134,6 +190,8 @@ class HarkFlowCal:
         self.margin = config.getfloat('margin', 3., minval=0.)
         self.fit_max = config.getfloat('fit_max_flow', 12., above=0.)
         self.min_cap = config.getfloat('min_cap', 4., above=0.)
+        # A force loss this big, flow going up, stops the ramp at once
+        self.release_pct = config.getfloat('release_percent', 10., above=0.)
         # Extruder acceleration for the steps (mm/s^2 of filament)
         self.e_accel = config.getfloat('extrude_accel', 2000., above=0.)
         self.last = {}
@@ -176,8 +234,9 @@ class HarkFlowCal:
         self.reactor.pause(self.reactor.monotonic() + relax)
         end = toolhead.get_last_move_time()
         self._wait_samples(state, end - 0.1)
-        return end, median(self._window(state['samples'], end - 0.7,
-                                        end - 0.05))
+        level = median(self._window(state['samples'], end - 0.7, end - 0.05))
+        logging.info("hark_flow_cal: rest t=%.2f level=%s", end, level)
+        return end, level
 
     @staticmethod
     def _forces(levels, rests):
@@ -227,57 +286,77 @@ class HarkFlowCal:
         points = []
         levels = []             # (flow, window mid print time, level)
         rests = []              # (print time, level) rest readings
-        cap = knee = None
+        measured = []           # flows read so far
+        cap = knee = released = None
         rows = []
         stopped_early = False
+
+        def measure(flow, extra):
+            """One step. Returns the gauge window, or None without one."""
+            nonlocal E
+            velocity = flow / area
+            start = toolhead.get_last_move_time()
+            E += velocity * (step_time + extra)
+            toolhead.move([X, Y, Z, E], velocity)
+            toolhead.wait_moves()
+            end = toolhead.get_last_move_time()
+            self._wait_samples(state, end)
+            window = self._window(state['samples'],
+                                  start + settle + extra, end - 0.05)
+            level = median(window)
+            if level is None:
+                gcmd.respond_info("Flow %.0f: no gauge samples in the "
+                                  "window, skipped" % (flow,))
+                return None
+            levels.append((flow, 0.5 * (start + settle + extra + end), level))
+            third = max(1, len(window) // 3)
+            logging.info("hark_flow_cal: step %g t=%.2f level=%.0f "
+                         "first=%.0f last=%.0f n=%d", flow, start, level,
+                         median(window[:third]), median(window[-third:]),
+                         len(window))
+            if flow not in measured:
+                measured.append(flow)
+            return window
+
         try:
             # Rest level once the prime's pressure has relaxed
             rests.append(self._rest_level(toolhead, state, relax))
             if rests[0][1] is None:
                 raise gcmd.error("No gauge samples: is the strain gauge "
                                  "streaming?")
-            idx = 0
-            while True:
-                # Step up until a confirmed knee (two steps over the line)
-                # or the end of the ramp
-                while idx < len(flows):
-                    flow = flows[idx]
-                    velocity = flow / area
-                    extra = self.first_step_extra if idx == 0 else 0.
-                    idx += 1
-                    start = toolhead.get_last_move_time()
-                    E += velocity * (step_time + extra)
-                    toolhead.move([X, Y, Z, E], velocity)
-                    toolhead.wait_moves()
-                    end = toolhead.get_last_move_time()
-                    self._wait_samples(state, end)
-                    window = self._window(state['samples'],
-                                          start + settle + extra, end - 0.05)
-                    level = median(window)
-                    if level is None:
-                        gcmd.respond_info("Flow %.0f: no gauge samples in "
-                                          "the window, skipped" % (flow,))
-                        continue
-                    levels.append((flow, 0.5 * (start + settle + extra + end),
-                                   level))
-                    points = self._forces(levels, rests)
-                    cap, knee, rows = pick_cap(points, knee_pct, margin,
-                                               self.fit_max, self.min_cap,
-                                               final=False)
-                    if knee is not None:
-                        break
-                # Rest again: the hot gauge drifts, and the forces are
-                # taken against a rest that moves linearly between readings.
-                # If that takes the knee away and steps remain, carry on.
-                rests.append(self._rest_level(toolhead, state, relax))
+            # One continuous ramp, up to a confirmed knee (two steps off the
+            # line), a loss of force, or the top of the flows
+            ramp_cap = ramp_knee = None
+            for idx, flow in enumerate(flows):
+                window = measure(flow,
+                                 self.first_step_extra if idx == 0 else 0.)
+                if window is None:
+                    continue
                 points = self._forces(levels, rests)
-                done = idx >= len(flows)
-                cap, knee, rows = pick_cap(points, knee_pct, margin,
-                                           self.fit_max, self.min_cap,
-                                           final=done)
-                if knee is not None or done:
-                    stopped_early = not done
+                if (force_released(points, self.release_pct)
+                        or step_released(window, rests[-1][1],
+                                         self.release_pct)):
+                    released = flow
                     break
+                ramp_cap, ramp_knee, rows = pick_cap(
+                    points, knee_pct, margin, self.fit_max, self.min_cap,
+                    final=False)
+                if ramp_knee is not None:
+                    break
+            stopped_early = flow != flows[-1]
+            # Rest again: the hot gauge drifts, and the forces are taken
+            # against a rest that moves linearly between the two readings.
+            rests.append(self._rest_level(toolhead, state, relax))
+            points = self._forces(levels, rests)
+            cap, knee, rows = pick_cap(points, knee_pct, margin, self.fit_max,
+                                       self.min_cap, final=True)
+            if released is not None:
+                below = [f for f in measured if f < released]
+                knee = below[-1] if below else released
+                cap = cap_from_knee(knee, margin, self.min_cap)
+            elif knee is None and ramp_knee is not None:
+                # The ramp has stopped and can't be resumed: keep what it saw
+                cap, knee = ramp_cap, ramp_knee
         finally:
             state['on'] = False
             extruder.set_extrude_only_accel_limit(prev_accel)
@@ -289,15 +368,22 @@ class HarkFlowCal:
         lines = ["flow  force   above the %g-and-under line" % (self.fit_max,)]
         for f, v, ex in rows:
             lines.append("%4.0f  %7.0f  %+5.1f%%" % (f, v, ex))
-        if knee is None:
+        top = points[-1][0] if points else 0.
+        if released is not None:
+            verdict = ("force dropped at %.0f mm^3/s (the filament stopped "
+                       "being pushed through); max flow %.1f mm^3/s "
+                       "(%g under %g)" % (released, cap, margin, knee))
+        elif knee is None:
             verdict = ("no melt limit found up to %.0f mm^3/s (the ramp "
-                       "stayed within %.0f%% of a straight line)"
-                       % (points[-1][0] if points else 0., knee_pct))
+                       "stayed within %.0f%% of a straight line), so at "
+                       "least that much, no cap needed" % (top, knee_pct))
         else:
             verdict = ("force leaves the line by %g%% at %.1f mm^3/s; "
                        "max flow %.1f mm^3/s (%g under)" % (
                            knee_pct, knee, cap, margin))
         self.last = {'cap': cap, 'knee': knee, 'knee_percent': knee_pct,
+                     'released': released,
+                     'at_least': top if cap is None else None,
                      'points': [(f, round(v)) for f, v in points],
                      'excess': [round(ex, 1) for f, v, ex in rows],
                      'rest': rest, 'rest_end': rest_end, 'applied': 0,
