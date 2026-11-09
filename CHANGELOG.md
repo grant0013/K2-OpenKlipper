@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- **The host-link relay reconnects after a USB drop.** It kept the dead USB
+  ports open after a disconnect, so Klipper could not reach the boards again
+  until the K2 was rebooted. It now reopens them when the host comes back.
+- **Power-loss resume heats up before anything moves.** The nozzle stops on
+  the part and the plastic sets round it, and `PLR_RESUME` lowered the bed
+  with the nozzle cold, which pulled the part off the bed. It now heats the
+  bed, then the nozzle to print temperature, and only then moves. The first
+  real resume of a stopped print showed this.
+
 ## v0.4.22-alpha.1 (2026-11-09)
 
 - **The last probe lift finishes before a bed mesh is built** (GitHub issue
