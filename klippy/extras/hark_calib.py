@@ -279,7 +279,8 @@ class HarkCalib:
 
     def _require_idle(self, gcmd):
         stats = self.printer.lookup_object('print_stats')
-        state = stats.get_status(0.).get('state')
+        state = stats.get_status(
+            self.printer.get_reactor().monotonic()).get('state')
         if state in ('printing', 'paused'):
             raise gcmd.error("A print is running")
 

@@ -831,7 +831,9 @@ class K2CFS:
     def _printing(self):
         stats = self.printer.lookup_object('print_stats', None)
         return (stats is not None and
-                stats.get_status(0.).get('state') == 'printing')
+                stats.get_status(
+                    self.printer.get_reactor().monotonic()
+                ).get('state') == 'printing')
 
     def _env_poll(self, eventtime):
         interval = self.env_poll_interval
@@ -1348,7 +1350,8 @@ class K2CFS:
         print_stats = self.printer.lookup_object('print_stats', None)
         if print_stats is None:
             return
-        state = print_stats.get_status(0.).get('state', '')
+        state = print_stats.get_status(
+            self.printer.get_reactor().monotonic()).get('state', '')
         if state in ('printing', 'paused'):
             raise gcmd.error(
                 "CFS operation refused while print state is %s" % state)
@@ -1358,7 +1361,8 @@ class K2CFS:
         if print_stats is None:
             raise gcmd.error(
                 "CFS_PRINT_START requires virtual_sdcard print state")
-        state = print_stats.get_status(0.).get('state', '')
+        state = print_stats.get_status(
+            self.printer.get_reactor().monotonic()).get('state', '')
         if state != 'printing':
             raise gcmd.error(
                 "CFS_PRINT_START is only available during START_PRINT "
@@ -3022,7 +3026,8 @@ class K2CFS:
         slicer_flush = gcmd.get_float('FLUSH', None, minval=0., maxval=360.)
         self._require_actuation(gcmd)
         print_stats = self.printer.lookup_object('print_stats', None)
-        state = print_stats.get_status(0.).get('state', '') \
+        state = print_stats.get_status(
+            self.printer.get_reactor().monotonic()).get('state', '') \
             if print_stats is not None else ''
         if state != 'printing':
             raise gcmd.error(
@@ -3216,7 +3221,8 @@ class K2CFS:
         self._require_cfs(gcmd)
         self._require_actuation(gcmd)
         print_stats = self.printer.lookup_object('print_stats', None)
-        state = print_stats.get_status(0.).get('state', '') \
+        state = print_stats.get_status(
+            self.printer.get_reactor().monotonic()).get('state', '') \
             if print_stats is not None else ''
         if state != 'paused':
             self._clear_pending_change()
@@ -3344,7 +3350,8 @@ class K2CFS:
         if gcmd.get_int('CONFIRM', 0, minval=0, maxval=1) != 1:
             raise gcmd.error("CFS_RUNOUT_REFILL requires CONFIRM=1")
         print_stats = self.printer.lookup_object('print_stats', None)
-        state = print_stats.get_status(0.).get('state', '') \
+        state = print_stats.get_status(
+            self.printer.get_reactor().monotonic()).get('state', '') \
             if print_stats is not None else ''
         if state != 'paused':
             raise gcmd.error(

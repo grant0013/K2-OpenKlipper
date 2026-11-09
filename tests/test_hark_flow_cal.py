@@ -53,6 +53,16 @@ AUTO_RUN_6 = [(8, 110208), (10, 144887), (12, 179792), (14, 222324),
 
 MARGIN = 3.  # module default
 
+# Elegoo PETG slot A, 250 C, 11-09. The first paused 3 s after 18 and carried
+# on; the second ran straight through to the failure at 30-34.
+PAUSED_RUN = [(8, 137409), (10, 168890), (12, 198297), (14, 230272),
+              (16, 265555), (18, 301300), (20, 303259), (22, 326736),
+              (24, 351053), (27, 373320), (30, 401727), (34, 446038),
+              (38, 470676), (40, 462383)]
+UNBROKEN_RUN = [(8, 133959), (10, 163136), (12, 195811), (14, 229616),
+                (16, 258300), (18, 302778), (20, 339523), (22, 370327),
+                (24, 412492), (27, 449846), (30, 461868), (34, 400327)]
+
 
 class PickCapTest(unittest.TestCase):
     def test_auto_runs_agree_within_half_a_step(self):
@@ -155,6 +165,62 @@ class PickCapTest(unittest.TestCase):
         # 10 reads 0 (unjudged), 12 reads +163%: crossing just past 10
         self.assertEqual(knee, 10.06)
         self.assertEqual(cap, 9.0)
+
+    def test_ramp_goes_to_40_by_default(self):
+        src = PATH.read_text()
+        self.assertIn("34., 38., 40.", src)
+
+    def test_noisy_baseline_needs_a_bigger_bend(self):
+        # 10 sits 3% off the line of 8-12: 5% over at 16 isn't a knee
+        pts = [(8, 100.), (10, 137.), (12, 160.), (14, 193.), (16, 226.),
+               (18, 259.)]
+        self.assertGreater(fc.baseline_scatter(pts, 12.), 3.)
+        cap, knee, rows = fc.pick_cap(pts, 4., 3., 12.)
+        self.assertIsNone(knee)
+
+    def test_force_falling_under_the_line_is_a_limit(self):
+        # Paused after 18, it read low from there on and was called "no
+        # limit up to 40". Leaving the line downwards is not unlimited.
+        cap, knee, rows = fc.pick_cap(PAUSED_RUN, KNEE, MARGIN)
+        self.assertEqual(knee, 18.0)
+        self.assertEqual(cap, 15.0)
+
+    def test_unbroken_ramp_finds_the_bend(self):
+        # The same filament run straight through: on a curve past 20
+        cap, knee, rows = fc.pick_cap(UNBROKEN_RUN[:6], KNEE, MARGIN,
+                                      final=True)
+        self.assertGreater(knee, 16.)
+        self.assertLess(knee, 18.)
+        self.assertEqual(cap, 14.5)
+
+    def test_one_low_step_is_not_a_limit(self):
+        pts = [(f, 10000. + 1000. * f) for f in (8, 10, 12, 14, 16, 18, 20)]
+        pts[4] = (16, pts[4][1] * .92)
+        cap, knee, rows = fc.pick_cap(pts, KNEE, MARGIN, final=False)
+        self.assertIsNone(knee)
+
+    def test_ramp_never_resumes_after_a_rest(self):
+        # In a pause the melt softens and everything after it reads low
+        src = PATH.read_text()
+        self.assertEqual(src.count("self._rest_level(toolhead, state, relax)"),
+                         2)
+        self.assertNotIn("retest", src)
+
+    def test_force_loss_between_steps(self):
+        self.assertTrue(fc.force_released([(20, 1000.), (22, 880.)]))
+        self.assertFalse(fc.force_released([(20, 1000.), (22, 1100.)]))
+        self.assertFalse(fc.force_released([(20, 1000.), (22, 950.)]))
+        # A lower flow than the step before is not a loss
+        self.assertFalse(fc.force_released([(20, 1000.), (8, 300.)]))
+
+    def test_force_loss_within_a_step(self):
+        steady = [1000.] * 30
+        self.assertFalse(fc.step_released(steady, 0.))
+        falling = [1000.] * 15 + [800.] * 15
+        self.assertTrue(fc.step_released(falling, 0.))
+        rising = [800.] * 15 + [1000.] * 15
+        self.assertFalse(fc.step_released(rising, 0.))
+        self.assertFalse(fc.step_released([1000.] * 5, 0.))
 
     def test_median(self):
         self.assertEqual(fc.median([3, 1, 2]), 2)

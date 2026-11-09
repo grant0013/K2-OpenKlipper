@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- **The max flow test goes further.** The ramp now runs to 40 mm^3/s instead
+  of 24, where nearly half of the runs on one K2 found no limit. It is one
+  continuous run that stops at the limit, because a pause partway makes every
+  step after it read low. Force falling away under the line now counts as a
+  limit as well as force going over it, and a noisy baseline needs a bigger
+  bend. A sudden loss of force stops the ramp at once (the idea is
+  FlowTune's). "No limit" now says the flow it reached. The log line
+  `extruder max flow: no cap` now reads `none set`, because it only means
+  no test set one for that print.
+- **Print time no longer jumps to days.** A CFS check at print start could
+  add the host's uptime to the print time in the history.
+
 ## v0.4.23-alpha.1 (2026-11-09)
 
 - **The host-link relay reconnects after a USB drop.** It kept the dead USB
