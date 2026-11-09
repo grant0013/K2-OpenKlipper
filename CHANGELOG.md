@@ -1,9 +1,9 @@
 # Changelog
 
-## Unreleased
+## v0.4.25-alpha.1 (2026-11-09)
 
-Fixes from a code review of v0.4.24-alpha.1. None of these have been run on a
-printer yet.
+Fixes from a code review of v0.4.24-alpha.1. RELEASE-NOTES-v0.4.25-alpha.1.md
+says which were tested on a printer and which only offline.
 
 - **First print on a new K2 no longer stops at the bed voltage check.**
   `BED_POWER_CALIBRATE` refused to run inside `START_PRINT`, its automatic
