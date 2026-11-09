@@ -300,8 +300,13 @@ class K2MotorBus:
         if self.ser is not None:
             return
         import serial
-        self.ser = serial.Serial(self.serialport, self.baud, timeout=0.2,
-                                 exclusive=True)
+        try:
+            self.ser = serial.Serial(self.serialport, self.baud, timeout=0.2,
+                                     exclusive=True)
+        except (OSError, ValueError) as exc:
+            # A bus that cannot open is a command error, not a shutdown
+            raise self.printer.command_error(
+                "Motor bus: cannot open %s: %s" % (self.serialport, exc))
         logging.info("k2_motor_bus: opened %s @ %d", self.serialport,
                      self.baud)
 
@@ -786,10 +791,16 @@ class K2MotorBus:
                              % (", ".join(self.motor_names()),))
         return name
 
+    def _indices(self, gcmd, default):
+        try:
+            return [int(i, 0) for i in gcmd.get('INDEX', default).split(',')]
+        except ValueError:
+            raise gcmd.error("INDEX must be numbers separated by commas,"
+                             " e.g. INDEX=5,6,0x11")
+
     def cmd_MOTOR_VALUES(self, gcmd):
         name = self._motor_name(gcmd)
-        indices = [int(i, 0) for i in gcmd.get(
-            'INDEX', '5,6,7,8,0x11').split(',')]
+        indices = self._indices(gcmd, '5,6,7,8,0x11')
         parts = []
         for index in indices:
             value = self.read_value(name, index)
@@ -827,8 +838,7 @@ class K2MotorBus:
             raise gcmd.error("Motor log is already running")
         name = self._motor_name(gcmd)
         interval = gcmd.get_float('INTERVAL', 0.1, minval=0.02, maxval=5.)
-        indices = [int(i, 0) for i in gcmd.get(
-            'INDEX', '5,6,8').split(',')]
+        indices = self._indices(gcmd, '5,6,8')
         self.motor_log = {'motor': name, 'interval': interval,
                           'indices': indices, 'rows': [], 'misses': 0,
                           'timer': None}
@@ -1083,7 +1093,10 @@ class K2MotorBus:
 
     def cmd_MOTOR_BUS_SEND(self, gcmd):
         addr = gcmd.get_int('ADDR', minval=0, maxval=255)
-        payload = bytes.fromhex(gcmd.get('PAYLOAD'))
+        try:
+            payload = bytes.fromhex(gcmd.get('PAYLOAD'))
+        except ValueError:
+            raise gcmd.error("PAYLOAD must be hex bytes, e.g. PAYLOAD=000c0b")
         # Telemetry records (pos/spd samples, error detail) run past 64 bytes
         read_len = gcmd.get_int('READ_LEN', 64, minval=8, maxval=1024)
         timeout = gcmd.get_float('TIMEOUT', 0.2, minval=0.05, maxval=2.)

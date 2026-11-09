@@ -1,5 +1,38 @@
 # Changelog
 
+## v0.4.25-alpha.1 (2026-11-09)
+
+Fixes from a code review of v0.4.24-alpha.1. RELEASE-NOTES-v0.4.25-alpha.1.md
+says which were tested on a printer and which only offline.
+
+- **First print on a new K2 no longer stops at the bed voltage check.**
+  `BED_POWER_CALIBRATE` refused to run inside `START_PRINT`, its automatic
+  caller.
+- **A failed home no longer ends motor fault watching** for the rest of the
+  session.
+- **A runout outside a print no longer sticks.** The next print could not
+  pause and ignored a real runout. A second `PAUSE` no longer lifts and parks
+  again.
+- **Runout refill works in the first few layers.** It now raises to the
+  height the chute needs, as colour changes do.
+- **Resume after a failed colour change re-arms the CFS feed** when the
+  filament was already at the nozzle.
+- **`RELOAD_GCODE_MACROS` is refused during a print**, where it can stall
+  the host and shut the MCU down.
+- **A stopped hotend fan switches the nozzle off** as well as pausing. Resume
+  reheats it.
+- **Loading the rear spool during a long pause uses the print's temperature**,
+  so Resume does not carry on at the load's. `RESUME` with nothing paused no
+  longer heats anything.
+- **The K2 Plus chamber over-temperature cut-off can now fire.** It needed
+  heater power, which is already off at that point.
+- **Power-loss resume**: refuses a part too tall for the Z reference instead
+  of pushing it into the nozzle, and excluded objects stay excluded.
+- **Typos and full disks give an error instead of shutting Klipper down**:
+  `FLOW_CAL_RUN FLOWS=`, `CALIB_PICK VALUES=`, `MOTOR_VALUES INDEX=`,
+  `MOTOR_BUS_SEND PAYLOAD=`, saving slot records, `PA_LOG_STOP`, a motor bus
+  that cannot open, and CFS bus errors at print start.
+
 ## v0.4.24-alpha.1 (2026-11-09)
 
 - **The max flow test goes further.** The ramp now runs to 40 mm^3/s instead

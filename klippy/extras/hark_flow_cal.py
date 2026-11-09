@@ -78,8 +78,8 @@ def baseline_scatter(points, fit_max):
     if len(low) < MIN_FIT_POINTS:
         return 0.
     a, b = line_fit(low)
-    return max(abs(v - (a + b * f)) / (a + b * f) * 100.
-               for f, v in low if a + b * f)
+    return max((abs(v - (a + b * f)) / (a + b * f) * 100.
+                for f, v in low if a + b * f), default=0.)
 
 
 def force_released(points, release_pct=10.):
@@ -258,8 +258,14 @@ class HarkFlowCal:
 
     def cmd_FLOW_CAL_RUN(self, gcmd):
         flows_param = gcmd.get('FLOWS', None)
-        flows = ([float(f) for f in flows_param.split(',')] if flows_param
-                 else list(self.flows))
+        try:
+            flows = ([float(f) for f in flows_param.split(',')] if flows_param
+                     else list(self.flows))
+        except ValueError:
+            raise gcmd.error("FLOWS must be numbers separated by commas,"
+                             " e.g. FLOWS=6,8,10")
+        if not flows or min(flows) <= 0.:
+            raise gcmd.error("FLOWS must all be above 0")
         step_time = gcmd.get_float('STEP_TIME', self.step_time, minval=0.8,
                                    maxval=10.)
         knee_pct = gcmd.get_float('KNEE', self.knee_pct, above=0.)

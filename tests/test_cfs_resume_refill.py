@@ -39,6 +39,15 @@ class ResumeRefillTest(unittest.TestCase):
         self.assertNotIn("RESUME", cfs.gcode.scripts)
         self.assertEqual(cfs.status['last_runout_refill'], 'B')
 
+    def test_raises_to_the_chute_height_before_moving_there(self):
+        # a runout in the first layers pauses below purge_min_z
+        cfs = refill_cfs()
+        cfs._raise_to_gate = lambda: cfs.calls.append(('raise',))
+        cfs.cmd_CFS_RUNOUT_REFILL(FakeCmd(
+            {'SLOT': 'B', 'CONFIRM': 1, 'RESUME': 0}))
+        names = [c[0] for c in cfs.calls]
+        self.assertLess(names.index('raise'), names.index('purge_pos'))
+
     def test_a_failure_raises_so_the_macro_stops(self):
         cfs = refill_cfs(load_fails=True)
         with self.assertRaisesRegex(RuntimeError, "stays paused"):

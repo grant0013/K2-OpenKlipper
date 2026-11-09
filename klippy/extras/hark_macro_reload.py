@@ -57,6 +57,15 @@ class MacroReload:
         "Reload macro G-code from the config files without a restart")
 
     def cmd_RELOAD_GCODE_MACROS(self, gcmd):
+        # Parsing the config blocks the reactor: on the K2's CPU that starves
+        # the step queue and the MCU shuts down (a print was lost this way).
+        print_stats = self.printer.lookup_object('print_stats', None)
+        if print_stats is not None:
+            state = print_stats.get_status(
+                self.printer.get_reactor().monotonic()).get('state')
+            if state in ('printing', 'paused'):
+                raise gcmd.error(
+                    "RELOAD_GCODE_MACROS: not while a print is %s" % (state,))
         # Parse the files the way Klipper does at startup, [include]s and
         # all. (A second PrinterConfig would re-register SAVE_CONFIG, and
         # PrinterConfig.read_config skips includes, so it saw only the

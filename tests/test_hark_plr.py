@@ -313,6 +313,57 @@ class HarkPLRTest(unittest.TestCase):
         self.assertIn("G1 Z5.400", text)
         self.assertNotIn("NOZZLE_WIPE", text)
 
+    def interrupted(self, excluded=None, z=None):
+        plr, objects, reactor = make()
+        self.start_print(plr, objects, reactor)
+        objects['virtual_sdcard'].next_file_position = 300
+        plr.after_line("G1 X1")
+        objects['toolhead'].est = 99.
+        reactor.now += 20
+        plr._tick(reactor.now)
+        objects['print_stats'].status['state'] = 'error'
+        plr.printer.shutdown = True
+        plr._tick(reactor.now + 1)
+        journal = plr._read_journal()
+        if excluded:
+            journal['excluded'] = excluded
+        if z is not None:
+            journal['max_z'] = z
+        return plr, objects, journal
+
+    def test_refuses_a_part_the_z_reference_would_hit(self):
+        # switches at Z 260 in this print's frame, bed raised 10 off them
+        plr, objects, journal = self.interrupted(z=251.)
+        objects['k2_z_align'].retract_dist = 10.
+        with self.assertRaisesRegex(ValueError, "into the nozzle"):
+            plr._validate(journal)
+
+    def test_a_part_clear_of_the_z_reference_resumes(self):
+        plr, objects, journal = self.interrupted(z=240.)
+        objects['k2_z_align'].retract_dist = 10.
+        self.assertEqual(plr._validate(journal), 'part.gcode')
+
+    def test_excluded_objects_are_applied_after_the_file_loads(self):
+        # M23 clears the excluded list
+        plr, objects, journal = self.interrupted(excluded=['CUBE_1'])
+        plr.journal = journal
+        gcode = objects['gcode']
+        gcode.scripts[:] = []
+
+        class Cmd(FakeGcode):
+            def get_int(self, name, default=None, **kw):
+                return 1
+
+            def error(self, msg):
+                return RuntimeError(msg)
+        plr.cmd_PLR_RESUME(Cmd())
+        text = "\n".join(gcode.scripts)
+        self.assertEqual(text.count("EXCLUDE_OBJECT NAME=CUBE_1"), 1)
+        self.assertLess(text.index("M26 S300"),
+                        text.index("EXCLUDE_OBJECT NAME=CUBE_1"))
+        self.assertLess(text.index("EXCLUDE_OBJECT NAME=CUBE_1"),
+                        text.index("M24"))
+
     def test_resume_needs_confirm(self):
         plr, objects, reactor = make()
 

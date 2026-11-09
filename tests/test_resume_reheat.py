@@ -34,8 +34,9 @@ def render(name, printer):
 
 
 def printer(nozzle_target, nozzle_temp, bed_target, bed_temp,
-            saved_nozzle=250., saved_bed=70.):
+            saved_nozzle=250., saved_bed=70., is_paused=True):
     return {
+        'pause_resume': {'is_paused': is_paused},
         'extruder': {'target': nozzle_target, 'temperature': nozzle_temp},
         'heater_bed': {'target': bed_target, 'temperature': bed_temp},
         'gcode_macro PAUSE': {'extruder_target': saved_nozzle,
@@ -78,8 +79,19 @@ class ResumeReheatTest(unittest.TestCase):
         out = render("RESUME", printer(0., 30., 0., 30., 0., 0.))
         self.assertEqual(out, ["_RESUME_LOAD", "RESUME_BASE"])
 
+    def test_resume_with_nothing_paused_heats_nothing(self):
+        out = render("RESUME", printer(0., 30., 0., 30., is_paused=False))
+        self.assertEqual(out, ["_RESUME_LOAD", "RESUME_BASE"])
+
+    def test_pausing_twice_does_not_lift_or_save_again(self):
+        # the first pause's targets stay, and the head stays parked
+        out = render("PAUSE", printer(0., 30., 70., 70.,
+                                      is_paused=True))
+        self.assertEqual(out, ["PAUSE_BASE"])
+
     def test_pause_saves_the_targets(self):
-        out = render("PAUSE", printer(250., 250., 70., 70.))
+        p = printer(250., 250., 70., 70., is_paused=False)
+        out = render("PAUSE", p)
         self.assertIn("SET_GCODE_VARIABLE MACRO=PAUSE VARIABLE=extruder_target VALUE=250.0", out)
         self.assertIn("SET_GCODE_VARIABLE MACRO=PAUSE VARIABLE=bed_target VALUE=70.0", out)
         self.assertEqual(out[2], "PAUSE_BASE")
@@ -97,6 +109,55 @@ def paused(detected=False, enabled=True, state="paused", fitted=True,
                    'last_loaded_slot': last,
                    'change_pending': change_pending},
     }
+
+
+class PauseLatchTest(unittest.TestCase):
+    def runout(self, state):
+        return {
+            'print_stats': {'state': state},
+            'hark_cfs_slots': {'slots': {}, 'tool_map_external': False},
+            'k2_cfs': {'fitted': True, 'online': True, 'active_slot': None,
+                       'feed_slot': None, 'last_loaded_slot': None},
+            'gcode_macro _RUNOUT_REFILL': {'enabled': 1},
+        }
+
+    def test_runout_with_no_print_clears_the_pause(self):
+        for state in ("standby", "complete", "cancelled", "error"):
+            self.assertIn("CLEAR_PAUSE",
+                          render("_RUNOUT_REFILL", self.runout(state)))
+
+    def test_runout_on_a_paused_print_keeps_it(self):
+        self.assertNotIn("CLEAR_PAUSE",
+                         render("_RUNOUT_REFILL", self.runout("paused")))
+
+    def test_start_print_clears_a_latched_pause_first(self):
+        first = [l for l in macro_gcode("START_PRINT").splitlines()
+                 if not l.startswith('#')][0]
+        self.assertEqual(first, "CLEAR_PAUSE")
+
+
+class LoadTemperatureTest(unittest.TestCase):
+    def temp(self, state, target, saved=250., rec=220):
+        lines = macro_gcode("LOAD_FILAMENT").splitlines()
+        wanted = [l for l in lines if l.startswith(
+            ("{% set saved_t", "{% set temp ="))]
+        self.assertEqual(len(wanted), 2)
+        env = jinja2.Environment('{%', '%}', '{', '}')
+        return float(env.from_string(
+            "{% set target = t %}{% set rec_t = r %}" + "".join(wanted)
+            + "{temp}").render(
+                t=target, r=rec, params={}, printer={
+                    'print_stats': {'state': state},
+                    'gcode_macro PAUSE': {'extruder_target': saved}}))
+
+    def test_after_the_idle_timeout_loads_at_the_prints_temperature(self):
+        self.assertEqual(self.temp("paused", 0.), 250.)
+
+    def test_a_target_already_set_is_used(self):
+        self.assertEqual(self.temp("paused", 240.), 240.)
+
+    def test_outside_a_pause_uses_the_slot_record(self):
+        self.assertEqual(self.temp("standby", 0.), 220.)
 
 
 class ResumeLoadTest(unittest.TestCase):

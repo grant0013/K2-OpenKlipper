@@ -59,14 +59,16 @@ class FakeConfig:
         return self.values.get(name, default)
 
 
-def make(values=None, tmpdir=None):
+def make(values=None, tmpdir=None, stats=None):
     gcode = types.SimpleNamespace(register_command=lambda *a, **k: None)
     reactor = types.SimpleNamespace(monotonic=lambda: 0., pause=lambda t: t)
     heater = FakeHeater()
     pheaters = types.SimpleNamespace(
         lookup_heater=lambda n: heater,
         set_temperature=lambda h, t, w: None)
-    objs = {'gcode': gcode, 'heaters': pheaters}
+    objs = {'gcode': gcode, 'heaters': pheaters,
+            'print_stats': types.SimpleNamespace(
+                get_status=lambda t: stats or {'state': 'standby'})}
     printer = types.SimpleNamespace(
         get_reactor=lambda: reactor,
         lookup_object=lambda n, d=None: objs.get(n, d),
@@ -75,6 +77,44 @@ def make(values=None, tmpdir=None):
                                 if tmpdir else ''})
     mod = bp.HarkBedPower(FakeConfig(printer, values))
     return mod, heater
+
+
+class Gcmd:
+    def __init__(self):
+        self.info = []
+
+    def get_int(self, name, default=None, **kw):
+        return 0
+
+    def respond_info(self, msg):
+        self.info.append(msg)
+
+    def error(self, msg):
+        return RuntimeError(msg)
+
+
+class CalibrateGuardTest(unittest.TestCase):
+    def run_it(self, stats):
+        mod, heater = make(stats=stats)
+        mod.heater = heater
+        mod.measure = lambda g: 0.5
+        mod.apply = lambda v: None
+        mod.cmd_BED_POWER_CALIBRATE(Gcmd())
+
+    def test_runs_inside_start_print(self):
+        # virtual_sdcard says "printing" before START_PRINT runs
+        self.run_it({'state': 'printing', 'print_duration': 0.})
+
+    def test_refused_once_the_print_has_begun(self):
+        with self.assertRaisesRegex(RuntimeError, "Not during a print"):
+            self.run_it({'state': 'printing', 'print_duration': 12.})
+
+    def test_refused_while_paused(self):
+        with self.assertRaisesRegex(RuntimeError, "Not during a print"):
+            self.run_it({'state': 'paused', 'print_duration': 0.})
+
+    def test_runs_when_idle(self):
+        self.run_it({'state': 'standby'})
 
 
 class ApplyTest(unittest.TestCase):

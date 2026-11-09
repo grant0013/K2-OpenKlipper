@@ -209,7 +209,12 @@ class HarkBedPower:
             raise gcmd.error("No heater_bed")
         ps = self.printer.lookup_object('print_stats').get_status(
             self.reactor.monotonic())
-        if ps.get('state') in ('printing', 'paused'):
+        # virtual_sdcard reports "printing" before it runs START_PRINT, and
+        # _BED_POWER_AUTO in START_PRINT is this test's automatic caller:
+        # allow it until the first extrusion (print_duration starts then)
+        starting = (ps.get('state') == 'printing'
+                    and ps.get('print_duration', 1.0e9) == 0.)
+        if ps.get('state') in ('printing', 'paused') and not starting:
             raise gcmd.error("Not during a print")
         save = gcmd.get_int('SAVE', 1, minval=0, maxval=1)
         slope = self.measure(gcmd)

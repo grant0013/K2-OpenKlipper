@@ -105,6 +105,34 @@ def run(watch, start, seconds, step=3.):
     return t
 
 
+class HomingCountTest(unittest.TestCase):
+    def test_a_home_in_progress_keeps_the_bus_quiet(self):
+        watch, _ = make()
+        watch._homing_begin(None, [])
+        self.assertTrue(watch.bus_quiet(30.))
+        self.assertEqual(watch.homing, 1)
+
+    def test_a_finished_home_releases_the_bus(self):
+        watch, _ = make()
+        watch._homing_begin(None, [])
+        watch._homing_end(None, [])
+        self.assertFalse(watch.bus_quiet(30.))
+
+    def test_a_failed_home_is_cleared_by_motors_off(self):
+        # G28 failing sends motor_off and never home_rails_end
+        watch, _ = make()
+        watch._homing_begin(None, [])
+        watch._motors_off()
+        self.assertEqual(watch.homing, 0)
+        self.assertFalse(watch.bus_quiet(30.))
+
+    def test_a_stale_count_cannot_stop_motor_watching(self):
+        watch, _ = make()
+        watch._homing_begin(None, [])
+        self.assertFalse(watch.bus_quiet(MODULE.HOMING_STALE + 10.))
+        self.assertEqual(watch.homing, 0)
+
+
 class HotendFanCheckTest(unittest.TestCase):
     def test_fan_without_a_tachometer_is_not_watched(self):
         watch, gcode = make()
@@ -132,7 +160,8 @@ class HotendFanCheckTest(unittest.TestCase):
         watch, gcode = make()
         watch.hotend_fan.rpm = 0
         run(watch, 0., 40.)
-        self.assertEqual(gcode.scripts, ["PAUSE"])
+        # paused, and the nozzle does not sit hot with no heatsink airflow
+        self.assertEqual(gcode.scripts, ["PAUSE\nM104 S0"])
         self.assertIn("hotend fan", gcode.raw[-1])
 
     def test_back_to_full_after_probing_gets_spinup_time(self):

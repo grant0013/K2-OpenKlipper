@@ -274,7 +274,10 @@ class PAPressureLog:
             self.streaming = False
         self._pull_moves()
         name = gcmd.get('NAME', 'pa_log')
-        base = self._write_csv(name)
+        try:
+            base = self._write_csv(name)
+        except OSError as exc:
+            raise gcmd.error("PA log could not be written: %s" % (exc,))
         gcmd.respond_info(
             "PA log: %d pressure samples (%d windows), "
             "%d extruder moves, %d marks -> %s_*"
@@ -328,6 +331,8 @@ class PAPressureLog:
                 raise gcmd.error("PA analysis failed: %s"
                                  % err.decode(errors='replace')[-300:])
             res = json.loads(out.decode())
+        except (OSError, ValueError) as exc:
+            raise gcmd.error("PA analysis failed: %s" % (exc,))
         finally:
             self.analysing = False
         res['name'] = name
