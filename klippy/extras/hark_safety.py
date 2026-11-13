@@ -114,7 +114,8 @@ class HarkSafety:
             # for the rest of the session
             logging.info("hark_safety: stale homing count cleared")
             self.homing = 0
-        armed = bool(getattr(self.bus, 'stall_armed', False))
+        armed = bool(getattr(self.bus, 'stall_armed', False)
+                     or getattr(self.bus, 'calibrating', False))
         changed = max(self.homing_changed,
                       getattr(self.bus, 'stall_changed', 0.))
         return (armed or self.homing > 0

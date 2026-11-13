@@ -41,7 +41,7 @@ messages are affected; nothing has been changed.
 | Opcode | Use |
 | --- | --- |
 | 01 | reboot |
-| 03 / 04 | encoder / electrical-offset calibration (factory procedures) |
+| 03 / 04 | encoder / electrical-offset calibration; 04 is `MOTOR_CALIBRATE` (below) |
 | 05 | control |
 | 06 | system parameters: read, write, end (below) |
 | 07 | **flash parameters: do not use** |
@@ -203,7 +203,40 @@ Rules for any motor experiment:
 - idle-test for at least 5 minutes with periodic reads before walking away
 - restore the stock value before leaving the printer idle or starting a print
 - never use opcode 07 (flash)
-- never write the calibration values (0x09, 0x0a, 0x19)
+- never write the calibration values (0x09, 0x0a, 0x19) by hand: only the
+  motor's own calibration (`MOTOR_CALIBRATE`) changes them
+
+## Calibration (MOTOR_CALIBRATE)
+
+Electrical-offset calibration of one X/Y motor, for a motor that reads a
+near-zero offset at wake, or after a motor, encoder or belt problem (stock
+Creality Hi faults such as CY2577 "Y-axis homing abnormality"). Off unless
+`calibration: True` is set in `[k2_motor_bus]`.
+
+```
+MOTOR_CALIBRATE MOTOR=Y              # turns the motors off and explains
+MOTOR_CALIBRATE MOTOR=Y CONFIRM=1    # within 5 minutes: runs it
+```
+
+- Refused during or paused in a print, while stall homing is armed, or
+  before the motors are awake.
+- The axis must be free: the motor turns its own shaft. Printhead near the
+  middle; bed near the middle of Y on a bed-slinger (Hi), lowered on a K2.
+  Don't power off while it runs.
+- Request `00 04 00`, one answer after up to `calibration_timeout` (60 s):
+  `<status u8> <max deviation f32 deg> <mean pulse f32>`, status 1 = ok.
+  The motor stores the new offset itself; nothing is sent with opcode 07.
+- 0x09 / 0x0a / 0x19 are read before and after and shown; the wake's
+  near-zero warning is cleared when the new offset is real. hark_safety and
+  the temperature poll keep off the bus meanwhile. Home again afterwards.
+- Encoder calibration (`00 03 00`, reply byte 0x0c = stage 1 done) is not
+  sent: stock only runs it on the extruder motor, with a power cycle before
+  the offset stage.
+
+The frame layouts come from Jacob10383's K2 Plus firmware
+(`extras/motor_control.py`, GPLv3). They have not yet been checked against
+a stock capture: capture `MOTOR_ELEC_OFFSET_CALIBRATE` on stock firmware
+(Creality Hi or K2) before relying on it.
 
 ## Firmware updates
 

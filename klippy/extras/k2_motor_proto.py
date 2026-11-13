@@ -38,6 +38,8 @@ BROADCAST_ADDRS = (0xfe, 0xff)
 # latched at wake); the CFS boxes from 0x01..0x04.
 MOTOR_ADDRS = range(0x81, 0x90)
 
+FUNC_ENCODER_CALIBRATE = 0x03
+FUNC_ELEC_OFFSET_CALIBRATE = 0x04
 FUNC_SYS_PARAM = 0x06
 FUNC_GET = 0x08
 FUNC_PROTECTION = 0x0c
@@ -91,6 +93,21 @@ WARNING_CODE_LABELS = {
 # not to use the motor then).
 CALIBRATION_PARAM_IDS = (0x09, 0x19)
 CALIBRATION_NEAR_ZERO = 0.15
+
+# Electrical-offset calibration (request 00 04 00). The motor turns its own
+# shaft, works out the offset, stores it and answers when done:
+#   payload = status (u8, 1 = ok) + max deviation (f32 LE, degrees)
+#             + mean pulse (f32 LE, the new offset, param 09)
+# Encoder calibration (00 03 00) answers one result byte; 0x0c = stage 1
+# done. Stock only runs it on the extruder motor and asks for a power cycle
+# before the offset stage, so k2_motor_bus does not send it yet.
+# Layouts from Jacob10383's K2 Plus custom firmware (extras/motor_control.py
+# elec_offset_calibrate, encoder_calibrate_official and
+# _decode_calibration_payload), GPLv3. Not yet checked against a stock
+# capture on the Creality Hi.
+CALIBRATE_REQUEST = 0x00
+CALIBRATION_OK = 0x01
+ENCODER_STAGE1_DONE = 0x0c
 
 
 def crc8(data):
@@ -255,3 +272,23 @@ def decode_float(payload):
 def is_near_zero_calibration(value):
     return value is not None and abs(float(value)) <= CALIBRATION_NEAR_ZERO \
         + 1e-6
+
+
+def elec_offset_request():
+    return (0x00, FUNC_ELEC_OFFSET_CALIBRATE, CALIBRATE_REQUEST)
+
+
+def decode_elec_offset_reply(frame):
+    """Decode a parsed reply to 00 04 00. ok is True only for status 1 with
+    both floats present; a short payload keeps what it has."""
+    payload = bytes(frame['payload'])
+    status = payload[0] if payload else None
+    max_dev = mean_pulse = None
+    if len(payload) >= 9:
+        max_dev = struct.unpack('<f', payload[1:5])[0]
+        mean_pulse = struct.unpack('<f', payload[5:9])[0]
+    return {'status_code': status,
+            'ok': status == CALIBRATION_OK and mean_pulse is not None,
+            'max_deviation_deg': max_dev,
+            'mean_pulse': mean_pulse,
+            'frame_status': decode_frame_status(frame['status'])}

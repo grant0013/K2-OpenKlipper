@@ -106,10 +106,21 @@
 #   MOTOR_TEMPS                     - read the X/Y/E controller temperatures
 #   MOTOR_E_ADDR                    - ask the extruder controller its address
 #                                     (broadcast 00 0e 02); diagnostic only
+#   MOTOR_CALIBRATE MOTOR=x|y [CONFIRM=1]
+#                                   - electrical-offset calibration of one
+#                                     X/Y motor (00 04 00). The first call
+#                                     turns the motors off and explains; the
+#                                     same command with CONFIRM=1 within
+#                                     5 minutes runs it. Off unless
+#                                     calibration: True. Never during a print.
+#   #calibration: False      - allow MOTOR_CALIBRATE
+#   #calibration_timeout: 60 - seconds to wait for the motor's answer
 #
 # Reply validation, the protection, stall mode, temperature and address
-# reads and the fault recovery: portions adapted from Jacob10383's K2 Plus
-# custom firmware (https://github.com/Jacob10383/k2-plus-custom-firmware,
+# reads, the fault recovery and the electrical-offset calibration (frame
+# layout, two-step confirm, motors off first): portions adapted from
+# Jacob10383's K2 Plus custom firmware
+# (https://github.com/Jacob10383/k2-plus-custom-firmware,
 # extras/motor_control.py and extras/serial_485.py), GPLv3. See also
 # k2_motor_proto.py.
 
@@ -141,6 +152,11 @@ GUARD_MODES = {'off': 'off', 'warn': 'warn', 'abort': 'abort'}
 READ_REQUESTS = ((0x0c, 0x0b), (0x06, 0x02), (0x11, 0x04))
 # A CFS command this recent means a load/unload is likely still running
 CFS_QUIET_TIME = 5.
+# Calibration parameters read before and after MOTOR_CALIBRATE: electrical
+# offset, phase order, offset error
+CALIBRATION_READ_IDS = (0x09, 0x0a, 0x19)
+# MOTOR_CALIBRATE CONFIRM=1 must follow the first call within this time
+CALIBRATION_CONFIRM_WINDOW = 300.
 TEMP_HYSTERESIS = 5.
 
 def is_read_request(addr, payload):
@@ -205,6 +221,15 @@ class K2MotorBus:
         self.motor_log = None
         self.e_reported_addr = None
         self.calibration_warnings = []
+        self.calibration_enabled = config.getboolean('calibration', False)
+        self.calibration_timeout = config.getfloat(
+            'calibration_timeout', 60., minval=10., maxval=180.)
+        # True while a motor runs a calibration: hark_safety and the
+        # temperature poll keep off the bus
+        self.calibrating = False
+        # (motor name, time) of the first MOTOR_CALIBRATE call
+        self._cal_pending = None
+        self.last_calibration = None
         self.last_faults = {}
         self.stall_armed = False
         self.stall_changed = 0.
@@ -267,6 +292,9 @@ class K2MotorBus:
                                desc="Sample a motor's live values to a CSV")
         gcode.register_command('MOTOR_LOG_STOP', self.cmd_MOTOR_LOG_STOP,
                                desc="Stop the motor log and write the CSV")
+        gcode.register_command('MOTOR_CALIBRATE', self.cmd_MOTOR_CALIBRATE,
+                               desc="Electrical-offset calibration of one "
+                                    "X/Y closed-loop motor (two steps)")
         self.printer.register_event_handler("klippy:disconnect",
                                             self._close)
 
@@ -983,6 +1011,11 @@ class K2MotorBus:
                 'temps': dict(self.temps),
                 'e_reported_addr': self.e_reported_addr,
                 'calibration_warnings': list(self.calibration_warnings),
+                'calibrating': self.calibrating,
+                'last_calibration': (
+                    None if self.last_calibration is None
+                    else {'motor': self.last_calibration['motor'],
+                          'ok': self.last_calibration['ok']}),
                 'bus_errors': dict(self.bus_errors)}
 
     # --- gcode ---
@@ -1085,6 +1118,154 @@ class K2MotorBus:
         else:
             msg = "0x%02x (as expected)" % (addr,)
         gcmd.respond_info("Extruder motor controller address: %s" % (msg,))
+
+    # --- calibration ---
+    def read_calibration_params(self, addr):
+        """{param id: float or None} for CALIBRATION_READ_IDS, then the end
+        of the parameter read (as the wake does)."""
+        values = {}
+        for pid in CALIBRATION_READ_IDS:
+            resp = self.xfer(addr, (0x00, proto.FUNC_SYS_PARAM, 0x02, pid))[1]
+            values[pid] = (struct.unpack('<f', resp[5:9])[0]
+                           if len(resp) >= 10 else None)
+        self.xfer(addr, END_PARAM_READ)
+        return values
+
+    def _calibration_block(self):
+        """Why a calibration can't run now, or None."""
+        stats = self.printer.lookup_object('print_stats', None)
+        if stats is not None:
+            state = stats.get_status(self.reactor.monotonic()).get('state')
+            if state in ('printing', 'paused'):
+                return "a print is %s" % (state,)
+        if self.stall_armed:
+            return "stall homing is armed (homing in progress?)"
+        if self.calibrating:
+            return "a calibration is already running"
+        if not self.motors_ready:
+            return "the motors are not awake (run MOTOR_INIT)"
+        return None
+
+    def _motors_off(self):
+        stepper_enable = self.printer.lookup_object('stepper_enable', None)
+        if stepper_enable is not None:
+            stepper_enable.motor_off()
+
+    def _refresh_calibration_warning(self, name, addr, offset):
+        tag = "motor %s (%02x)" % (name.upper(), addr)
+        self.calibration_warnings = [w for w in self.calibration_warnings
+                                     if not w.startswith(tag)]
+        if proto.is_near_zero_calibration(offset):
+            self.calibration_warnings.append(
+                "%s calibration offset (param 09) is near zero: it may not "
+                "be calibrated" % (tag,))
+
+    def calibrate_elec_offset(self, name):
+        """Run 00 04 00 on one X/Y motor with the motors off and nothing
+        else on the bus. Returns a dict with before/after params, the
+        decoded reply (None without a valid one) and the raw frames."""
+        addr = self.motor_addr(name)
+        toolhead = self.printer.lookup_object('toolhead', None)
+        if toolhead is not None:
+            toolhead.wait_moves()
+        self._motors_off()
+        before = self.read_calibration_params(addr)
+        faults_before = self.query_protection(name)
+        self.calibrating = True
+        self.stall_changed = self.reactor.monotonic()
+        try:
+            frame, resp = self.xfer(addr, proto.elec_offset_request(),
+                                    timeout=self.calibration_timeout,
+                                    check=True, retry=False)
+        finally:
+            self.calibrating = False
+            self.stall_changed = self.reactor.monotonic()
+        logging.info("k2_motor_bus: MOTOR_CALIBRATE %s sent %s resp %s",
+                     name, frame.hex(' '), resp.hex(' ') if resp else '(none)')
+        reply = None
+        try:
+            reply = proto.decode_elec_offset_reply(proto.parse_frame(resp))
+        except ValueError:
+            pass
+        after = self.read_calibration_params(addr)
+        faults_after = self.query_protection(name)
+        self._refresh_calibration_warning(name, addr, after.get(0x09))
+        result = {'motor': name, 'addr': addr, 'before': before,
+                  'after': after, 'reply': reply,
+                  'ok': bool(reply and reply['ok']),
+                  'faults_before': faults_before,
+                  'faults_after': faults_after,
+                  'sent': frame.hex(' '),
+                  'resp': resp.hex(' ') if resp else ''}
+        self.last_calibration = result
+        return result
+
+    @staticmethod
+    def _fmt(value, spec="%.4f"):
+        return '?' if value is None else spec % (value,)
+
+    def cmd_MOTOR_CALIBRATE(self, gcmd):
+        if not self.calibration_enabled:
+            raise gcmd.error(
+                "MOTOR_CALIBRATE is off: add 'calibration: True' to "
+                "[k2_motor_bus] (printer-overrides.cfg) and restart")
+        names = [n for n, a in self.bus_motors if n in STALL_MOTORS]
+        name = gcmd.get('MOTOR', '').lower()
+        if name not in names:
+            raise gcmd.error("MOTOR must be one of %s" % (", ".join(names),))
+        why = self._calibration_block()
+        if why is not None:
+            raise gcmd.error("MOTOR_CALIBRATE: not now, %s" % (why,))
+        now = self.reactor.monotonic()
+        pending = self._cal_pending
+        confirmed = (gcmd.get_int('CONFIRM', 0, minval=0, maxval=1)
+                     and pending is not None and pending[0] == name
+                     and now - pending[1] <= CALIBRATION_CONFIRM_WINDOW)
+        if not confirmed:
+            self._motors_off()
+            self._cal_pending = (name, now)
+            gcmd.respond_info(
+                "MOTOR_CALIBRATE %s: motors are now off. The motor will turn "
+                "its own shaft for up to %d s, so the axis must be free: "
+                "printhead near the middle, bed near the middle of Y on a "
+                "bed-slinger (Hi) or lowered on a K2, nothing against the "
+                "belts. Don't power off while it runs. When ready, run "
+                "MOTOR_CALIBRATE MOTOR=%s CONFIRM=1 within %d minutes. "
+                "Home again afterwards."
+                % (name.upper(), self.calibration_timeout, name.upper(),
+                   CALIBRATION_CONFIRM_WINDOW // 60))
+            return
+        self._cal_pending = None
+        gcmd.respond_info("MOTOR_CALIBRATE %s: calibrating, wait for the "
+                          "answer..." % (name.upper(),))
+        r = self.calibrate_elec_offset(name)
+        b, a, reply = r['before'], r['after'], r['reply']
+        lines = ["MOTOR_CALIBRATE %s (%02x): %s" % (
+            name.upper(), r['addr'],
+            "ok" if r['ok'] else
+            ("no valid answer" if reply is None
+             else "FAILED (status %s)" % (reply['status_code'],)))]
+        if reply is not None:
+            lines.append("max deviation %s deg, mean pulse %s"
+                         % (self._fmt(reply['max_deviation_deg']),
+                            self._fmt(reply['mean_pulse'])))
+        lines.append("offset (09) %s -> %s, offset error (19) %s -> %s, "
+                     "phase order (0a) %s -> %s"
+                     % (self._fmt(b.get(0x09)), self._fmt(a.get(0x09)),
+                        self._fmt(b.get(0x19)), self._fmt(a.get(0x19)),
+                        self._fmt(b.get(0x0a), "%g"),
+                        self._fmt(a.get(0x0a), "%g")))
+        lines.append("faults after: %s" % (
+            "no reply" if r['faults_after'] is None
+            else proto.describe_protection(r['faults_after']),))
+        if self.console_frames or not r['ok']:
+            lines.append("sent %s\nresp %s" % (r['sent'],
+                                               r['resp'] or '(none)'))
+        text = "\n".join(lines)
+        if r['ok']:
+            gcmd.respond_info(text + "\nHome all axes before moving.")
+        else:
+            raise gcmd.error(text)
 
     def cmd_MOTOR_INIT(self, gcmd):
         ok = self.wake_motors()
