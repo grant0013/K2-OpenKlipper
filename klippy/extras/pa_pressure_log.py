@@ -67,6 +67,7 @@ class PAPressureLog:
                                              minval=0, maxval=100000)
         self.analysing = False
         self.last_result = {}
+        self.high_hold = 0
         self.reset()
         self.printer.register_event_handler('klippy:ready', self._ready)
         for name, desc in (
@@ -220,7 +221,7 @@ class PAPressureLog:
                 return eventtime + self.period
             cfg = self.prtouch.cfg
             min_hold, max_hold = cfg.min_hold, cfg.max_hold
-            if self.client_mode:
+            if self.client_mode or self.high_hold:
                 min_hold = self.client_min_hold or min_hold
                 max_hold = self.client_max_hold or max_hold
             s.start_streaming(min_hold=min_hold, max_hold=max_hold,
@@ -246,6 +247,9 @@ class PAPressureLog:
         self.reset()
         # SRC=1 logs the raw ADC instead of the MCU's processed samples
         self.src = gcmd.get_int('SRC', 0, minval=0, maxval=1)
+        # HIGH_HOLD=1: raise the MCU's tap thresholds as for pa_tester, so a
+        # big flow step (the Hi's PA sweep) does not freeze the buffer
+        self.high_hold = gcmd.get_int('HIGH_HOLD', 0, minval=0, maxval=1)
         self.started_at = self.reactor.monotonic()
         self.pulled_to = self._now_print_time() - 1.
         self.timer = self.reactor.register_timer(self._poll, self.reactor.NOW)
