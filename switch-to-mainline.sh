@@ -89,7 +89,11 @@ NEWEST_SRC=$(ls -t "$MAINLINE"/klippy/chelper/*.c "$MAINLINE"/klippy/chelper/*.h
     && touch -r "$NEWEST_SRC" "$MAINLINE/klippy/chelper/c_helper.so"
 echo "starting mainline klippy..."
 echo "config: $CFG"
-taskset 0x2 /usr/share/klippy-env/bin/python \
+# Pin klippy to CPU1 where taskset exists (the K2); the Creality Hi's
+# firmware has no taskset, and without this klippy never started there
+PIN_CPU=
+command -v taskset >/dev/null 2>&1 && PIN_CPU="taskset 0x2"
+$PIN_CPU /usr/share/klippy-env/bin/python \
     "$MAINLINE/klippy/klippy.py" \
     "$CFG" \
     -l "$PDATA/logs/klippy.log" \
