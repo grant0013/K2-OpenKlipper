@@ -89,7 +89,7 @@ KZ_ALIGN_MEASURE CONFIRM=1
 ```
 
 Put the value it suggests in `printer-overrides.cfg` under `[k2_z_align]`
-`position_endstop:`. The stock Hi saved 294.6. A little low is safe; too high
+`position_endstop:`. The bench Hi measured 304.55 (stock's saved 294.6 is in its own frame). A little low is safe; too high
 is not.
 
 ## 6. Probe
