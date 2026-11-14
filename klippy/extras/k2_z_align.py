@@ -13,6 +13,16 @@ endstop_pin_z: PA15, PA8). endstop_pin takes a list: switch N belongs to
 stepper_z (N=0) or stepper_zN, and the MCU drives each motor to its own
 switch, so the bed also comes back level. KZ_ALIGN_MEASURE finds the Z of
 the switches on a printer whose position_endstop is not known yet.
+
+The Creality Hi (F018) uses the same MCU routine to drive its gantry UP to
+two optical switches at the top of Z (stock z_align: endstop_pin_z PB15,
+endstop_pin_z1 PB14, zd_up 0, zes_untrig 0). Its main-MCU firmware differs
+in three ways, all handled here: query_z_align has no safeDist field, there
+is no z_align_force_stop, and the speeds and distances count whole steps
+(step_edges: 1). It also has a second routine, z_align_up, which stock uses
+to lift the gantry a safe distance before X/Y homing (KZ_ALIGN_UP_SAFE,
+enabled by up_safe_dist). Stock repeats the switch move until the two motors
+stop within retry_tolerance steps of each other (retries / retry_tolerance).
 """
 
 import logging
@@ -49,6 +59,17 @@ class K2ZAlign:
         self.zd_up = config.getint("zd_up", 1, minval=0, maxval=1)
         self.zes_untrig = config.getint(
             "zes_untrig", 1, minval=0, maxval=1)
+        # The K2 MCU routine counts both step edges (2); the Hi's counts
+        # whole steps (1), as Creality's Hi z_align.py computes them.
+        self.step_edges = config.getint("step_edges", 2, minval=1, maxval=2)
+        # Repeat the switch move until the motors' reported difference
+        # (deltaError1, in steps) is under retry_tolerance. 0 = accept the
+        # first result (K2). Stock Hi: 7 tries, 10 steps.
+        self.retries = config.getint("retries", 0, minval=0, maxval=20)
+        self.retry_tolerance = config.getint("retry_tolerance", 0, minval=0)
+        # Hi: lift the gantry this far (or to the switches, if sooner) with
+        # the MCU z_align_up routine before X/Y homing. 0 = not used.
+        self.up_safe_dist = config.getfloat("up_safe_dist", 0., minval=0.)
 
         # (stepper name, step pin, dir pin, switch pin) per Z motor
         self.z_motors = []
@@ -69,7 +90,10 @@ class K2ZAlign:
         self.position_max = stepper.getfloat("position_max")
 
         self.oid = self.mcu.create_oid()
+        self.up_oid = self.mcu.create_oid() if self.up_safe_dist else None
         self.query_cmd = None
+        self.query_has_safe = True
+        self.up_query_cmd = None
         self.abort_cmd = None
         self.last_flag = None
         self.last_delta = None
@@ -86,6 +110,9 @@ class K2ZAlign:
         self.mcu.register_config_callback(self._build_config)
         self.mcu.register_serial_response(
             self._handle_z_align_status, _RESP_Z_ALIGN, self.oid)
+        if self.up_oid is not None:
+            self.mcu.register_serial_response(
+                self._handle_z_align_status, _RESP_Z_ALIGN, self.up_oid)
 
         buttons = self.printer.load_object(config, "buttons")
         buttons.register_buttons(self.endstop_pins, self._handle_switch)
@@ -102,6 +129,10 @@ class K2ZAlign:
         self.gcode.register_command(
             "KZ_ALIGN_MEASURE", self.cmd_KZ_ALIGN_MEASURE,
             desc="Find the Z where the bottom switches trigger (Z homed)")
+        if self.up_oid is not None:
+            self.gcode.register_command(
+                "KZ_ALIGN_UP_SAFE", self.cmd_KZ_ALIGN_UP_SAFE,
+                desc="Lift Z a safe distance with the MCU z_align_up routine")
         self.printer.register_event_handler(
             "klippy:shutdown", self._handle_shutdown)
         self.printer.register_event_handler(
@@ -119,10 +150,39 @@ class K2ZAlign:
                 "zd_up=%d zes_pin=%s zes_untrig=%d"
                 % (self.oid, index, step_pin, dir_pin, self.zd_up, pin,
                    self.zes_untrig))
-        self.query_cmd = self.mcu.lookup_command(
-            "query_z_align oid=%c enable=%c quickSpeed=%u slowSpeed=%u "
-            "risingDist=%u filterCnt=%c safeDist=%u")
-        self.abort_cmd = self.mcu.lookup_command("z_align_force_stop oid=%c")
+        if self.up_oid is not None:
+            self.mcu.add_config_cmd("config_z_align_up oid=%d"
+                                    % (self.up_oid,))
+            for index, (name, step_pin, dir_pin, pin) in enumerate(
+                    self.z_motors):
+                self.mcu.add_config_cmd(
+                    "config_z_align_up_add oid=%d z_indx=%d zs_pin=%s "
+                    "zd_pin=%s zd_up=%d zes_pin=%s zes_untrig=%d"
+                    % (self.up_oid, index, step_pin, dir_pin, self.zd_up,
+                       pin, self.zes_untrig))
+            self.up_query_cmd = self.mcu.lookup_command(
+                "query_z_align_up oid=%c enable=%c quickSpeed=%u "
+                "slowSpeed=%u risingDist=%u filterCnt=%c")
+        # K2 firmware takes a safeDist field; the Hi's does not
+        try:
+            self.query_cmd = self.mcu.lookup_command(
+                "query_z_align oid=%c enable=%c quickSpeed=%u slowSpeed=%u "
+                "risingDist=%u filterCnt=%c safeDist=%u")
+            self.query_has_safe = True
+        except Exception:
+            self.query_cmd = self.mcu.lookup_command(
+                "query_z_align oid=%c enable=%c quickSpeed=%u slowSpeed=%u "
+                "risingDist=%u filterCnt=%c")
+            self.query_has_safe = False
+        try:
+            self.abort_cmd = self.mcu.lookup_command(
+                "z_align_force_stop oid=%c")
+        except Exception:
+            # Hi: no stop command. _abort() turns the motors off instead.
+            self.abort_cmd = None
+        logging.info("k2_z_align: query safeDist=%s force_stop=%s up=%s",
+                     self.query_has_safe, self.abort_cmd is not None,
+                     self.up_query_cmd is not None)
 
     def _handle_switch(self, eventtime, state):
         # With zes_untrig=1, a switch pin is low while the optical switch is
@@ -144,26 +204,44 @@ class K2ZAlign:
             except Exception:
                 logging.exception("k2_z_align: shutdown abort failed")
 
+    def _distance_steps(self, distance):
+        step_distance = self.rotation_distance / (200.0 * self.microsteps)
+        return int(distance / step_distance) * self.step_edges
+
     def _timings(self):
-        # Match the shipping K2 host calculation byte-for-byte. The custom MCU
-        # routine toggles step pins directly and uses its own two-edge scale.
+        # Match the shipping host calculation byte-for-byte. The custom MCU
+        # routine toggles step pins directly: the K2 firmware counts both
+        # edges (step_edges 2), the Hi's whole steps (step_edges 1).
         clock_freq = self.mcu.get_constant_float("CLOCK_FREQ")
         step_distance = self.rotation_distance / (200.0 * self.microsteps)
 
         def speed_ticks(speed):
-            return int(clock_freq * step_distance / speed / 2.0)
-
-        def distance_steps(distance):
-            return int(distance / step_distance) * 2
+            return int(clock_freq * step_distance / speed / self.step_edges)
 
         return (speed_ticks(self.quick_speed),
                 speed_ticks(self.slow_speed),
-                distance_steps(self.rising_dist),
-                distance_steps(self.safe_dist))
+                self._distance_steps(self.rising_dist),
+                self._distance_steps(self.safe_dist))
+
+    def _send_query(self, enable, quick, slow, rising, safe):
+        args = [self.oid, enable, quick, slow, rising, self.filter_count]
+        if self.query_has_safe:
+            args.append(safe)
+        self.query_cmd.send(args)
 
     def _abort(self):
         if self.abort_cmd is not None:
             self.abort_cmd.send([self.oid])
+            if self.up_oid is not None:
+                self.abort_cmd.send([self.up_oid])
+        elif self.active:
+            # No stop command in this MCU firmware (Hi). Stock turns the
+            # motors off (M84) when its z_align times out; the Z motors
+            # share their enable line with X/Y, so this stops everything.
+            try:
+                self.gcode.run_script_from_command("M84")
+            except Exception:
+                logging.exception("k2_z_align: M84 abort failed")
 
     def get_status(self, eventtime):
         return {
@@ -279,12 +357,12 @@ class K2ZAlign:
         self._abort()
         gcmd.respond_info("K2 Z bottom-reference abort sent")
 
-    def cmd_KZ_ALIGN_BOTTOM(self, gcmd):
+    def _check_motion_allowed(self, gcmd, name):
         if not self.allow_motion:
             raise gcmd.error(
                 "K2 Z bottom-reference motion is disabled in the config")
         if gcmd.get_int("CONFIRM", 0, minval=0, maxval=1) != 1:
-            raise gcmd.error("KZ_ALIGN_BOTTOM requires CONFIRM=1")
+            raise gcmd.error("%s requires CONFIRM=1" % (name,))
         if self.active:
             raise gcmd.error("K2 Z bottom-reference motion is already active")
 
@@ -316,7 +394,9 @@ class K2ZAlign:
                         "is %s (homed=%s total=%.3fs print=%.3fs)"
                         % (state, homed or "none", total_duration,
                            print_duration))
+        return toolhead
 
+    def _start_motion(self, toolhead):
         toolhead.wait_moves()
         # The MCU routine drives the Z step pin directly, outside Klipper's
         # trap queue. From this point until a successful optical reference,
@@ -325,32 +405,82 @@ class K2ZAlign:
         for name, step_pin, dir_pin, pin in self.z_motors:
             self.gcode.run_script_from_command(
                 "SET_STEPPER_ENABLE STEPPER=%s ENABLE=1" % (name,))
-        quick, slow, rising, safe = self._timings()
         self.last_flag = 0
         self.last_delta = 0
-        self.completion = self.reactor.completion()
         self.active = True
+
+    def _wait_result(self, gcmd, send, what):
+        """Send one MCU move and wait for its z_align_status. Returns the
+        reported delta; raises on a timeout or a failure flag."""
+        self.completion = self.reactor.completion()
+        started = self.reactor.monotonic()
+        send()
+        result = self.completion.wait(started + self.timeout)
+        self.completion = None
+        if result is None:
+            self._abort()
+            raise gcmd.error("%s timed out after %.1fs; %s"
+                             % (what, self.timeout,
+                                "abort sent" if self.abort_cmd is not None
+                                else "motors turned off"))
+        flag, delta = result
+        if flag != 1:
+            self._abort()
+            raise gcmd.error("%s failed: flag=%d delta=%d"
+                             % (what, flag, delta))
+        return delta
+
+    def cmd_KZ_ALIGN_UP_SAFE(self, gcmd):
+        """Hi: lift the gantry up_safe_dist, or to the switches if they come
+        first, before X/Y homing (stock UP_SAFE_Z). Z stays unhomed."""
+        toolhead = self._check_motion_allowed(gcmd, "KZ_ALIGN_UP_SAFE")
+        if any(self.switches):
+            gcmd.respond_info("KZ_ALIGN_UP_SAFE: already at the switches (%s)"
+                              % (self._describe_switches(),))
+            return
+        self._start_motion(toolhead)
+        quick, slow, _, _ = self._timings()
+        rising = self._distance_steps(self.up_safe_dist)
+        logging.info("k2_z_align: up oid=%d quick=%d slow=%d rising=%d "
+                     "filter=%d", self.up_oid, quick, slow, rising,
+                     self.filter_count)
+        try:
+            self._wait_result(gcmd, lambda: self.up_query_cmd.send(
+                [self.up_oid, 1, quick, slow, rising, self.filter_count]),
+                "Z safe lift")
+            gcmd.respond_info("KZ_ALIGN_UP_SAFE: Z lifted (Z not homed)")
+        finally:
+            self.active = False
+            self.completion = None
+
+    def cmd_KZ_ALIGN_BOTTOM(self, gcmd):
+        toolhead = self._check_motion_allowed(gcmd, "KZ_ALIGN_BOTTOM")
+        self._start_motion(toolhead)
+        quick, slow, rising, safe = self._timings()
         started = self.reactor.monotonic()
         logging.info(
             "k2_z_align: start oid=%d quick=%d slow=%d rising=%d "
-            "filter=%d safe=%d timeout=%.1f",
+            "filter=%d safe=%d timeout=%.1f safeDist=%s",
             self.oid, quick, slow, rising, self.filter_count, safe,
-            self.timeout)
+            self.timeout, self.query_has_safe)
         try:
-            self.query_cmd.send(
-                [self.oid, 1, quick, slow, rising, self.filter_count, safe])
-            result = self.completion.wait(started + self.timeout)
-            if result is None:
-                self._abort()
-                raise gcmd.error(
-                    "K2 Z bottom reference timed out after %.1fs; abort sent"
-                    % (self.timeout,))
-            flag, delta = result
-            if flag != 1:
-                self._abort()
-                raise gcmd.error(
-                    "K2 Z bottom reference failed: flag=%d delta=%d"
-                    % (flag, delta))
+            attempt = 0
+            while True:
+                delta = self._wait_result(
+                    gcmd, lambda: self._send_query(1, quick, slow, rising,
+                                                   safe),
+                    "K2 Z bottom reference")
+                if (not self.retry_tolerance
+                        or abs(delta) < self.retry_tolerance):
+                    break
+                attempt += 1
+                if attempt > self.retries:
+                    raise gcmd.error(
+                        "K2 Z bottom reference: the Z motors still differ by "
+                        "%d steps after %d tries (limit %d)"
+                        % (delta, attempt, self.retry_tolerance))
+                logging.info("k2_z_align: delta %d >= %d, try %d",
+                             delta, self.retry_tolerance, attempt + 1)
 
             now = toolhead.get_position()
             now[2] = self.position_endstop
