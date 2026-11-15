@@ -15,10 +15,60 @@ SAMPLE_COUNT = 8
 REPORT_TIME = 0.300
 RANGE_CHECK_COUNT = 4
 
+# Creality's sensor-to-real temperature correction (stock Hi/K2 firmware,
+# klippy/extras/adc_temperature.py). Stock Hi turns it on for the bed only:
+#   temp_offset_flag: True
+#   adc_temp_list: 25,40,53,69,83,108     (what the thermistor table says)
+#   actual_temp_list: 25,38,50,65,80,110  (what the bed really is)
+# so a target of 80 heats until the sensor reads 83. Readings between points
+# are interpolated, above the last point the last slope continues, and below
+# the first point the reading is used as it is (as stock does).
+class TempCorrection:
+    def __init__(self, sensor_temps, actual_temps):
+        if len(sensor_temps) != len(actual_temps) or len(sensor_temps) < 2:
+            raise ValueError("adc_temp_list and actual_temp_list need the"
+                             " same number of points (at least 2)")
+        pairs = list(zip(sensor_temps, actual_temps))
+        for (s0, a0), (s1, a1) in zip(pairs, pairs[1:]):
+            if s1 <= s0 or a1 <= a0:
+                raise ValueError("adc_temp_list and actual_temp_list must"
+                                 " both increase")
+        self.sensor = list(sensor_temps)
+        self.actual = list(actual_temps)
+    def _seg(self, keys, value):
+        i = bisect.bisect_right(keys, value) - 1
+        return max(0, min(i, len(keys) - 2))
+    @staticmethod
+    def _lerp(x, x0, x1, y0, y1):
+        return y0 + (x - x0) * (y1 - y0) / (x1 - x0)
+    def correct(self, sensor_temp):
+        if sensor_temp <= self.sensor[0]:
+            return sensor_temp
+        i = self._seg(self.sensor, sensor_temp)
+        return self._lerp(sensor_temp, self.sensor[i], self.sensor[i + 1],
+                          self.actual[i], self.actual[i + 1])
+    def uncorrect(self, actual_temp):
+        # Sensor reading that corrects to actual_temp (for the ADC limits)
+        if actual_temp <= self.actual[0]:
+            return actual_temp
+        i = self._seg(self.actual, actual_temp)
+        return self._lerp(actual_temp, self.actual[i], self.actual[i + 1],
+                          self.sensor[i], self.sensor[i + 1])
+
+def load_temp_correction(config):
+    if not config.getboolean('temp_offset_flag', False):
+        return None
+    try:
+        return TempCorrection(config.getfloatlist('adc_temp_list', sep=','),
+                              config.getfloatlist('actual_temp_list', sep=','))
+    except ValueError as e:
+        raise config.error("%s: %s" % (config.get_name(), e))
+
 # Interface between ADC and heater temperature callbacks
 class PrinterADCtoTemperature:
     def __init__(self, config, adc_convert):
         self.adc_convert = adc_convert
+        self.correction = load_temp_correction(config)
         ppins = config.get_printer().lookup_object('pins')
         self.mcu_adc = ppins.setup_pin('adc', config.get('sensor_pin'))
         self.mcu_adc.setup_adc_callback(self.adc_callback)
@@ -31,8 +81,14 @@ class PrinterADCtoTemperature:
     def adc_callback(self, samples):
         read_time, read_value = samples[-1]
         temp = self.adc_convert.calc_temp(read_value)
+        if self.correction is not None:
+            temp = self.correction.correct(temp)
         self.temperature_callback(read_time + SAMPLE_COUNT * SAMPLE_TIME, temp)
     def setup_minmax(self, min_temp, max_temp):
+        if self.correction is not None:
+            # min/max_temp are real temperatures; the MCU checks raw readings
+            min_temp = self.correction.uncorrect(min_temp)
+            max_temp = self.correction.uncorrect(max_temp)
         arange = [self.adc_convert.calc_adc(t) for t in [min_temp, max_temp]]
         min_adc, max_adc = sorted(arange)
         self.mcu_adc.setup_adc_sample(REPORT_TIME, SAMPLE_TIME, SAMPLE_COUNT,
