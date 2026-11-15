@@ -41,6 +41,14 @@ setup)
     [ -f "$DATA/config/moonraker.conf" ] || \
         sed "s#@HOME@#$HOME#g" "$OKL/host/hi/moonraker.conf" \
             > "$DATA/config/moonraker.conf"
+    # Key for HI_PA_CAL, which runs Creality's pa_compute on the Hi over SSH
+    if [ ! -f "$HOME/.ssh/id_hi_hostlink" ]; then
+        mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh"
+        ssh-keygen -q -t ed25519 -N "" -f "$HOME/.ssh/id_hi_hostlink" \
+            -C "$(hostname) hi-hostlink"
+        echo "NEW key for HI_PA_CAL: append this line to the Hi's /etc/dropbear/authorized_keys:"
+        cat "$HOME/.ssh/id_hi_hostlink.pub"
+    fi
     echo "config ready in $DATA/config"
     if [ ! -f "$RULE" ]; then
         echo "MISSING udev rule. Run once:"

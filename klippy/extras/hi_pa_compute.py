@@ -23,6 +23,16 @@
 #   HI_PA_COMPUTE NAME=<capture> [MATERIAL=PLA|PETG|ABS] [START=0.010]
 #                 [STEP=0.002] [COUNT=31] [SET=0|1]
 #
+# With Klipper on an external host (USB host-link, host/hi) pa_compute is
+# still only on the Hi, and it is an ARM program: set remote_host and the
+# capture is binned here, the CSV is copied to the Hi's /tmp and pa_compute
+# runs there over SSH (key login, no password):
+#   [hi_pa_compute]
+#   remote_host: root@192.168.3.96
+#   ssh_key: ~/.ssh/id_hi_hostlink
+# pa_compute answers -1 when it cannot find a PA in the trace; that is
+# reported as a failure, not turned into a PA.
+#
 # Copyright (C) 2026 Hark Tech. This file may be distributed under the terms
 # of the GNU GPLv3 license.
 
@@ -30,7 +40,9 @@ import json
 import logging
 import os
 import re
+import shlex
 import subprocess
+import tempfile
 import time
 
 PA_COMPUTE = "/usr/bin/pa_compute"
@@ -73,6 +85,23 @@ def write_stress_csv(path, binned, wall_end):
             f.write("%d,%d,%s\n" % (i, v, stamp))
 
 
+def ssh_argv(host, command, key=None):
+    """ssh command line for a non-interactive run on the Hi."""
+    argv = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+            "-o", "StrictHostKeyChecking=accept-new", "-o", "LogLevel=ERROR"]
+    if key:
+        argv += ["-i", os.path.expanduser(key)]
+    return argv + [host, command]
+
+
+def remote_compute_command(program, config_path, material, csv_path):
+    """Shell command run on the Hi: store the CSV from stdin where
+    pa_compute reads it, then run pa_compute from /tmp as stock does."""
+    return "cat > %s && cd /tmp && %s --path=%s --material_name=%s" % (
+        shlex.quote(csv_path), shlex.quote(program),
+        shlex.quote(config_path), shlex.quote(material))
+
+
 def map_result(value, material_cfg, start, step, count):
     """pa_compute's answer -> (round, PA of our sweep)."""
     strat = float(material_cfg.get("paStrat"))
@@ -91,6 +120,10 @@ class HiPACompute:
         self.config_path = config.get("pa_config", PA_CONFIG)
         self.csv_path = config.get("stress_csv", STRESS_CSV)
         self.bin_s = config.getfloat("bin_time", 0.1, minval=0.02, maxval=1.)
+        self.remote = config.get("remote_host", None)
+        self.ssh_key = config.get("ssh_key", None)
+        # pa_compute reads the CSV named in its own JSON (stock /tmp path)
+        self.remote_csv = config.get("remote_stress_csv", STRESS_CSV)
         self.last = {}
         self.gcode.register_command(
             "HI_PA_COMPUTE", self.cmd_HI_PA_COMPUTE,
@@ -109,18 +142,70 @@ class HiPACompute:
                 samples.append((float(t), int(v)))
         return samples, path
 
+    def _exec(self, argv, stdin_path=None, timeout=60.):
+        """Run argv without blocking the reactor; return (returncode,
+        stdout, stderr). stderr is kept apart (ssh prints warnings there)."""
+        with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+            stdin = open(stdin_path, "rb") if stdin_path else subprocess.DEVNULL
+            try:
+                proc = subprocess.Popen(argv, cwd="/tmp", stdin=stdin,
+                                        stdout=out, stderr=err)
+            except OSError as exc:
+                raise self.gcode.error("Cannot run %s: %s" % (argv[0], exc))
+            finally:
+                if stdin_path:
+                    stdin.close()
+            deadline = self.reactor.monotonic() + timeout
+            while proc.poll() is None:
+                if self.reactor.monotonic() > deadline:
+                    proc.kill()
+                    raise self.gcode.error("%s did not finish in %d s"
+                                           % (argv[0], timeout))
+                self.reactor.pause(self.reactor.monotonic() + 0.2)
+            out.seek(0)
+            err.seek(0)
+            return (proc.returncode, out.read().decode(errors="replace"),
+                    err.read().decode(errors="replace"))
+
+    def _ssh(self, command, stdin_path=None):
+        return self._exec(ssh_argv(self.remote, command, self.ssh_key),
+                          stdin_path)
+
+    def _material_cfg(self, material):
+        if self.remote:
+            rc, text, err = self._ssh("cat %s"
+                                      % (shlex.quote(self.config_path),))
+            if rc != 0:
+                raise self.gcode.error("Cannot read %s on %s: %s" % (
+                    self.config_path, self.remote, err.strip()[-200:]))
+        else:
+            if not os.access(self.program, os.X_OK):
+                raise self.gcode.error(
+                    "%s not found: this needs the Creality Hi's own firmware"
+                    " files (on an external host set remote_host)"
+                    % (self.program,))
+            try:
+                with open(self.config_path) as f:
+                    text = f.read()
+            except OSError as exc:
+                raise self.gcode.error("Cannot read %s: %s"
+                                       % (self.config_path, exc))
+        try:
+            return json.loads(text)[material]
+        except (ValueError, KeyError) as exc:
+            raise self.gcode.error("No %s in %s: %s"
+                                   % (material, self.config_path, exc))
+
     def _run(self, material):
-        proc = subprocess.Popen(
-            [self.program, "--path=%s" % (self.config_path,),
-             "--material_name=%s" % (material,)],
-            cwd="/tmp", stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        deadline = self.reactor.monotonic() + 60.
-        while proc.poll() is None:
-            if self.reactor.monotonic() > deadline:
-                proc.kill()
-                raise self.gcode.error("pa_compute did not finish in 60 s")
-            self.reactor.pause(self.reactor.monotonic() + 0.2)
-        return proc.communicate()[0].decode(errors="replace")
+        if self.remote:
+            rc, out, err = self._ssh(remote_compute_command(
+                self.program, self.config_path, material, self.remote_csv),
+                stdin_path=self.csv_path)
+        else:
+            rc, out, err = self._exec([self.program, "--path=%s" % (
+                self.config_path,), "--material_name=%s" % (material,)])
+        # pa_compute prints its errors (unknown material) on stdout
+        return out + err
 
     def cmd_HI_PA_COMPUTE(self, gcmd):
         name = gcmd.get("NAME")
@@ -133,15 +218,7 @@ class HiPACompute:
         step = gcmd.get_float("STEP", 0.002, above=0.)
         count = gcmd.get_int("COUNT", 31, minval=2)
         apply_pa = gcmd.get_int("SET", 0, minval=0, maxval=1)
-        if not os.access(self.program, os.X_OK):
-            raise gcmd.error("%s not found: this needs the Creality Hi's own"
-                             " firmware files" % (self.program,))
-        try:
-            with open(self.config_path) as f:
-                material_cfg = json.load(f)[material]
-        except (OSError, ValueError, KeyError) as exc:
-            raise gcmd.error("Cannot read %s for %s: %s"
-                             % (self.config_path, material, exc))
+        material_cfg = self._material_cfg(material)
         try:
             samples, src = self._read_capture(name)
         except OSError as exc:
@@ -152,13 +229,19 @@ class HiPACompute:
                              % (name, len(binned)))
         write_stress_csv(self.csv_path, binned, time.time())
         out = self._run(material)
-        logging.info("hi_pa_compute: %s %s -> %r", self.program, material,
-                     out)
+        logging.info("hi_pa_compute: %s%s %s -> %r", self.program,
+                     " on %s" % (self.remote,) if self.remote else "",
+                     material, out)
         m = RESULT_RE.search(out)
         if not m:
             raise gcmd.error("pa_compute gave no result: %s"
                              % (out.strip()[-300:],))
         value = float(m.group(1))
+        if value < 0:
+            raise gcmd.error(
+                "pa_compute (%s) found no pressure advance in the %s sweep "
+                "(answer %.4f). The trace is kept in %s; PA left as it was."
+                % (material, name, value, self.csv_path))
         rnd, pa = map_result(value, material_cfg, start, step, count)
         self.last = {"name": name, "material": material, "raw": value,
                      "round": rnd, "pa": pa, "samples": len(samples),
