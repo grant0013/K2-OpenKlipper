@@ -147,3 +147,24 @@ ssh hi 'sh /mnt/UDISK/okl-hi/switch-to-stock.sh; /etc/init.d/app restart'
 - PA and flow calibration macros (the K2's PA_CAL / FLOW_CAL), power-loss
   recovery, maintenance counters, fan tachometers (fan health), CFS
 - Creality's stock bed temperature correction table
+
+## OrcaSlicer profiles (Orca 2.5)
+
+`orca/` has a Hi set for OpenKlipper. Import all four with **File > Import >
+Import Configs** (Orca's own Creality Hi profiles must be installed; these
+build on them):
+
+| File | What it is |
+| --- | --- |
+| `Creality Hi OpenKlipper.json` | Printer. `START_PRINT`/`END_PRINT`, layer count for the screen, upload to Moonraker at 192.168.3.96:7125, no Creality timelapse or CFS G-code |
+| `0.20mm Standard @Creality Hi OpenKlipper.json` | Process, 0.20 mm (outer wall 150 mm/s) |
+| `0.16mm Optimal @Creality Hi OpenKlipper.json` | Process, 0.16 mm (outer wall and top 120 mm/s) |
+| `CR-PETG @Creality Hi OpenKlipper.json` | CR-PETG at 250 C with the printed PA (0.055); Orca's own CR-PETG sends 0.072 |
+
+Limits match the firmware: 300 mm/s, bed (Y) acceleration 2500. Orca 2.5
+caps every Klipper print move at the lowest of the printer's extruding, X
+and Y limits, so all print moves run at 2500 or less (outer walls and top
+2000, first layer 1000). The firmware caps only the bed; raising
+`machine_max_acceleration_y` and `_extruding` in the printer profile lets
+X-heavy moves go faster while the firmware still holds the bed to 2500, at
+the cost of less accurate time estimates.
