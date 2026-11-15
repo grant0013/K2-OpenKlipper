@@ -42,7 +42,26 @@ class CartKinematics:
                                               above=0., maxval=max_velocity)
         self.max_z_accel = config.getfloat('max_z_accel', max_accel,
                                            above=0., maxval=max_accel)
+        # Hark: per-axis X/Y limits for bed-slingers (Creality Hi). The bed
+        # is heavy; at the toolhead's max_accel its stops shift the printer.
+        # A move's accel is capped so its Y (or X) share stays under these.
+        self.max_x_accel = config.getfloat('max_x_accel', max_accel,
+                                           above=0., maxval=max_accel)
+        self.max_y_accel = config.getfloat('max_y_accel', max_accel,
+                                           above=0., maxval=max_accel)
+        self.max_accel = max_accel
+        self.printer.lookup_object('gcode').register_command(
+            'SET_KINEMATICS_LIMIT', self.cmd_SET_KINEMATICS_LIMIT,
+            desc=self.cmd_SET_KINEMATICS_LIMIT_help)
         self.limits = [(1.0, -1.0)] * 3
+    cmd_SET_KINEMATICS_LIMIT_help = "Set or report the per-axis X/Y accel"
+    def cmd_SET_KINEMATICS_LIMIT(self, gcmd):
+        self.max_x_accel = gcmd.get_float('X_ACCEL', self.max_x_accel,
+                                          above=0.)
+        self.max_y_accel = gcmd.get_float('Y_ACCEL', self.max_y_accel,
+                                          above=0.)
+        gcmd.respond_info("max_x_accel: %.0f  max_y_accel: %.0f"
+                          % (self.max_x_accel, self.max_y_accel))
     def get_steppers(self):
         return [s for rail in self.rails for s in rail.get_steppers()]
     def calc_position(self, stepper_positions):
@@ -109,7 +128,18 @@ class CartKinematics:
         if (xpos < limits[0][0] or xpos > limits[0][1]
             or ypos < limits[1][0] or ypos > limits[1][1]):
             self._check_endstops(move)
-        if not move.axes_d[2]:
+        axes_d = move.axes_d
+        if axes_d[0] or axes_d[1]:
+            accel = move.accel
+            if axes_d[0] and self.max_x_accel < accel:
+                accel = min(accel, self.max_x_accel * move.move_d
+                            / abs(axes_d[0]))
+            if axes_d[1] and self.max_y_accel < accel:
+                accel = min(accel, self.max_y_accel * move.move_d
+                            / abs(axes_d[1]))
+            if accel < move.accel:
+                move.limit_speed(move.max_cruise_v2 ** .5, accel)
+        if not axes_d[2]:
             # Normal XY move - use defaults
             return
         # Move with Z - update velocity and accel for slower Z axis
