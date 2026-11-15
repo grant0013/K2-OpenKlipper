@@ -173,6 +173,8 @@ def main():
                                20)
                     lx += DW + 0.9
     g.emit("EXCLUDE_OBJECT_END NAME=pa_pattern")
+    # Leave the centre value, not the last chevron's
+    g.emit("SET_PRESSURE_ADVANCE ADVANCE=%.4f" % centre)
     g.emit("G1 E-%.2f F2400\nG1 Z10 F600\nEND_PRINT" % RETRACT)
     out = a.o or ("Hi_pa_pattern_%dC_%03d-%03d.gcode" % (
         temp, round(pas[0] * 1000), round(pas[-1] * 1000)) if hi else
