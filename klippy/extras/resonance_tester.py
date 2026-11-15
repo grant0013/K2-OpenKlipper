@@ -194,6 +194,14 @@ class ResonanceTestExecutor:
         self.gcode.run_script_from_command(
             "SET_VELOCITY_LIMIT VELOCITY=%.f ACCEL=%.f MINIMUM_CRUISE_RATIO=0"
             % (max_velocity+0.5, max_accel+0.5,))
+        # Hark: per-axis X/Y accel caps (cartesian max_x/y_accel, the Hi's
+        # bed) would clip the test's accelerations and skew the result.
+        # Lift them for the test moves; the final stop respects them again.
+        kin = toolhead.get_kinematics()
+        old_axis_accel = None
+        if hasattr(kin, 'max_y_accel') and hasattr(kin, 'max_x_accel'):
+            old_axis_accel = (kin.max_x_accel, kin.max_y_accel)
+            kin.max_x_accel = kin.max_y_accel = max(max_accel, old_max_accel)
         input_shaper = self.printer.lookup_object('input_shaper', None)
         if input_shaper is not None and not gcmd.get_int('INPUT_SHAPING', 0):
             input_shaper.disable_shaping()
@@ -242,9 +250,16 @@ class ResonanceTestExecutor:
             last_t = next_t
             last_v = v
             last_freq = freq
+        decel_accel = old_max_accel
+        if old_axis_accel is not None:
+            kin.max_x_accel, kin.max_y_accel = old_axis_accel
+            dir_x, dir_y = axis.get_point(1.)[:2]
+            for cap, share in zip(old_axis_accel, (dir_x, dir_y)):
+                if abs(share) > 0.000001:
+                    decel_accel = min(decel_accel, cap / abs(share))
         if last_v:
             # Decelerate to a stop, continuing in the direction of motion
-            d_decel = .5 * last_v * abs(last_v) / old_max_accel
+            d_decel = .5 * last_v * abs(last_v) / decel_accel
             decel_X, decel_Y, decel_Z = axis.get_point(d_decel)
             toolhead.set_max_velocities(None, old_max_accel, None, None)
             toolhead.move([X + decel_X, Y + decel_Y, Z + decel_Z] + tpos[3:],
