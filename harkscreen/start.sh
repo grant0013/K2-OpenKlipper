@@ -6,7 +6,16 @@ PIDF=/tmp/harkscreen.pid
 # It has nothing to show without Creality's master-server, so stop it;
 # switch-to-stock.sh and uninstall.sh start it again.
 killall display-server 2>/dev/null
+DIR=/mnt/UDISK/harkscreen
+APP=$DIR/harkscreen.py
+# The Creality Hi's 2.8" panel (240 px wide framebuffer) gets the compact
+# 320x240 screen
+grep -q '^240,' /sys/class/graphics/fb0/virtual_size 2>/dev/null \
+    && APP=$DIR/harkscreen_hi.py
+# The Hi's firmware has no taskset
+PIN=""
+command -v taskset >/dev/null 2>&1 && PIN="taskset 0x1"
 cd /tmp
-taskset 0x1 nice -n 10 /usr/share/klippy-env/bin/python /mnt/UDISK/harkscreen/harkscreen.py >/tmp/harkscreen.log 2>&1 &
+$PIN nice -n 10 /usr/share/klippy-env/bin/python $APP >/tmp/harkscreen.log 2>&1 &
 echo $! > $PIDF
-echo "harkscreen started, pid $(cat $PIDF)"
+echo "harkscreen started ($(basename $APP)), pid $(cat $PIDF)"
