@@ -237,6 +237,14 @@ def decode_rfid_records(p):
 
 
 class K2CFS:
+    # Layout defaults (K2): which way the cutter lever is rammed, how far X
+    # may go that way, and how the nozzle is wiped after a flush. Set from
+    # the config in __init__.
+    cutter_dir = -1.
+    cutter_x_limit = -11.
+    wipe_style = 'brush'
+    clean_passes = 3
+    cutter_return_timeout = 0.
     # name -> (payload bytes, decoder method name)
     # Payload EXCLUDES addr/len/crc (k2_motor_bus builds the frame).
     # Opcode map mined 2026-07-07 from 6 days / ~205k transactions of stock
@@ -365,7 +373,15 @@ class K2CFS:
             'purge_followup_chunk_length', 70., above=0., maxval=70.)
         self.purge_minimum_actual_length = config.getfloat(
             'purge_minimum_actual_length', 160.,
-            minval=160., maxval=160.)
+            minval=100., maxval=160.)
+        # brush: the K2's silicone brush behind the bed (swing, two circles,
+        # passes). strip: a PTFE strip beside the chute (Creality Hi), plain
+        # passes between purge_x and clean_right_x.
+        self.wipe_style = config.get('wipe_style', 'brush').strip().lower()
+        if self.wipe_style not in ('brush', 'strip'):
+            raise config.error("wipe_style must be brush or strip")
+        self.clean_passes = config.getint(
+            'clean_passes', 3, minval=1, maxval=20)
         self.clean_plate_x = config.getfloat('clean_plate_x', 155.)
         self.clean_left_x = config.getfloat('clean_left_x', 127.)
         self.clean_right_x = config.getfloat('clean_right_x', 137.)
@@ -408,27 +424,56 @@ class K2CFS:
         self.cutter_y = config.getfloat('cutter_y', 150.)
         self.cutter_speed = config.getfloat(
             'cutter_speed', 100., above=0.)
-        self.cutter_cut_x = config.getfloat(
-            'cutter_cut_x', -7.2, minval=-10., maxval=-5.)
-        self.cutter_release_x = config.getfloat(
-            'cutter_release_x', -1.7,
-            minval=self.cutter_cut_x, maxval=0.)
+        # Which way the head rams the cutter lever from its staging point:
+        # left (K2: towards X min, the cut position is a small negative X)
+        # or right (Creality Hi: towards X max).
+        side = config.get('cutter_side', 'left').strip().lower()
+        if side not in ('left', 'right'):
+            raise config.error("cutter_side must be left or right")
+        self.cutter_dir = -1. if side == 'left' else 1.
+        self.cutter_x_limit = -11.
+        if side == 'left':
+            self.cutter_cut_x = config.getfloat(
+                'cutter_cut_x', -7.2, minval=-10., maxval=-5.)
+            self.cutter_release_x = config.getfloat(
+                'cutter_release_x', -1.7,
+                minval=self.cutter_cut_x, maxval=0.)
+        else:
+            # No default: the cut position is this printer's own calibration
+            # (stock [box] cut_pos_x). It can never pass the X travel.
+            self.cutter_x_limit = config.getsection('stepper_x').getfloat(
+                'position_max', note_valid=False)
+            self.cutter_cut_x = config.getfloat(
+                'cutter_cut_x', above=self.cutter_x,
+                maxval=self.cutter_x_limit)
+            self.cutter_release_x = config.getfloat(
+                'cutter_release_x', self.cutter_x,
+                minval=self.cutter_x, maxval=self.cutter_cut_x)
         self.cutter_ram_speed = config.getfloat(
             'cutter_ram_speed', 500., above=0., maxval=500.)
         self.cutter_release_speed = config.getfloat(
             'cutter_release_speed', 150., above=0., maxval=150.)
         self.cutter_ram_accel = config.getfloat(
             'cutter_ram_accel', 3000., above=0., maxval=5000.)
+        # 0 = no retract around the cut (stock Hi retract_len_before_cut 0)
         self.cutter_retract_length = config.getfloat(
-            'cutter_retract_length', 2., above=0., maxval=2.)
+            'cutter_retract_length', 2., minval=0., maxval=2.)
         self.cutter_retract_speed = config.getfloat(
             'cutter_retract_speed', 6., above=0., maxval=6.)
+        # 0 = no tip-shaping push/pull after the cut
         self.cutter_tip_length = config.getfloat(
-            'cutter_tip_length', 7., above=0., maxval=7.)
+            'cutter_tip_length', 7., minval=0., maxval=7.)
         self.cutter_tip_push_speed = config.getfloat(
             'cutter_tip_push_speed', 9., above=0., maxval=9.)
         self.cutter_tip_pull_speed = config.getfloat(
             'cutter_tip_pull_speed', 5., above=0., maxval=5.)
+        # How long the knife may take to spring back after the release
+        # before the cut counts as failed. On the Hi it returns seconds
+        # after the head backs off (stock logged "cut sensor detected",
+        # then "cut to return OK" 4 s later; 11-16 bench: not back 0.2 s
+        # after the release, back a few seconds later).
+        self.cutter_return_timeout = config.getfloat(
+            'cutter_return_timeout', 0., minval=0., maxval=15.)
         self.cutter_switch_pin = config.get(
             'cutter_switch_pin', '!nozzle_mcu:PB9')
         self.unload_fast_pulls = config.getint(
@@ -437,8 +482,9 @@ class K2CFS:
             'unload_pull_length', 10., above=0., maxval=20.)
         self.unload_pull_speed = config.getfloat(
             'unload_pull_speed', 6., above=0., maxval=6.)
+        # 0 = no slow final pull (stock Hi: one 15 mm pull, then the rewind)
         self.unload_final_length = config.getfloat(
-            'unload_final_length', 10., above=0., maxval=10.)
+            'unload_final_length', 10., minval=0., maxval=10.)
         self.unload_final_speed = config.getfloat(
             'unload_final_speed', 1., above=0., maxval=1.)
         self.unload_rewind_pause_ms = config.getint(
@@ -583,8 +629,14 @@ class K2CFS:
         self.cutter_events = None
         # Stock box.cfg calibration window (pre_cut_cal_pos_x and
         # check_cut_pos_x_min/max)
-        self.cutter_cal_start_x = config.getfloat(
-            'cutter_cal_start_x', -5., maxval=0.)
+        if self.cutter_dir < 0.:
+            self.cutter_cal_start_x = config.getfloat(
+                'cutter_cal_start_x', -5., maxval=0.)
+        else:
+            self.cutter_cal_start_x = config.getfloat(
+                'cutter_cal_start_x',
+                max(self.cutter_x, self.cutter_cut_x - 10.),
+                minval=self.cutter_x, maxval=self.cutter_x_limit)
         # METHOD=STALL (toolheads whose knife sensor never trips, e.g. a
         # Phaetus DXC2): the cut position is this far short of where the X
         # motor first reports hitting the cutter's end stop twice running
@@ -592,10 +644,21 @@ class K2CFS:
         # CALIBRATE_CUT_POS)
         self.cutter_stall_offset = config.getfloat(
             'cutter_stall_offset', .4, minval=0., maxval=2.)
-        self.cutter_cal_min_x = config.getfloat(
-            'cutter_cal_min_x', -9.5, minval=-11.)
-        self.cutter_cal_max_x = config.getfloat(
-            'cutter_cal_max_x', -5.5, maxval=0.)
+        # Where a calibration result is believable. The sensor method pushes
+        # as far as the end of this window that lies in the ram direction.
+        if self.cutter_dir < 0.:
+            self.cutter_cal_min_x = config.getfloat(
+                'cutter_cal_min_x', -9.5, minval=-11.)
+            self.cutter_cal_max_x = config.getfloat(
+                'cutter_cal_max_x', -5.5, maxval=0.)
+        else:
+            self.cutter_cal_min_x = config.getfloat(
+                'cutter_cal_min_x', self.cutter_cal_start_x,
+                minval=self.cutter_x)
+            self.cutter_cal_max_x = config.getfloat(
+                'cutter_cal_max_x',
+                min(self.cutter_cut_x + 1.5, self.cutter_x_limit),
+                above=self.cutter_cal_min_x, maxval=self.cutter_x_limit)
         self.bus = None
         self.status = {'fitted': self.fitted,
                        'fitted_setting': self.fitted_mode, 'detected': None,
@@ -1731,9 +1794,17 @@ class K2CFS:
                 "it. Unload first (or FORCE=1)")
         if self.cutter_switch_state is not True:
             raise gcmd.error("The cutter is not in its returned state")
-        start = gcmd.get_float('START', self.cutter_cal_start_x, maxval=0.)
-        stop = gcmd.get_float('STOP', self.cutter_cal_min_x, minval=-11.,
-                              below=start)
+        direction = self.cutter_dir
+        if direction < 0.:
+            start = gcmd.get_float('START', self.cutter_cal_start_x,
+                                   maxval=0.)
+            stop = gcmd.get_float('STOP', self.cutter_cal_min_x, minval=-11.,
+                                  below=start)
+        else:
+            start = gcmd.get_float('START', self.cutter_cal_start_x,
+                                   minval=self.cutter_x)
+            stop = gcmd.get_float('STOP', self.cutter_cal_max_x,
+                                  maxval=self.cutter_x_limit, above=start)
         step = gcmd.get_float('STEP', .05, minval=.01, maxval=.5)
         push_rate = gcmd.get_float('SPEED', 5., above=0., maxval=20.) * 60.
         travel_rate = self.cutter_speed * 60.
@@ -1749,10 +1820,11 @@ class K2CFS:
             if self.cutter_switch_state is not True:
                 raise gcmd.error(
                     "Knife sensor already tripped at X%.2f; use a START "
-                    "nearer 0" % start)
+                    "nearer %s" % (start, "0" if direction < 0.
+                                   else "X%.0f" % self.cutter_x))
             x = start
-            while x - step >= stop - 1e-6:
-                x -= step
+            while (stop - (x + direction * step)) * direction >= -1e-6:
+                x += direction * step
                 self.gcode.run_script_from_command(
                     "G1 X%.3f F%.3f\nM400" % (x, push_rate))
                 reactor.pause(reactor.monotonic() + .08)
@@ -1778,12 +1850,16 @@ class K2CFS:
                 % (start, stop))
         in_range = self.cutter_cal_min_x <= trip <= self.cutter_cal_max_x
         gcmd.respond_info(
-            "CFS cutter: knife sensor trips at X%.2f (stock valid range "
+            "CFS cutter: knife sensor trips at X%.2f (valid range "
             "%.1f to %.1f: %s). Current cut position X%.2f is %.2fmm "
             "past it. Knife %s after release."
-            % (trip, self.cutter_cal_max_x, self.cutter_cal_min_x,
+            % (trip,
+               self.cutter_cal_max_x if direction < 0.
+               else self.cutter_cal_min_x,
+               self.cutter_cal_min_x if direction < 0.
+               else self.cutter_cal_max_x,
                "OK" if in_range else "OUT OF RANGE", self.cutter_cut_x,
-               trip - self.cutter_cut_x,
+               (self.cutter_cut_x - trip) * direction,
                "returned" if returned else "DID NOT RETURN"))
 
     def _cutter_calibrate_stall(self, gcmd):
@@ -1807,8 +1883,16 @@ class K2CFS:
         bus = self.printer.lookup_object('k2_motor_bus', None)
         if bus is None:
             raise gcmd.error("No k2_motor_bus: the X/Y motors cannot be read")
-        start = gcmd.get_float('START', self.cutter_cal_start_x, maxval=0.)
-        stop = gcmd.get_float('STOP', -11., minval=-11., below=start)
+        direction = self.cutter_dir
+        if direction < 0.:
+            start = gcmd.get_float('START', self.cutter_cal_start_x,
+                                   maxval=0.)
+            stop = gcmd.get_float('STOP', -11., minval=-11., below=start)
+        else:
+            start = gcmd.get_float('START', self.cutter_cal_start_x,
+                                   minval=self.cutter_x)
+            stop = gcmd.get_float('STOP', self.cutter_x_limit,
+                                  maxval=self.cutter_x_limit, above=start)
         step = gcmd.get_float('STEP', .1, minval=.05, maxval=.5)
         toolhead = self.printer.lookup_object('toolhead')
         prior_accel = toolhead.get_status(0.).get('max_accel')
@@ -1848,7 +1932,7 @@ class K2CFS:
                 raise gcmd.error(
                     "The X or Y motor reports a stall before any ram; clear"
                     " the cutter area and home X")
-            while x >= stop - 1e-6:
+            while (stop - x) * direction >= -1e-6:
                 gcmd.respond_info("Cutter calibration: ram to X%.2f" % x)
                 self.gcode.run_script_from_command(
                     "SET_VELOCITY_LIMIT ACCEL=%.3f\n"
@@ -1868,19 +1952,20 @@ class K2CFS:
                     if previous:
                         break
                 previous = now_hit
-                x = round(x - step, 4)
+                x = round(x + direction * step, 4)
         finally:
             self.gcode.run_script_from_command(
                 "SET_VELOCITY_LIMIT ACCEL=%.3f\n"
                 "RESTORE_GCODE_STATE NAME=K2_CUT_STALL" % prior_accel)
-        if len(hits) < 2 or hits[-1] != round(hits[-2] - step, 4):
+        if len(hits) < 2 or hits[-1] != round(
+                hits[-2] + direction * step, 4):
             self.status['cutter_cal_x'] = None
             raise gcmd.error(
                 "No two rams in a row hit the cutter end stop between X%.2f"
                 " and X%.2f (hits: %s). The cut position is unchanged."
                 % (start, stop, ", ".join("%.2f" % h for h in hits)
                    or "none"))
-        result = round(hits[-1] + self.cutter_stall_offset, 2)
+        result = round(hits[-1] - direction * self.cutter_stall_offset, 2)
         self.status['cutter_cal_x'] = result
         gcmd.respond_info(
             "CFS cutter (motor stall): end stop hit at X%.2f and X%.2f;"
@@ -2065,16 +2150,17 @@ class K2CFS:
                     "M400"
                     % (self.unload_pull_length,
                        self.unload_pull_speed * 60.))
-            self._run_actuation(
-                'RETRUDE START',
-                [0xff, 0x11, mask, 0x00],
-                timeout=self.unload_bus_timeout)
-            self.gcode.run_script_from_command(
-                "M83\n"
-                "G1 E-%.3f F%.3f\n"
-                "M400"
-                % (self.unload_final_length,
-                   self.unload_final_speed * 60.))
+            if self.unload_final_length:
+                self._run_actuation(
+                    'RETRUDE START',
+                    [0xff, 0x11, mask, 0x00],
+                    timeout=self.unload_bus_timeout)
+                self.gcode.run_script_from_command(
+                    "M83\n"
+                    "G1 E-%.3f F%.3f\n"
+                    "M400"
+                    % (self.unload_final_length,
+                       self.unload_final_speed * 60.))
             try:
                 self._finish_unload(mask)
             except CFSStatusError as exc:
@@ -2315,13 +2401,14 @@ class K2CFS:
             # Exact current-wrapper release sequence: tiny engagement, 2mm
             # retract, cutter stage/ram/release, another 2mm retract, then
             # a 7mm forward/back tip-shaping cycle.
-            self.gcode.run_script_from_command(
-                "M83\n"
-                "G1 E0.010 F60\n"
-                "G1 E-%.3f F%.3f\n"
-                "M400"
-                % (self.cutter_retract_length,
-                   self.cutter_retract_speed * 60.))
+            if self.cutter_retract_length:
+                self.gcode.run_script_from_command(
+                    "M83\n"
+                    "G1 E0.010 F60\n"
+                    "G1 E-%.3f F%.3f\n"
+                    "M400"
+                    % (self.cutter_retract_length,
+                       self.cutter_retract_speed * 60.))
             travel_rate = self.cutter_speed * 60.
             self.gcode.run_script_from_command(
                 "G90\n"
@@ -2363,21 +2450,27 @@ class K2CFS:
                 # (10-25), so this is a log line, not a warning
                 logging.info("k2_cfs: knife sensor did not change during "
                              "the cut at X%.2f", self.cutter_cut_x)
+            deadline = reactor.monotonic() + self.cutter_return_timeout
+            while (self.cutter_switch_state is not True
+                   and reactor.monotonic() < deadline):
+                reactor.pause(reactor.monotonic() + .05)
             if self.cutter_switch_state is not True:
                 raise RuntimeError(
                     "cutter did not return after ram/release")
-            self.gcode.run_script_from_command(
-                "M83\n"
-                "G1 E-%.3f F%.3f\n"
-                "G1 E%.3f F%.3f\n"
-                "G1 E-%.3f F%.3f\n"
-                "M400"
-                % (self.cutter_retract_length,
-                   self.cutter_retract_speed * 60.,
-                   self.cutter_tip_length,
-                   self.cutter_tip_push_speed * 60.,
-                   self.cutter_tip_length,
-                   self.cutter_tip_pull_speed * 60.))
+            after_cut = ["M83"]
+            if self.cutter_retract_length:
+                after_cut.append("G1 E-%.3f F%.3f" % (
+                    self.cutter_retract_length,
+                    self.cutter_retract_speed * 60.))
+            if self.cutter_tip_length:
+                after_cut.extend([
+                    "G1 E%.3f F%.3f" % (self.cutter_tip_length,
+                                        self.cutter_tip_push_speed * 60.),
+                    "G1 E-%.3f F%.3f" % (self.cutter_tip_length,
+                                         self.cutter_tip_pull_speed * 60.)])
+            if len(after_cut) > 1:
+                after_cut.append("M400")
+                self.gcode.run_script_from_command("\n".join(after_cut))
             cut_completed = True
             self.gcode.run_script_from_command(
                 "G90\n"
@@ -2640,6 +2733,26 @@ class K2CFS:
         # three passes back over the chute.
         feedrate = self.clean_speed * 60.
         circle_rate = self.clean_circle_speed * 60.
+        if self.wipe_style == 'strip':
+            # Creality Hi: the PTFE strip sits between the chute and the
+            # bed, so each pass out of the chute and back drags the tip
+            # over it (stock: 7 passes X-18.5 <-> X-5 after every flush).
+            lines = ["G90"]
+            for unused in range(self.clean_passes):
+                lines.extend([
+                    "G1 X%.3f Y%.3f F%.3f"
+                    % (self.clean_right_x, self.purge_y, feedrate),
+                    "G1 X%.3f Y%.3f F%.3f"
+                    % (self.purge_x, self.purge_y, feedrate),
+                ])
+            if final:
+                lines.extend([
+                    "G1 X%.3f F%.3f" % (self.purge_entry_x, feedrate),
+                    "G1 Y%.3f F%.3f" % (self.purge_safe_y, feedrate),
+                    "G1 X%.3f F%.3f" % (self.purge_return_x, feedrate),
+                ])
+            lines.append("M400")
+            return "\n".join(lines)
         lines = [
             "G90",
             "G1 X%.3f F%.3f" % (self.clean_right_x, feedrate),
@@ -2658,7 +2771,7 @@ class K2CFS:
                 "G1 X%.3f Y%.3f F%.3f"
                 % (self.clean_brush_right_x, self.clean_y, feedrate),
             ])
-        for unused in range(3):
+        for unused in range(self.clean_passes):
             lines.extend([
                 "G1 X%.3f Y%.3f F%.3f"
                 % (self.clean_right_x, self.clean_y, feedrate),
@@ -2718,7 +2831,8 @@ class K2CFS:
         change = gcmd.get_int('CHANGE', 0, minval=0, maxval=1)
         length = gcmd.get_float(
             'LENGTH', self.purge_extrude_length,
-            minval=30. if short else 140., maxval=360.)
+            minval=30. if short
+            else min(140., self.purge_minimum_actual_length), maxval=360.)
         speed = gcmd.get_float(
             'SPEED', self.purge_extrude_speed,
             above=0., maxval=9.58)
