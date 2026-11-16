@@ -48,6 +48,7 @@ import math
 import os
 import re
 import struct
+import time
 import logging
 
 
@@ -245,6 +246,10 @@ class K2CFS:
     wipe_style = 'brush'
     clean_passes = 3
     cutter_return_timeout = 0.
+    cutter_free_push = 0.
+    cutter_cut_attempts = 1
+    cutter_cal_path = None
+    cutter_cal_stall_mode = 0
     # name -> (payload bytes, decoder method name)
     # Payload EXCLUDES addr/len/crc (k2_motor_bus builds the frame).
     # Opcode map mined 2026-07-07 from 6 days / ~205k transactions of stock
@@ -474,6 +479,28 @@ class K2CFS:
         # after the release, back a few seconds later).
         self.cutter_return_timeout = config.getfloat(
             'cutter_return_timeout', 0., minval=0., maxval=15.)
+        # A knife that stays in is pinched by the filament (11-16, the Hi's
+        # first colour change in a print: nozzle still under pressure, the
+        # blade stayed in; pushing the stub down 1.5 mm let it spring back).
+        # Stock jogs the extruder and cuts again ("cut_extrude and retrude",
+        # "cut to return failed index"), and Jacob10383's K2 firmware does
+        # three cuts with a retract after each. Here: after each cut wait
+        # cutter_return_timeout; still in -> push the stub down
+        # cutter_free_push mm and wait; still in -> pull it back past where
+        # it was and wait; still in -> cut again, up to cutter_cut_attempts
+        # cuts. 0 / 1 = one cut and no jogs (the K2 as before).
+        self.cutter_free_push = config.getfloat(
+            'cutter_free_push', 0., minval=0., maxval=3.)
+        self.cutter_cut_attempts = config.getint(
+            'cutter_cut_attempts', 1, minval=1, maxval=5)
+        # Motor stall mode for the rams of CFS_CUTTER_CALIBRATE METHOD=STALL
+        # (0 = leave the motors as they are, in print protection). Stock Hi
+        # CALIBRATE_CUT_POS sets the X motor to mode 3 first and back to 2
+        # after (klippy.log 11-16); in mode 2 the Hi's motors reported no
+        # stall on rams up to X280.4 where stock's calibration found one at
+        # X280.0.
+        self.cutter_cal_stall_mode = config.getint(
+            'cutter_cal_stall_mode', 0, minval=0, maxval=3)
         self.cutter_switch_pin = config.get(
             'cutter_switch_pin', '!nozzle_mcu:PB9')
         self.unload_fast_pulls = config.getint(
@@ -669,6 +696,16 @@ class K2CFS:
                        'runout_warning': '', 'change_pending': None,
                        'last_change_error': ''}
         self.status['slot_stats'] = self._stats_summary()
+        # CFS_CUTTER_CALIBRATE METHOD=STALL SAVE=1 keeps this printer's cut
+        # position in a file beside the config; it is used in place of
+        # cutter_cut_x from then on (an update replaces the managed config,
+        # and SAVE_CONFIG cannot override an included file's option).
+        self.cutter_cut_x_config = self.cutter_cut_x
+        self.cutter_cal_path = config.get(
+            'cutter_cal_path',
+            os.path.join(os.path.dirname(self.stats_path),
+                         'hark_cfs_cutter.json'))
+        self._load_cutter_cal()
         buttons = self.printer.load_object(config, 'buttons')
         buttons.register_buttons(
             [self.cutter_switch_pin], self._handle_cutter_switch)
@@ -710,6 +747,10 @@ class K2CFS:
         self.gcode.register_command(
             'CFS_CUTTER_SENSOR', self.cmd_CFS_CUTTER_SENSOR,
             desc="Report the K2 cutter hall-sensor logical state")
+        self.gcode.register_command(
+            'CFS_CUTTER_TEST', self.cmd_CFS_CUTTER_TEST,
+            desc="Dry cuts with the toolhead empty: does the knife press "
+                 "and spring back?")
         self.gcode.register_command(
             'CFS_UNLOAD', self.cmd_CFS_UNLOAD,
             desc="Blocked unsafe standalone CFS rewind")
@@ -1780,6 +1821,19 @@ class K2CFS:
         # Same here, reported only: set cutter_cut_x from the result.
         # METHOD=STALL finds the cutter's end stop with the X/Y motors
         # instead.
+        if gcmd.get_int('RESET', 0, minval=0, maxval=1):
+            # forget the saved calibration: back to cutter_cut_x
+            self._require_idle(gcmd)
+            try:
+                os.remove(self.cutter_cal_path)
+            except OSError:
+                pass
+            self._apply_cut_x(self.cutter_cut_x_config, 'config')
+            gcmd.respond_info(
+                "CFS cutter: saved calibration removed; cut position is"
+                " cutter_cut_x from the config again, X%.2f"
+                % self.cutter_cut_x)
+            return
         method = gcmd.get('METHOD', 'SENSOR').upper()
         if method not in ('SENSOR', 'STALL'):
             raise gcmd.error("METHOD must be SENSOR or STALL")
@@ -1920,6 +1974,14 @@ class K2CFS:
             for name in motors:
                 bus.clear_faults(name)
 
+        stall_mode = gcmd.get_int('MODE', self.cutter_cal_stall_mode,
+                                  minval=0, maxval=3)
+
+        def arm():
+            # homing X puts the motors back in print protection (mode 2)
+            if stall_mode:
+                bus.set_stall_mode(stall_mode)
+
         clear()
         self.gcode.run_script_from_command(
             "SAVE_GCODE_STATE NAME=K2_CUT_STALL")
@@ -1932,6 +1994,7 @@ class K2CFS:
                 raise gcmd.error(
                     "The X or Y motor reports a stall before any ram; clear"
                     " the cutter area and home X")
+            arm()
             while (stop - x) * direction >= -1e-6:
                 gcmd.respond_info("Cutter calibration: ram to X%.2f" % x)
                 self.gcode.run_script_from_command(
@@ -1951,9 +2014,16 @@ class K2CFS:
                     clear()
                     if previous:
                         break
+                    arm()
                 previous = now_hit
                 x = round(x + direction * step, 4)
         finally:
+            if stall_mode:
+                try:
+                    bus.set_stall_mode(2)
+                    clear()
+                except Exception:
+                    logging.exception("k2_cfs: stall mode back to 2 failed")
             self.gcode.run_script_from_command(
                 "SET_VELOCITY_LIMIT ACCEL=%.3f\n"
                 "RESTORE_GCODE_STATE NAME=K2_CUT_STALL" % prior_accel)
@@ -1967,13 +2037,162 @@ class K2CFS:
                    or "none"))
         result = round(hits[-1] - direction * self.cutter_stall_offset, 2)
         self.status['cutter_cal_x'] = result
+        found = ("CFS cutter (motor stall): end stop hit at X%.2f and X%.2f;"
+                 " cut position X%.2f (%.1f mm short of it)."
+                 % (hits[-2], hits[-1], result, self.cutter_stall_offset))
+        if gcmd.get_int('SAVE', 0, minval=0, maxval=1):
+            if not self._cut_x_valid(result):
+                raise gcmd.error(
+                    found + " That is outside what this printer allows for"
+                    " a cut position, so it was NOT saved; the cut position"
+                    " stays X%.2f." % self.cutter_cut_x)
+            was = self.cutter_cut_x
+            self._save_cutter_cal(result, 'stall', {
+                'hits': hits[-2:], 'offset': self.cutter_stall_offset})
+            self._apply_cut_x(result, 'calibration')
+            gcmd.respond_info(
+                found + " Saved and in use now (was X%.2f). It is kept"
+                " across restarts and updates; CFS_CUTTER_CALIBRATE RESET=1"
+                " goes back to the config value." % was)
+            return
         gcmd.respond_info(
-            "CFS cutter (motor stall): end stop hit at X%.2f and X%.2f;"
-            " cut position X%.2f (%.1f mm short of it). Current cut"
-            " position X%.2f. To use it, in printer-overrides.cfg:\n"
-            "[k2_cfs]\ncutter_cut_x: %.2f"
-            % (hits[-2], hits[-1], result, self.cutter_stall_offset,
-               self.cutter_cut_x, result))
+            found + " Current cut position X%.2f. To use it, run this again"
+            " with SAVE=1, or put in printer-overrides.cfg:\n"
+            "[k2_cfs]\ncutter_cut_x: %.2f" % (self.cutter_cut_x, result))
+
+    # --- saved cutter calibration ----------------------------------------
+    def _cut_x_valid(self, x):
+        if self.cutter_dir < 0.:
+            return -10. <= x <= -5.
+        return self.cutter_x < x <= self.cutter_x_limit
+
+    def _apply_cut_x(self, x, source):
+        self.cutter_cut_x = x
+        # the release point never lies beyond the cut
+        if self.cutter_dir < 0.:
+            self.cutter_release_x = max(self.cutter_release_x, x)
+        else:
+            self.cutter_release_x = min(self.cutter_release_x, x)
+        self.status['cutter_cut_x'] = x
+        self.status['cutter_cut_source'] = source
+
+    def _load_cutter_cal(self):
+        self.status['cutter_cut_x'] = self.cutter_cut_x
+        self.status['cutter_cut_source'] = 'config'
+        if not self.cutter_cal_path:
+            return
+        try:
+            with open(self.cutter_cal_path, encoding='utf-8') as f:
+                x = float(json.load(f)['cutter_cut_x'])
+        except FileNotFoundError:
+            return
+        except Exception:
+            logging.exception("k2_cfs: unreadable cutter calibration %s",
+                              self.cutter_cal_path)
+            return
+        if not self._cut_x_valid(x):
+            logging.info("k2_cfs: saved cut position X%.2f is not possible"
+                         " on this printer; using the config's X%.2f",
+                         x, self.cutter_cut_x)
+            return
+        logging.info("k2_cfs: cut position X%.2f from the saved calibration"
+                     " (config says X%.2f)", x, self.cutter_cut_x)
+        self._apply_cut_x(x, 'calibration')
+
+    def _save_cutter_cal(self, x, method, detail):
+        data = {'cutter_cut_x': x, 'method': method, 'detail': detail,
+                'saved': time.strftime('%Y-%m-%d %H:%M:%S')}
+        tmp = self.cutter_cal_path + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=1)
+        os.replace(tmp, self.cutter_cal_path)
+
+    def _cutter_ram_script(self):
+        return ("SET_VELOCITY_LIMIT ACCEL=%.3f\n"
+                "G90\n"
+                "G1 X%.3f Y%.3f F%.3f\n"
+                "G1 X%.3f Y%.3f F%.3f\n"
+                "M400"
+                % (self.cutter_ram_accel,
+                   self.cutter_cut_x, self.cutter_y,
+                   self.cutter_ram_speed * 60.,
+                   self.cutter_release_x, self.cutter_y,
+                   self.cutter_release_speed * 60.))
+
+    def cmd_CFS_CUTTER_TEST(self, gcmd):
+        # Dry cuts at the real cut position and speed with nothing in the
+        # toolhead: does the knife sensor see the blade go in, and how long
+        # does it take to spring back? A blade that is slow or stays in
+        # with no filament to pinch it is a mechanical problem (dirt, a
+        # weak spring), not something a retract will fix.
+        self._require_idle(gcmd)
+        self._require_safe_motion(gcmd, "CFS_CUTTER_TEST")
+        if (self._nozzle_has_filament() is True
+                and not gcmd.get_int('FORCE', 0, minval=0, maxval=1)):
+            raise gcmd.error(
+                "Filament is at the nozzle: the test would cut it. Unload"
+                " first (or FORCE=1)")
+        if self.cutter_switch_state is not True:
+            raise gcmd.error("The cutter is not in its returned state")
+        count = gcmd.get_int('COUNT', 3, minval=1, maxval=20)
+        wait = gcmd.get_float('WAIT', max(self.cutter_return_timeout, 3.),
+                              minval=.5, maxval=15.)
+        reactor = self.printer.get_reactor()
+        toolhead = self.printer.lookup_object('toolhead')
+        prior_accel = toolhead.get_status(0.).get('max_accel')
+        if prior_accel is None:
+            raise gcmd.error("Unable to read current acceleration limit")
+        travel = self.cutter_speed * 60.
+        stage = ("G90\nG1 Y%.3f F%.3f\nG1 X%.3f F%.3f\nM400"
+                 % (self.cutter_y, travel, self.cutter_x, travel))
+        results = []
+        self.gcode.run_script_from_command(
+            "SAVE_GCODE_STATE NAME=K2_CUT_TEST")
+        try:
+            for index in range(count):
+                self.gcode.run_script_from_command(stage)
+                self.cutter_events = []
+                self.gcode.run_script_from_command(self._cutter_ram_script())
+                started = reactor.monotonic()
+                reactor.pause(started + .2)
+                pressed = any(not st for t, st in self.cutter_events)
+                self.cutter_events = None
+                back = self._wait_knife_return(wait)
+                took = reactor.monotonic() - started
+                results.append((pressed, back, took))
+                gcmd.respond_info(
+                    "Cutter test %d/%d at X%.2f: blade %s, %s"
+                    % (index + 1, count, self.cutter_cut_x,
+                       "went in" if pressed else "NOT seen going in",
+                       ("back out within %.1f s" % took) if back
+                       else "STILL IN after %.1f s" % took))
+                if not back:
+                    break
+        finally:
+            self.cutter_events = None
+            self.gcode.run_script_from_command(
+                "SET_VELOCITY_LIMIT ACCEL=%.3f\n"
+                "RESTORE_GCODE_STATE NAME=K2_CUT_TEST" % prior_accel)
+        slowest = max(r[2] for r in results)
+        ok = all(r[0] and r[1] for r in results) and len(results) == count
+        self.status['cutter_test'] = {
+            'cuts': len(results), 'pressed': sum(r[0] for r in results),
+            'returned': sum(r[1] for r in results),
+            'slowest_return': round(slowest, 2), 'ok': ok}
+        if not results[-1][1]:
+            raise gcmd.error(
+                "Cutter test: the blade stayed in with no filament in the"
+                " toolhead. Free the cutter lever by hand and check it for"
+                " debris before cutting again.")
+        if not all(r[0] for r in results):
+            gcmd.respond_info(
+                "Cutter test: the knife sensor did not see every cut. The"
+                " cut position X%.2f may be too shallow, or this toolhead's"
+                " sensor never changes." % self.cutter_cut_x)
+        else:
+            gcmd.respond_info(
+                "Cutter test passed: %d of %d cuts seen, blade back within"
+                " %.1f s every time." % (len(results), count, slowest))
 
     def cmd_CFS_CUTTER_SENSOR(self, gcmd):
         state = ("unknown" if self.cutter_switch_state is None else
@@ -2347,6 +2566,40 @@ class K2CFS:
             self.status.get('stall_retry_motions', 0) + 1
         return True
 
+    def _wait_knife_return(self, timeout):
+        reactor = self.printer.get_reactor()
+        deadline = reactor.monotonic() + timeout
+        while (self.cutter_switch_state is not True
+               and reactor.monotonic() < deadline):
+            reactor.pause(reactor.monotonic() + .05)
+        return self.cutter_switch_state is True
+
+    def _free_knife(self, gcmd):
+        # The blade is in and the head has backed off: move the filament
+        # under it. Down first (what freed it by hand on the Hi), then back
+        # up past where it was (stock and Jacob10383 retract). True when the
+        # knife sensor reports returned.
+        if not self.cutter_free_push:
+            return False
+        heater = self.printer.lookup_object('extruder').get_heater()
+        if not heater.can_extrude:
+            return False
+        push = self.cutter_free_push
+        for name, length in (("pushing the stub down", push),
+                             ("pulling it back", -(push + 2.))):
+            logging.info("k2_cfs: knife still in; %s %.1f mm",
+                         name, abs(length))
+            gcmd.respond_info(
+                "CFS cutter: the blade has not sprung back; %s %.1f mm"
+                % (name, abs(length)))
+            self.status['cut_free_jogs'] = \
+                self.status.get('cut_free_jogs', 0) + 1
+            self.gcode.run_script_from_command(
+                "M83\nG1 E%.3f F120\nM400" % length)
+            if self._wait_knife_return(max(self.cutter_return_timeout, 1.)):
+                return True
+        return False
+
     def cmd_CFS_CUT_UNLOAD(self, gcmd):
         self._require_cfs(gcmd)
         self._require_actuation(gcmd)
@@ -2422,41 +2675,53 @@ class K2CFS:
                     "cutter did not report returned at staging point")
             accel_changed = True
             self.cutter_events = []
-            self.gcode.run_script_from_command(
-                "SET_VELOCITY_LIMIT ACCEL=%.3f\n"
-                "G90\n"
-                "G1 X%.3f Y%.3f F%.3f\n"
-                "G1 X%.3f Y%.3f F%.3f\n"
-                "M400"
-                % (self.cutter_ram_accel,
-                   self.cutter_cut_x, self.cutter_y,
-                   self.cutter_ram_speed * 60.,
-                   self.cutter_release_x, self.cutter_y,
-                   self.cutter_release_speed * 60.))
             reactor = self.printer.get_reactor()
-            reactor.pause(reactor.monotonic() + .2)
-            pressed = any(not st for t, st in self.cutter_events)
+            ram_script = self._cutter_ram_script()
+            returned = False
+            for attempt in range(self.cutter_cut_attempts):
+                if attempt:
+                    self.status['cut_recuts'] = \
+                        self.status.get('cut_recuts', 0) + 1
+                    gcmd.respond_info(
+                        "CFS cutter: the blade has not sprung back; cutting"
+                        " again (%d of %d)"
+                        % (attempt + 1, self.cutter_cut_attempts))
+                    self.gcode.run_script_from_command(
+                        "G90\nG1 X%.3f Y%.3f F%.3f\nM400"
+                        % (self.cutter_x, self.cutter_y, travel_rate))
+                self.gcode.run_script_from_command(ram_script)
+                reactor.pause(reactor.monotonic() + .2)
+                if not attempt:
+                    pressed = any(not st for t, st in self.cutter_events)
+                    self.cutter_events = None
+                    self.status['last_cut_sensor_pressed'] = pressed
+                    key = ('cut_sensor_hits' if pressed
+                           else 'cut_sensor_misses')
+                    self.status[key] = self.status.get(key, 0) + 1
+                    if not pressed and self.status.get('cut_sensor_hits'):
+                        # Only once the sensor has tripped on a cut since
+                        # the restart: on a toolhead whose sensor never
+                        # changes (DXC2) every cut would count as a miss
+                        self._count(slot, 'cut_misses')
+                    if not pressed:
+                        # With the DXC2 the sensor has never changed during
+                        # a cut (10-25), so this is a log line, not a
+                        # warning
+                        logging.info(
+                            "k2_cfs: knife sensor did not change during "
+                            "the cut at X%.2f", self.cutter_cut_x)
+                if (self._wait_knife_return(self.cutter_return_timeout)
+                        or self._free_knife(gcmd)):
+                    returned = True
+                    break
             self.cutter_events = None
-            self.status['last_cut_sensor_pressed'] = pressed
-            key = 'cut_sensor_hits' if pressed else 'cut_sensor_misses'
-            self.status[key] = self.status.get(key, 0) + 1
-            if not pressed and self.status.get('cut_sensor_hits'):
-                # Only once the sensor has tripped on a cut since the
-                # restart: on a toolhead whose sensor never changes (DXC2)
-                # every cut would count as a miss
-                self._count(slot, 'cut_misses')
-            if not pressed:
-                # With the DXC2 the sensor has never changed during a cut
-                # (10-25), so this is a log line, not a warning
-                logging.info("k2_cfs: knife sensor did not change during "
-                             "the cut at X%.2f", self.cutter_cut_x)
-            deadline = reactor.monotonic() + self.cutter_return_timeout
-            while (self.cutter_switch_state is not True
-                   and reactor.monotonic() < deadline):
-                reactor.pause(reactor.monotonic() + .05)
-            if self.cutter_switch_state is not True:
+            if not returned:
                 raise RuntimeError(
-                    "cutter did not return after ram/release")
+                    "cutter did not return after ram/release"
+                    + ("" if self.cutter_cut_attempts == 1
+                       and not self.cutter_free_push
+                       else " (%d cuts, extruder jogs: the blade is still"
+                            " in)" % self.cutter_cut_attempts))
             after_cut = ["M83"]
             if self.cutter_retract_length:
                 after_cut.append("G1 E-%.3f F%.3f" % (
