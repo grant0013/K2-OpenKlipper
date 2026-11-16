@@ -1,0 +1,18 @@
+[Unit]
+Description=Klipper for the Creality Hi (external host over the USB host-link)
+After=network-online.target hi-demux.service moonraker-hi.service
+Wants=hi-demux.service
+# demux makes new pseudo-terminals at every start: restart Klipper with it
+PartOf=hi-demux.service
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@OKL@
+ExecStart=@KPY@ @OKL@/klippy/klippy.py @DATA@/config/printer.cfg -l @DATA@/logs/klippy.log -a @DATA@/comms/klippy.sock
+Nice=-10
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

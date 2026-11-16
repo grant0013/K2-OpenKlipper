@@ -4,12 +4,14 @@
 # the Hi side).
 #
 #   host.sh setup    config folder ~/printer_data_hi (keeps existing edits)
-#   host.sh start    demux + Klipper + Moonraker (port 7126) in the background
+#   host.sh install  (uses sudo) udev rule + systemd services, started at boot
+#   host.sh start    demux + Klipper + Moonraker (port 7126)
 #   host.sh stop
 #   host.sh status
 #
-# Needs once, with sudo: the udev rule that gives the Hi's gadget ports a
-# usbserial driver (printed by 'setup' when it is missing).
+# Without 'install' the three programs run in the background of this login
+# and the udev rule that gives the Hi's gadget ports a usbserial driver has
+# to be copied by hand (printed by 'setup' when it is missing).
 OKL=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 DATA=${HI_DATA:-$HOME/printer_data_hi}
 KPY=${KLIPPY_PY:-$HOME/klippy-env/bin/python}
@@ -17,6 +19,10 @@ MPY=${MOONRAKER_PY:-$HOME/moonraker-env/bin/python}
 MOONRAKER=${MOONRAKER_DIR:-$HOME/moonraker}
 BYID=/dev/serial/by-id/usb-Hark_Tech_Creality_Hi_hostlink_20080411
 RULE=/etc/udev/rules.d/99-hi-hostlink.rules
+UNITS="hi-demux klipper-hi moonraker-hi"
+SYSD=/etc/systemd/system
+
+installed() { [ -f "$SYSD/klipper-hi.service" ]; }
 
 running() { [ -f "$1" ] && kill -0 "$(cat "$1")" 2>/dev/null; }
 
@@ -55,7 +61,32 @@ setup)
         echo "  sudo cp $OKL/host/hi/99-hi-hostlink.rules $RULE && sudo udevadm control --reload && sudo udevadm trigger"
     fi
     ;;
+install)
+    [ -f "$DATA/config/printer.cfg" ] || { echo "run '$0 setup' first"; exit 1; }
+    [ -x "$KPY" ] || { echo "no Klipper python at $KPY (set KLIPPY_PY)"; exit 1; }
+    [ -x "$MPY" ] || { echo "no Moonraker python at $MPY (set MOONRAKER_PY)"; exit 1; }
+    "$0" stop >/dev/null 2>&1
+    getent group moonraker-admin >/dev/null || sudo groupadd --system moonraker-admin
+    for g in dialout tty moonraker-admin; do sudo usermod -aG $g "$USER"; done
+    sudo cp "$OKL/host/hi/99-hi-hostlink.rules" "$RULE"
+    for u in $UNITS hi-reconnect; do
+        sed -e "s#@USER@#$USER#g" -e "s#@OKL@#$OKL#g" -e "s#@DATA@#$DATA#g" \
+            -e "s#@KPY@#$KPY#g" -e "s#@MPY@#$MPY#g" \
+            -e "s#@MOONRAKER@#$MOONRAKER#g" -e "s#@BYID@#$BYID#g" \
+            "$OKL/host/hi/systemd/$u.service" | sudo tee "$SYSD/$u.service" >/dev/null
+    done
+    sudo udevadm control --reload
+    sudo systemctl daemon-reload
+    sudo systemctl enable $UNITS
+    sudo systemctl restart $UNITS
+    "$0" status
+    ;;
 start)
+    if installed; then
+        sudo systemctl start $UNITS
+        "$0" status
+        exit 0
+    fi
     if ! running "$DATA/comms/demux.pid"; then
         nohup python3 -u "$OKL/host/hi/demux.py" "$BYID-if02-port0" \
             "$DATA/comms/hi-bed" "$DATA/comms/hi-bus" \
@@ -77,6 +108,11 @@ start)
     "$0" status
     ;;
 stop)
+    if installed; then
+        sudo systemctl stop klipper-hi moonraker-hi hi-demux
+        echo stopped
+        exit 0
+    fi
     for p in moonraker klippy demux; do
         running "$DATA/comms/$p.pid" && kill "$(cat "$DATA/comms/$p.pid")"
         rm -f "$DATA/comms/$p.pid"
@@ -84,6 +120,11 @@ stop)
     echo stopped
     ;;
 status)
+    if installed; then
+        for u in $UNITS; do echo "$u: $(systemctl is-active $u)"; done
+        ls "$BYID"* 2>/dev/null || echo "Hi USB ports: not present"
+        exit 0
+    fi
     for p in demux klippy moonraker; do
         if running "$DATA/comms/$p.pid"; then s=running; else s=stopped; fi
         echo "$p: $s"
@@ -91,6 +132,6 @@ status)
     ls "$BYID"* 2>/dev/null || echo "Hi USB ports: not present"
     ;;
 *)
-    sed -n '2,13p' "$0"
+    sed -n '2,15p' "$0"
     ;;
 esac

@@ -1,4 +1,8 @@
 # Creality Hi USB host-link (3 gadget serial ports) -> /dev/ttyUSB* through
-# usbserial generic. Install: sudo cp to /etc/udev/rules.d/ then
-# sudo udevadm control --reload && sudo udevadm trigger
-ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="0525", ATTR{idProduct}=="a4a6", RUN+="/sbin/modprobe usbserial", RUN+="/bin/sh -c 'echo 0525 a4a6 > /sys/bus/usb-serial/drivers/generic/new_id'"
+# usbserial generic. Installed by: host.sh install (or by hand: sudo cp to
+# /etc/udev/rules.d/ then sudo udevadm control --reload). The rule fires on
+# "add": re-plug the cable or re-run start.sh on the Hi after installing.
+ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="0525", ATTR{idProduct}=="a4a6", RUN+="/sbin/modprobe usbserial", RUN+="/bin/sh -c 'echo 0525 a4a6 > /sys/bus/usb-serial/drivers/generic/new_id || true'"
+# When the main-MCU port appears, bring the Hi's Klipper back (only does
+# anything where host.sh install has put hi-reconnect.service in place).
+ACTION=="add", SUBSYSTEM=="tty", ENV{ID_VENDOR_ID}=="0525", ENV{ID_MODEL_ID}=="a4a6", ENV{ID_USB_INTERFACE_NUM}=="00", TAG+="systemd", ENV{SYSTEMD_WANTS}+="hi-reconnect.service"

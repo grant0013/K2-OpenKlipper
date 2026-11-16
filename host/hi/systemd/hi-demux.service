@@ -1,0 +1,13 @@
+[Unit]
+Description=Creality Hi host-link: split the shared USB port (bed MCU + motor bus)
+
+[Service]
+Type=simple
+User=@USER@
+ExecStart=/usr/bin/python3 -u @OKL@/host/hi/demux.py @BYID@-if02-port0 @DATA@/comms/hi-bed @DATA@/comms/hi-bus
+Nice=-10
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

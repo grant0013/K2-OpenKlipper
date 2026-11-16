@@ -1,0 +1,16 @@
+[Unit]
+Description=Moonraker for the Creality Hi (external host)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+SupplementaryGroups=moonraker-admin
+WorkingDirectory=@MOONRAKER@
+ExecStart=@MPY@ @MOONRAKER@/moonraker/moonraker.py -d @DATA@
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
