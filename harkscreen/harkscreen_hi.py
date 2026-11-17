@@ -5,9 +5,12 @@ screen does).
 
 A compact sibling of harkscreen.py (the K2's 800x480 screen): it reuses that
 file's Moonraker client, touch reader, M73 ETA and config loader, with pages
-sized for the small panel: status, print files, controls (move, preheat,
-load/unload, nozzle clean) and machine (IP, brightness, restart, back to
-stock). Draws with Pillow straight to /dev/fb0; talks to Moonraker.
+sized for the small panel: status, print files, filament (the CFS slots:
+load, unload, measure pressure advance, pick the filament profile and
+colour; the spool holder when no CFS answers), controls (move, preheat,
+nozzle clean) and machine (IP, brightness, automatic PA, restart, back to
+stock). Draws with Pillow straight to /dev/fb0; talks to Moonraker, so it
+works the same with Klipper on the printer or on an external host.
 
 This file may be distributed under the terms of the GNU GPLv3 license.
 """
@@ -46,7 +49,7 @@ OBJECTS = {
                     "info"],
     "virtual_sdcard": ["progress", "file_position"],
     "display_status": ["progress", "message"],
-    "extruder": ["temperature", "target"],
+    "extruder": ["temperature", "target", "pressure_advance"],
     "heater_bed": ["temperature", "target"],
     "fan": ["speed"],
     "toolhead": ["homed_axes", "position"],
@@ -54,10 +57,72 @@ OBJECTS = {
     "webhooks": ["state", "state_message"],
     "k2_motor_bus": ["motors_ready"],
     "pause_resume": ["is_paused"],
+    # CFS and automatic pressure advance (absent objects are just left out)
+    "k2_cfs": ["fitted", "online", "active_slot", "feed_slot",
+               "change_pending"],
+    "hark_cfs_slots": ["slots"],
+    "hark_flow_cal": ["pa_auto"],
+    "gcode_macro _PA_STATIC_SAVE": ["last"],
+    "gcode_macro _PA_AUTO": ["on_print_start"],
+    "filament_switch_sensor filament_sensor": ["filament_detected"],
 }
 
-TABS = (("status", "Status"), ("files", "Files"), ("control", "Control"),
-        ("machine", "Machine"))
+CFS_SLOTS = "ABCD"
+# Same names and colours as the KlipperScreen CFS panel and hark_cfs_slots
+COLOURS = (
+    ("Black", "000000"), ("White", "FFFFFF"), ("Grey", "808080"),
+    ("Silver", "C0C0C0"), ("Red", "E53935"), ("Orange", "FB8C00"),
+    ("Yellow", "FDD835"), ("Gold", "FFC107"), ("Green", "43A047"),
+    ("Lime", "C0CA33"), ("Cyan", "26EEEE"), ("Blue", "1E88E5"),
+    ("Navy", "1A237E"), ("Purple", "8E24AA"), ("Pink", "EC407A"),
+    ("Brown", "6D4C41"), ("Beige", "D7CCC8"),
+)
+TYPE_ORDER = ("PLA", "PETG", "ABS", "ASA", "TPU", "PLA-CF", "PETG-CF")
+PROFILE_ROWS = 3           # filament profiles per page (2 columns)
+
+
+def colour_rgb(hexval):
+    h = (hexval or "").strip().lstrip("#")
+    if len(h) < 6:
+        return None
+    try:
+        return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+    except ValueError:
+        return None
+
+
+def colour_name(hexval):
+    h = (hexval or "").strip().lstrip("#").upper()
+    for name, v in COLOURS:
+        if v == h:
+            return name
+    return ("#" + h) if h else ""
+
+
+def filament_types(filaments):
+    present = sorted({f.get("type") for f in filaments if f.get("type")})
+    return [t for t in TYPE_ORDER if t in present] + \
+        [t for t in present if t not in TYPE_ORDER]
+
+
+def filaments_of_type(filaments, mtype):
+    """Custom profiles first, then Creality's own, then generic ones."""
+    found = [f for f in filaments if f.get("type") == mtype]
+    found.sort(key=lambda f: (f.get("source") == "creality",
+                              f.get("brand") != "Creality",
+                              f.get("name", "")))
+    return found
+
+
+def pa_auto_on(st):
+    """PA_CAL_AUTO's switch, else the print start's own default."""
+    sw = st.get("hark_flow_cal", {}).get("pa_auto")
+    if sw is None:
+        sw = st.get("gcode_macro _PA_AUTO", {}).get("on_print_start", 0)
+    return bool(sw)
+
+TABS = (("status", "Status"), ("files", "Files"), ("filament", "Filament"),
+        ("control", "Control"), ("machine", "Machine"))
 BRIGHTNESS = (25, 50, 75, 100)
 SLEEP_CHOICES = ((300, "5 min"), (600, "10 min"), (1800, "30 min"),
                  (0, "Never"))
@@ -87,6 +152,15 @@ class Mr(hs.Moonraker):
         with urllib.request.urlopen(
                 self.base + "/printer/objects/query?" + q, timeout=3) as r:
             return json.load(r)["result"]["status"]
+
+    def library(self):
+        """Filament profiles (hark_cfs_slots: library + Creality's)."""
+        import json, urllib.request
+        with urllib.request.urlopen(
+                self.base + "/printer/objects/query?hark_cfs_slots="
+                "library,materials", timeout=5) as r:
+            h = json.load(r)["result"]["status"].get("hark_cfs_slots", {})
+        return list(h.get("library") or []) + list(h.get("materials") or [])
 
 
 class Thumbs(threading.Thread):
@@ -157,6 +231,7 @@ class Data(threading.Thread):
         super().__init__(daemon=True)
         self.screen = screen
         self.st, self.err = {}, "Starting"
+        self.lib_at = 0.
 
     def run(self):
         files_at = 0.
@@ -174,6 +249,11 @@ class Data(threading.Thread):
                     self.screen.files = mr.files()
                     self.screen.dirty = True
                     files_at = time.time()
+                if (self.screen.page == "filament"
+                        and time.time() - self.lib_at > 60):
+                    self.screen.library = mr.library()
+                    self.screen.dirty = True
+                    self.lib_at = time.time()
             except Exception:
                 try:
                     info = mr.info()
@@ -197,6 +277,7 @@ class Screen:
         self.confirm = None        # (question, callback)
         self.notice = None         # (text, colour, until)
         self.files = []
+        self.library = []          # filament profiles for the slot editor
         self.file_page = 0
         self.step = 10.
         self.prefs = hs.load_prefs()
@@ -345,6 +426,19 @@ class Screen:
                 self.draw_file(d, st, self.sub)
             else:
                 self.draw_files(d, st)
+        elif self.page == "filament":
+            sub = self.sub or ""
+            if sub.startswith("slot:"):
+                self.draw_slot(d, st, sub[5:])
+            elif sub.startswith("types:"):
+                self.draw_types(d, sub[6:])
+            elif sub.startswith("prof:"):
+                _, slot, mtype, page = sub.split(":", 3)
+                self.draw_profiles(d, st, slot, mtype, int(page))
+            elif sub.startswith("colour:"):
+                self.draw_colours(d, st, sub[7:])
+            else:
+                self.draw_filament(d, st)
         elif self.page == "control":
             if self.sub == "move":
                 self.draw_move(d, st)
@@ -386,6 +480,9 @@ class Screen:
         y0 = H - NAV_H
         d.rectangle((0, y0, W, H), fill=self.col["panel"])
         tw = W // len(TABS)
+        # one size for every tab: the largest that fits them all
+        font = "m" if all(self.fonts["m"].getlength(lb) <= tw - 6
+                          for _, lb in TABS) else "s"
         for i, (page, label) in enumerate(TABS):
             rect = (i * tw, y0, (i + 1) * tw, H)
             on = page == self.page
@@ -393,7 +490,7 @@ class Screen:
                 d.rectangle((rect[0] + 6, y0, rect[2] - 6, y0 + 3),
                             fill=self.col["accent"])
             self.text(d, ((rect[0] + rect[2]) // 2, y0 + NAV_H // 2 + 1),
-                      label, "m", "text" if on else "muted", "mm")
+                      label, font, "text" if on else "muted", "mm", tw - 4)
             self.buttons.append((rect, ("page", page)))
 
     def draw_error(self, d, err):
@@ -422,10 +519,10 @@ class Screen:
         x0, y0, x1, y1 = rect
         d.rounded_rectangle(rect, 8, fill=self.col["panel"])
         cur, tgt = heater.get("temperature") or 0, heater.get("target") or 0
-        self.text(d, (x0 + 10, y0 + 8), label, "s", "muted")
-        self.text(d, (x0 + 10, y1 - 10), "%d" % round(cur), "xl",
+        self.text(d, (x0 + 10, y0 + 4), label, "s", "muted")
+        self.text(d, (x0 + 10, y1 - 4), "%d" % round(cur), "xl",
                   "warn" if tgt and abs(cur - tgt) > 3 else "text", "ld")
-        self.text(d, (x1 - 10, y1 - 14),
+        self.text(d, (x1 - 10, y1 - 10),
                   ("/ %d" % tgt) if tgt else "off", "m", "muted", "rd")
 
     def draw_status(self, d, st, err):
@@ -435,9 +532,9 @@ class Screen:
             return
         e, b = st.get("extruder", {}), st.get("heater_bed", {})
         half = (W - 18) // 2
-        self.temp_tile(d, (6, top, 6 + half, top + 72), "Nozzle", e, 0)
-        self.temp_tile(d, (12 + half, top, W - 6, top + 72), "Bed", b, 0)
-        y = top + 84
+        self.temp_tile(d, (6, top, 6 + half, top + 58), "Nozzle", e, 0)
+        self.temp_tile(d, (12 + half, top, W - 6, top + 58), "Bed", b, 0)
+        y = top + 64
         state = self.state(st)
         ps = st.get("print_stats", {})
         if state == "complete":
@@ -452,7 +549,8 @@ class Screen:
             line, colour = "Ready", "ok"
         self.text(d, (8, y), line, "m", colour, width=W - 16)
         homed = st.get("toolhead", {}).get("homed_axes") or ""
-        self.text(d, (8, y + 22), "IP %s   Homed: %s" % (
+        self.loaded_line(d, st, (8, y + 20), W - 16)
+        self.text(d, (8, y + 36), "IP %s   Homed: %s" % (
             self.ip, homed.upper() or "no"), "s", "muted")
         self.button(d, (6, H - NAV_H - 44, W // 2 - 3, H - NAV_H - 6),
                     "Print a file", ("page", "files"), "accent")
@@ -486,13 +584,14 @@ class Screen:
             sub.append("L %s/%s" % (info["current_layer"],
                                      info["total_layer"]))
         self.text(d, (x, top + 80), "   ".join(sub), "s", "muted")
-        bar = (6, top + size + 8, W - 6, top + size + 16)
+        bar = (6, top + size + 6, W - 6, top + size + 13)
         d.rounded_rectangle(bar, 4, fill=self.col["panel"])
         if p > 0:
             d.rounded_rectangle((bar[0], bar[1], bar[0] + max(
                 8, int((bar[2] - bar[0]) * p)), bar[3]), 4,
                 fill=self.col["accent"])
-        y0, y1 = H - NAV_H - 44, H - NAV_H - 6
+        self.loaded_line(d, st, (8, top + size + 16), W - 16)
+        y0, y1 = H - NAV_H - 40, H - NAV_H - 6
         paused = self.state(st) == "paused"
         third = (W - 24) // 3
         self.button(d, (6, y0, 6 + third, y1),
@@ -600,10 +699,14 @@ class Screen:
                          "Heating for %s" % m), "panel", True),
             ("Cool down", ("gcode", "TURN_OFF_HEATERS", "Heaters off"),
              "panel", True),
-            ("Load", ("gcode", "LOAD_FILAMENT TEMP=%d" % n, "Loaded"),
-             "panel", not busy),
-            ("Unload", ("gcode", "UNLOAD_FILAMENT TEMP=%d" % n,
-                        "Pull the filament out now"), "panel", not busy),
+            ("Filament", ("page", "filament"), "panel", True),
+            ("Unload", ("confirm", "Unload the filament?",
+                        ("gcode", "CFS_UNLOAD_ACTIVE", "Unloaded")
+                        if self.cfs_ok(st) else
+                        ("gcode", "UNLOAD_FILAMENT TEMP=%d" % n,
+                         "Pull the filament out now")), "panel",
+             not busy and (not self.cfs_ok(st)
+                           or bool(st.get("k2_cfs", {}).get("active_slot")))),
             ("Motors off", ("gcode", "M84", "Motors off"), "panel",
              not busy),
         ]
@@ -664,9 +767,285 @@ class Screen:
                                "Switch to Creality's firmware?",
                                ("stock",)), "accent",
              not self.printing(st)),
-            None,
+            ("Auto PA %s" % ("on" if pa_auto_on(st) else "off"),
+             ("gcode", "PA_CAL_AUTO ENABLE=%d" % (0 if pa_auto_on(st) else 1),
+              "Automatic pressure advance %s" % (
+                  "off" if pa_auto_on(st) else "on")),
+             "ok" if pa_auto_on(st) else "panel"),
         ]
         self.grid(d, items, 3, 2, top + 78, H - NAV_H - 6)
+
+    # --- filament (CFS slots / spool holder) -------------------------------
+    def cfs_ok(self, st):
+        c = st.get("k2_cfs", {})
+        return bool(c.get("fitted")) and bool(c.get("online"))
+
+    def swatch(self, d, rect, hexval, radius=4):
+        rgb = colour_rgb(hexval)
+        if rgb is None:
+            d.rounded_rectangle(rect, radius, fill=self.col["background"],
+                                outline=self.col["panel_edge"])
+            return
+        d.rounded_rectangle(rect, radius, fill=rgb,
+                            outline=self.col["panel_edge"])
+
+    def loaded_line(self, d, st, xy, width):
+        """'In the nozzle: B  Hyper PETG  PA 0.066' with its colour."""
+        if not self.cfs_ok(st):
+            return
+        c = st.get("k2_cfs", {})
+        slot = c.get("active_slot") or c.get("feed_slot")
+        x, y = xy
+        if not slot:
+            self.text(d, (x, y), "Nozzle empty (no CFS slot loaded)", "s",
+                      "muted", width=width)
+            return
+        rec = st.get("hark_cfs_slots", {}).get("slots", {}).get(slot, {})
+        self.swatch(d, (x, y + 1, x + 14, y + 14), rec.get("color"), 3)
+        pa = st.get("extruder", {}).get("pressure_advance")
+        label = "%s  %s" % (slot, rec.get("name") or rec.get("type") or "")
+        if pa:
+            label += "   PA %.3f" % pa
+        self.text(d, (x + 20, y), label, "s", "text", width=width - 20)
+
+    def draw_filament(self, d, st):
+        top = HEAD_H + 6
+        busy = self.printing(st)
+        if not self.cfs_ok(st):
+            self.draw_spool(d, st, top)
+            return
+        c = st.get("k2_cfs", {})
+        slots = st.get("hark_cfs_slots", {}).get("slots", {})
+        active = c.get("active_slot") or c.get("feed_slot")
+        gap = 6
+        tw = (W - gap * 5) // 4
+        th = 96
+        for i, slot in enumerate(CFS_SLOTS):
+            rec = slots.get(slot, {})
+            x0 = gap + i * (tw + gap)
+            rect = (x0, top, x0 + tw, top + th)
+            on = slot == active
+            fill = self.col["panel"]
+            if self.flash and self.flash[0] == rect \
+                    and time.time() - self.flash[1] < .25:
+                fill = hs.mix(fill, (255, 255, 255), .35)
+            d.rounded_rectangle(rect, 8, fill=fill,
+                                outline=self.col["accent"] if on
+                                else self.col["panel_edge"],
+                                width=2 if on else 1)
+            loaded = rec.get("loaded")
+            self.swatch(d, (x0 + 6, top + 6, x0 + tw - 6, top + 24),
+                        rec.get("color") if loaded else "")
+            self.text(d, (x0 + 8, top + 30), slot, "l", "text")
+            if on:
+                self.text(d, (x0 + tw - 7, top + 33), "IN", "s", "accent",
+                          "ra")
+            if loaded:
+                self.text(d, (x0 + 8, top + 54), rec.get("type") or "?",
+                          "s", "text", width=tw - 12)
+                self.text(d, (x0 + 8, top + 68), rec.get("name") or "",
+                          "s", "muted", width=tw - 12)
+                pa = rec.get("pressure_advance") or 0
+                self.text(d, (x0 + 8, top + 82),
+                          ("PA %.3f" % pa) if pa else "", "s", "muted")
+            else:
+                self.text(d, (x0 + 8, top + 58), "Empty", "s", "muted")
+            self.buttons.append((rect, ("sub", "slot:" + slot)))
+        last = st.get("gcode_macro _PA_STATIC_SAVE", {}).get("last") or {}
+        y = top + th + 6
+        if last.get("slot"):
+            if last.get("saved"):
+                line = "Last PA test: slot %s %.4f saved" % (
+                    last["slot"], last.get("pa") or 0)
+                colour = "ok"
+            else:
+                line = "Last PA test: slot %s not saved (%s)" % (
+                    last["slot"], last.get("reason") or "?")
+                colour = "warn"
+            self.text(d, (8, y), line, "s", colour, width=W - 16)
+        if c.get("change_pending"):
+            self.text(d, (8, y), "Colour change %s failed: Resume retries"
+                      % c["change_pending"], "s", "error", width=W - 16)
+        y0, y1 = H - NAV_H - 44, H - NAV_H - 6
+        half = (W - 18) // 2
+        auto = pa_auto_on(st)
+        self.button(d, (6, y0, 6 + half, y1),
+                    "Auto PA %s" % ("on" if auto else "off"),
+                    ("gcode", "PA_CAL_AUTO ENABLE=%d" % (0 if auto else 1),
+                     "Automatic pressure advance %s" % (
+                         "off" if auto else "on")),
+                    "ok" if auto else "panel")
+        self.button(d, (12 + half, y0, W - 6, y1),
+                    "Unload %s" % active if active else "Unload",
+                    ("confirm", "Cut and unload slot %s?" % active,
+                     ("gcode", "CFS_UNLOAD_ACTIVE",
+                      "Slot %s unloaded" % active)),
+                    "warn", enabled=bool(active) and not busy)
+
+    def draw_spool(self, d, st, top):
+        """No CFS answering: the spool holder at the back."""
+        busy = self.printing(st)
+        mats = self.materials()
+        if self.material not in mats:
+            self.material = list(mats)[0]
+        n, b = mats[self.material]
+        has = st.get("filament_switch_sensor filament_sensor", {}).get(
+            "filament_detected")
+        self.text(d, (8, top), "Spool holder (no CFS answering)", "m",
+                  "text", width=W - 16)
+        self.text(d, (8, top + 20), "Filament in the toolhead: %s" % (
+            "yes" if has else "no" if has is not None else "?"), "s",
+            "muted")
+        items = [
+            ("%s %d/%d" % (self.material, n, b), ("material",), "warn"),
+            ("Load", ("gcode", "LOAD_FILAMENT TEMP=%d" % n, "Loaded"),
+             "panel", not busy),
+            ("Unload", ("gcode", "UNLOAD_FILAMENT TEMP=%d" % n,
+                        "Pull the filament out now"), "panel", not busy),
+            ("Measure PA", ("confirm",
+                            "Measure pressure advance at the chute "
+                            "(about 3 min)?",
+                            ("gcode", "PA_CAL_STATIC SLOT=E SAVE=1",
+                             "Pressure advance measured")),
+             "panel", not busy and bool(has)),
+        ]
+        self.grid(d, items, 2, 2, top + 44, H - NAV_H - 6)
+
+    def draw_slot(self, d, st, slot):
+        top = HEAD_H + 4
+        busy = self.printing(st)
+        c = st.get("k2_cfs", {})
+        rec = st.get("hark_cfs_slots", {}).get("slots", {}).get(slot, {})
+        active = (c.get("active_slot") or c.get("feed_slot")) == slot
+        loaded = rec.get("loaded")
+        self.swatch(d, (8, top + 4, 30, top + 26),
+                    rec.get("color") if loaded else "")
+        title = "Slot %s  %s" % (slot, rec.get("name") if loaded
+                                 else "(empty)")
+        self.text(d, (38, top + 4), title, "m", "text", width=W - 46)
+        if loaded:
+            bits = [rec.get("type") or "?"]
+            if rec.get("nozzle_temp"):
+                bits.append("%d/%d C" % (rec["nozzle_temp"],
+                                         rec.get("bed_temp") or 0))
+            if rec.get("pressure_advance"):
+                bits.append("PA %.4f" % rec["pressure_advance"])
+            bits.append(colour_name(rec.get("color")))
+            self.text(d, (8, top + 32), "  ".join(b for b in bits if b),
+                      "s", "muted", width=W - 16)
+        if active:
+            self.text(d, (8, top + 48), "In the nozzle now", "s", "accent")
+        temp = rec.get("nozzle_temp") or 220
+        if active:
+            load = ("Unload", ("confirm", "Cut and unload slot %s?" % slot,
+                               ("gcode", "CFS_UNLOAD_ACTIVE",
+                                "Slot %s unloaded" % slot)), "warn",
+                    not busy)
+            measure = "PA_CAL_STATIC SLOT=%s SAVE=1" % slot
+        else:
+            load = ("Load", ("confirm",
+                             "Load slot %s? Heats to %d C at the chute." % (
+                                 slot, temp),
+                             ("gcode", "CFS_LOAD_SLOT SLOT=%s" % slot,
+                              "Slot %s loaded" % slot)), "accent",
+                    not busy and bool(loaded))
+            measure = ("CFS_LOAD_SLOT SLOT=%s PA=0 COOL=0\n"
+                       "PA_CAL_STATIC SLOT=%s SAVE=1" % (slot, slot))
+        edit_ok = not (busy and active)
+        items = [
+            load,
+            ("Measure PA", ("confirm",
+                            "Measure slot %s's pressure advance at the chute "
+                            "(about 3 min%s)?" % (
+                                slot, "" if active else ", loads it first"),
+                            ("gcode", measure,
+                             "Slot %s pressure advance measured" % slot)),
+             "panel", not busy and bool(loaded)),
+            ("Filament", ("sub", "types:" + slot), "panel", edit_ok),
+            ("Colour", ("sub", "colour:" + slot), "panel", edit_ok),
+            ("Mark empty", ("confirm", "Mark slot %s as empty?" % slot,
+                            ("gcode_sub", "CFS_SLOT_CLEAR SLOT=%s" % slot,
+                             "Slot %s marked empty" % slot, "slot:" + slot)),
+             "panel", edit_ok and bool(loaded) and not active),
+            ("Back", ("sub", None)),
+        ]
+        self.grid(d, items, 3, 2, top + 66, H - NAV_H - 6)
+
+    def draw_types(self, d, slot):
+        top = HEAD_H + 4
+        self.text(d, (8, top + 2), "Slot %s: filament type" % slot, "m",
+                  "text")
+        types = filament_types(self.library)
+        if not types:
+            self.text(d, (8, top + 30), "Loading the filament list...",
+                      "s", "muted")
+        items = [(t, ("sub", "prof:%s:%s:0" % (slot, t))) for t in types[:8]]
+        items += [None] * (8 - len(items))
+        items.append(("Back", ("sub", "slot:" + slot)))
+        self.grid(d, items, 3, 3, top + 26, H - NAV_H - 6)
+
+    def draw_profiles(self, d, st, slot, mtype, page):
+        top = HEAD_H + 4
+        rec = st.get("hark_cfs_slots", {}).get("slots", {}).get(slot, {})
+        found = filaments_of_type(self.library, mtype)
+        per = PROFILE_ROWS * 2
+        pages = max(1, (len(found) + per - 1) // per)
+        page = min(page, pages - 1)
+        self.text(d, (8, top + 2), "Slot %s: %s profile" % (slot, mtype),
+                  "m", "text", width=W - 70)
+        if pages > 1:
+            self.text(d, (W - 8, top + 4), "%d/%d" % (page + 1, pages), "s",
+                      "muted", "ra")
+        colour = (rec.get("color") or "").strip().lstrip("#")
+        items = []
+        for f in found[page * per:(page + 1) * per]:
+            line = "CFS_SLOT_SET SLOT=%s FILAMENT=%s" % (slot, f.get("id"))
+            if colour:
+                line += " COLOR=%s" % colour.upper()
+            items.append((f.get("name") or f.get("id"),
+                          ("gcode_sub", line,
+                           "Slot %s: %s" % (slot, f.get("name")),
+                           "slot:" + slot)))
+        items += [None] * (per - len(items))
+        bottom = H - NAV_H - 44
+        self.grid(d, items, 2, PROFILE_ROWS, top + 24, bottom, gap=4)
+        y0, y1 = bottom + 4, H - NAV_H - 6
+        third = (W - 24) // 3
+        self.button(d, (6, y0, 6 + third, y1), "<",
+                    ("sub", "prof:%s:%s:%d" % (slot, mtype, page - 1)),
+                    "panel", enabled=page > 0)
+        self.button(d, (12 + third, y0, 12 + 2 * third, y1), "Back",
+                    ("sub", "types:" + slot))
+        self.button(d, (18 + 2 * third, y0, W - 6, y1), ">",
+                    ("sub", "prof:%s:%s:%d" % (slot, mtype, page + 1)),
+                    "panel", enabled=page + 1 < pages)
+
+    def draw_colours(self, d, st, slot):
+        top = HEAD_H + 4
+        rec = st.get("hark_cfs_slots", {}).get("slots", {}).get(slot, {})
+        cur = (rec.get("color") or "").strip().lstrip("#").upper()
+        self.text(d, (8, top + 2), "Slot %s: colour (%s)" % (
+            slot, colour_name(cur) or "none"), "m", "text", width=W - 16)
+        cols, rows, gap = 6, 3, 6
+        y_top, y_bot = top + 26, H - NAV_H - 6
+        bw = (W - gap * (cols + 1)) // cols
+        bh = (y_bot - y_top - gap * (rows - 1)) // rows
+        cells = list(COLOURS) + [("Back", None)]
+        for i, (name, hexval) in enumerate(cells):
+            cx, cy = i % cols, i // cols
+            x0 = gap + cx * (bw + gap)
+            y0 = y_top + cy * (bh + gap)
+            rect = (x0, y0, x0 + bw, y0 + bh)
+            if hexval is None:
+                self.button(d, rect, "Back", ("sub", "slot:" + slot))
+                continue
+            d.rounded_rectangle(rect, 6, fill=colour_rgb(hexval),
+                                outline=self.col["accent"] if hexval == cur
+                                else self.col["panel_edge"],
+                                width=3 if hexval == cur else 1)
+            self.buttons.append((rect, (
+                "gcode_sub", "CFS_SLOT_SET SLOT=%s COLOR=%s" % (slot, hexval),
+                "Slot %s: %s" % (slot, name), "slot:" + slot)))
 
     def draw_confirm(self, img):
         dim = Image.new("RGB", img.size, (0, 0, 0))
@@ -763,6 +1142,11 @@ class Screen:
         elif kind == "gcode":
             self.say("Running: " + action[1].split("\n")[0], "muted", 2.)
             self.run(action[1], action[2])
+        elif kind == "gcode_sub":
+            # a quick setting (slot profile, colour): run it and step back
+            self.sub = action[3]
+            self.say("Saving...", "muted", 2.)
+            self.run(action[1], action[2], timeout=30)
         elif kind == "gcode_post":
             mr = Mr(self.cfg.get("screen", "moonraker"))
             mr.post(action[1])
