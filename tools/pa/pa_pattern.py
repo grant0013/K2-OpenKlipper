@@ -93,6 +93,8 @@ def main():
     ap.add_argument('--fan', type=int, default=100,
                     help='part fan %% from layer 2 (PETG ~30)')
     ap.add_argument('--centre', type=float)
+    ap.add_argument('--material', default='PLA',
+                    help="Hi: filament type for START_PRINT (nozzle clean temps)")
     ap.add_argument('-o')
     a = ap.parse_args()
     hi = a.printer == 'hi'
@@ -124,15 +126,14 @@ def main():
               xs[0] - 2, CENTRE_Y + dy + 2))
     g.emit("M106 S0")
     if hi:
-        # Creality Hi start gcode (Creality Print profile): prime along
-        # the front edge after START_PRINT's wipe
-        g.emit("START_PRINT EXTRUDER_TEMP=%d BED_TEMP=%d" % (temp, bed))
-        g.emit("M109 S%d\nM83\nG90\nG1 Z3 F600\nG1 Y150 F12000\n"
-               "G1 X0 F12000\nG1 Z0.2 F600\nG1 E0.8 F300\n"
-               "G1 X0 Y0 E9 F1500\nG1 X150 Y0 E9 F1500\nG92 E0\n"
-               "G1 Z1 F600" % temp)
-        # (the first travel below retracts and primes again)
-        g.emit("G1 Z0.6 F600")
+        # The Hi's one-line start: START_PRINT loads the slot, measures PA,
+        # and primes (KAMP purge by the pattern). The measured-PA hold is
+        # then released so every chevron prints at its own value.
+        g.emit("START_PRINT EXTRUDER_TEMP=%d BED_TEMP=%d MATERIAL=%s "
+               "TOTAL_LAYER=%d VOLUMETRIC=12"
+               % (temp, bed, a.material.upper(), LAYERS))
+        g.emit("PA_HOLD_MEASURED")
+        g.emit("M83\nG90\nG1 Z0.6 F600\nM104 S%d\nG92 E0" % temp)
     else:
         g.emit("START_PRINT EXTRUDER_TEMP=%d BED_TEMP=%d TOOL=%d"
                % (temp, bed, SLOTS.index(slot)))
