@@ -102,5 +102,35 @@ class ChangeHookTest(unittest.TestCase):
         self.assertIn("carries on", obj.gcode.raw[0])
 
 
+class KampAndRubTest(unittest.TestCase):
+    def test_print_start_uses_kamp_with_labelled_objects(self):
+        start = section("gcode_macro START_PRINT")
+        self.assertIn("variable_purge_style: 'kamp'", start)
+        self.assertIn("printer.exclude_object.objects|length > 0", start)
+        park = start.index("SMART_PARK")
+        self.assertLess(park, start.index("M109 S{extruder_temp}", park))
+        self.assertLess(start.index("M109 S{extruder_temp}", park),
+                        start.index("LINE_PURGE FLOW={volumetric}"))
+        # no labelled objects (or 'stock'): the old prime line
+        self.assertIn("_HI_PRIME_LINE VOLUMETRIC={volumetric}", start)
+
+    def test_purge_stays_on_the_bed(self):
+        purge = section("gcode_macro LINE_PURGE")
+        self.assertIn("bmx - purge_amount - 10", purge)
+        self.assertIn("bmy - purge_amount - 10", purge)
+        park = section("gcode_macro SMART_PARK")
+        self.assertIn("[x_min, 0]|max", park)
+        self.assertNotIn("axis_minimum", park)
+
+    def test_rub_before_both_wiper_rezeros(self):
+        scrub = section("gcode_macro _NOZZLE_CLEAR_SCRUB")
+        self.assertEqual(scrub.count(
+            "SET_KINEMATIC_POSITION Z=0\n    _NOZZLE_CONTACT_RUB"), 2)
+        rub = section("gcode_macro _NOZZLE_CONTACT_RUB")
+        self.assertLess(rub.index("G1 Z{0 - r.press|float}"),
+                        rub.index("PROBE"))
+        self.assertIn("SET_KINEMATIC_POSITION Z=0", rub)
+
+
 if __name__ == '__main__':
     unittest.main()
