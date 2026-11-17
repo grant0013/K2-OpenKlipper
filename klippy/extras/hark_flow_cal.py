@@ -16,6 +16,8 @@
 # is FlowTune's, github.com/MisterSheikh/klipper-flowtune).
 #
 #   FLOW_CAL_RUN [FLOWS=6,8,...] [STEP_TIME=2] [KNEE=8] [MARGIN=1] [APPLY=0]
+#   FLOW_CAL_AUTO ENABLE=0|1   max flow at every print start
+#   PA_CAL_AUTO ENABLE=0|1     pressure advance after it, saved to the slot
 #
 # Needs the feed armed and the nozzle at print temperature (the
 # FLOW_CAL_STATIC / _FLOW_AUTO macros do that part).
@@ -23,8 +25,10 @@
 # Copyright (C) 2026  Hark Tech
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
+import json
 import logging
 import math
+import os
 
 
 def median(values):
@@ -154,6 +158,46 @@ def pick_cap(points, knee_pct=4., margin=3., fit_max=12., min_cap=4.,
     return cap_from_knee(knee, margin, min_cap), round(knee, 2), rows
 
 
+def file_pa_line(line):
+    """(value, SMOOTH_TIME word or None) for a SET_PRESSURE_ADVANCE line
+    that gives ADVANCE; None for every other line. SMOOTH_TIME is not what
+    the print start test measures, so it stays."""
+    words = line.split(';', 1)[0].split()
+    if not words or words[0].upper() != 'SET_PRESSURE_ADVANCE':
+        return None
+    advance = None
+    smooth = []
+    for word in words[1:]:
+        key, _, value = word.partition('=')
+        if key.upper() == 'ADVANCE':
+            try:
+                advance = float(value)
+            except ValueError:
+                return None
+        elif key.upper() == 'SMOOTH_TIME':
+            smooth.append(word)
+    if advance is None:
+        return None
+    return advance, smooth[0] if smooth else None
+
+
+class _FileLines:
+    """Stands in for virtual_sdcard's gcode object, so the lines of the file
+    being printed can be told apart from what macros send."""
+    def __init__(self, delegate, owner):
+        self._delegate = delegate
+        self._owner = owner
+
+    def __getattr__(self, name):
+        return getattr(self._delegate, name)
+
+    def run_script(self, script):
+        line = self._owner.file_line(script)
+        if line is None:
+            return None
+        return self._delegate.run_script(line)
+
+
 class HarkFlowCal:
     def __init__(self, config):
         self.printer = config.get_printer()
@@ -195,12 +239,135 @@ class HarkFlowCal:
         # Extruder acceleration for the steps (mm/s^2 of filament)
         self.e_accel = config.getfloat('extrude_accel', 2000., above=0.)
         self.last = {}
+        # The print-start switches, kept across restarts in
+        # hark_flow_cal.json next to the config; None until one is used, so
+        # START_PRINT falls back to the macro's variable_on_print_start
+        config_file = self.printer.get_start_args().get('config_file', '')
+        self.state_path = config.get(
+            'state_path',
+            os.path.join(os.path.dirname(config_file)
+                         or '/mnt/UDISK/printer_data_mainline/config',
+                         'hark_flow_cal.json'))
+        self.switches = self._load_switches()
+        # Set once this print's PA has been measured and saved: the sliced
+        # file's own PA is then ignored (file 0454, 11-09, set 0.05 straight
+        # after START_PRINT and undid the test). None = the file decides
+        self.hold_slot = None
+        self.file_pa = {}
+        self.printer.register_event_handler('klippy:ready', self._ready)
+        self.gcode.register_command(
+            'PA_HOLD_MEASURED', self.cmd_PA_HOLD_MEASURED,
+            desc="Ignore the file's pressure advance this print: SLOT=A-D, "
+                 "no SLOT to stop")
         self.gcode.register_command(
             'FLOW_CAL_RUN', self.cmd_FLOW_CAL_RUN,
             desc="Step the flow up at the chute and find the melt limit")
+        self.gcode.register_command(
+            'FLOW_CAL_AUTO', self.cmd_FLOW_CAL_AUTO,
+            desc="Max flow test at every print start: ENABLE=1 or 0")
+        self.gcode.register_command(
+            'PA_CAL_AUTO', self.cmd_PA_CAL_AUTO,
+            desc="Pressure advance test at every print start: ENABLE=1 or 0")
+
+    def _ready(self):
+        v_sd = self.printer.lookup_object('virtual_sdcard', None)
+        if v_sd is not None:
+            v_sd.gcode = _FileLines(v_sd.gcode, self)
+
+    def cmd_PA_HOLD_MEASURED(self, gcmd):
+        slot = gcmd.get('SLOT', None)
+        self.hold_slot = slot.upper() if slot else None
+        self.file_pa = {}
+
+    def _current_slot(self):
+        cfs = self.printer.lookup_object('k2_cfs', None)
+        if cfs is None:
+            return self.hold_slot
+        status = cfs.get_status(self.reactor.monotonic())
+        return (status.get('active_slot') or status.get('feed_slot')
+                or self.hold_slot)
+
+    def _slot_pa(self, slot):
+        slots = self.printer.lookup_object('hark_cfs_slots', None)
+        if slots is None:
+            return 0.
+        return slots.slots.get(slot, {}).get('pressure_advance') or 0.
+
+    def file_line(self, line):
+        """The line to run for this line of the printing file, None for
+        none. The slot's own PA replaces the file's while the file sets one
+        fixed value per slot, so after a colour change the new slot's saved
+        PA is set, not the old slot's kept. A slot with no PA saved keeps
+        the file's, and a file whose value changes within a slot is a PA
+        test or adaptive PA, which must run as sliced."""
+        if self.hold_slot is None:
+            return line
+        parsed = file_pa_line(line)
+        if parsed is None:
+            return line
+        value, smooth = parsed
+        slot = self._current_slot()
+        pa = self._slot_pa(slot)
+        if pa <= 0.:
+            return line
+        seen = self.file_pa.get(slot)
+        if seen is not None and abs(seen - value) > 1e-6:
+            self.hold_slot = None
+            self.file_pa = {}
+            self.gcode.respond_info(
+                "This file changes pressure advance as it prints (a PA test "
+                "or adaptive PA), so its own values are used from here")
+            return line
+        if seen is None:
+            self.file_pa[slot] = value
+            self.gcode.respond_info(
+                "Slot %s: keeping pressure advance %.4f, ignoring the "
+                "slicer's %.4f (PA_CAL_AUTO ENABLE=0 to use the slicer's)"
+                % (slot, pa, value))
+        return "SET_PRESSURE_ADVANCE ADVANCE=%.4f%s" % (
+            pa, (" " + smooth) if smooth else "")
+
+    def _load_switches(self):
+        try:
+            with open(self.state_path) as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        return {k: int(data[k]) for k in ('auto', 'pa_auto')
+                if data.get(k) in (0, 1)}
+
+    def _set_switch(self, gcmd, key):
+        on = gcmd.get_int('ENABLE', 1, minval=0, maxval=1)
+        switches = dict(self.switches)
+        switches[key] = on
+        try:
+            tmp = self.state_path + '.tmp'
+            with open(tmp, 'w') as f:
+                json.dump(switches, f)
+            os.replace(tmp, self.state_path)
+        except OSError as e:
+            raise gcmd.error("Could not save the setting: %s" % (e,))
+        self.switches = switches
+        return on
+
+    def cmd_FLOW_CAL_AUTO(self, gcmd):
+        on = self._set_switch(gcmd, 'auto')
+        gcmd.respond_info("Max flow test at print start: %s"
+                          % ("ON" if on else "OFF"))
+
+    def cmd_PA_CAL_AUTO(self, gcmd):
+        on = self._set_switch(gcmd, 'pa_auto')
+        gcmd.respond_info("Pressure advance test at print start: %s%s"
+                          % ("ON" if on else "OFF",
+                             " (each result is saved over the slot's "
+                             "pressure advance)" if on else ""))
 
     def get_status(self, eventtime):
-        return {'last': dict(self.last)}
+        return {'last': dict(self.last),
+                'auto': self.switches.get('auto'),
+                'pa_auto': self.switches.get('pa_auto')}
 
     # --- gauge samples ---
     def _collector(self):

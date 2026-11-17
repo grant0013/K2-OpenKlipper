@@ -96,7 +96,7 @@ class ShaperCalibrate:
                 child_conn.send((False, res))
             child_conn.close()
         # Start a process to perform the calculation
-        calc_proc = multiprocessing.Process(target=wrapper)
+        calc_proc = multiprocessing.get_context('fork').Process(target=wrapper)
         calc_proc.daemon = True
         calc_proc.start()
         # Wait for the process to finish

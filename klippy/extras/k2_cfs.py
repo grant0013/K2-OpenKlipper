@@ -3540,6 +3540,7 @@ class K2CFS:
                                  require_selected=True)
             timings.append(reactor.monotonic())
             self.cmd_CFS_PURGE(load_gcmd)
+            self._after_change_purge(slot, ctx)
             timings.append(reactor.monotonic())
         except Exception:
             self._best_effort_stop(mask)
@@ -3553,6 +3554,25 @@ class K2CFS:
             self.print_start_transaction = False
             self._set_fans(fan_speeds)
         return timings
+
+    def _after_change_purge(self, slot, ctx):
+        # Optional printer-config hook, still at the chute after a colour
+        # change's purge with the feed armed and the part fan off: the Hi
+        # measures the new slot's pressure advance here
+        # (_CFS_CHANGE_PURGED). Whatever it does, a failure there is
+        # reported and the colour change carries on.
+        if self.printer.lookup_object('gcode_macro _CFS_CHANGE_PURGED',
+                                      None) is None:
+            return
+        try:
+            self.gcode.run_script_from_command(
+                "_CFS_CHANGE_PURGED SLOT=%s OLD=%s TEMP=%.1f"
+                % (slot, ctx.get('old_slot') or '', ctx['new_temp']))
+        except Exception as exc:
+            logging.exception("k2_cfs: _CFS_CHANGE_PURGED failed")
+            self.gcode.respond_raw(
+                "!! After the colour change to slot %s: %s (the print"
+                " carries on)" % (slot, exc))
 
     def _change_return(self, gcmd, ctx, timings):
         # Over the print at the lifted height, then straight down.

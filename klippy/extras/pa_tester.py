@@ -243,27 +243,34 @@ class TriangularWindowFilter:
 
 
 def detect_force_sign(all_samples, all_moves):
-    # Detect force sensor polarity from the two last CV moves
-    # (the very last one is slower and should require less force)
-    if not all_moves:
+    # Detect force sensor polarity from how the force follows the speed over
+    # every constant-velocity move (faster needs more force). The last two
+    # moves alone read backwards on one K2 run (11-09) and every good window
+    # was then rejected. The first move of a longer test is the purge.
+    moves = [m for m in all_moves if m.accel == 0.0 and m.start_v > 0.]
+    if len(moves) > 2:
+        moves = moves[1:]
+    samples = sorted(all_samples)
+    times = [s[0] for s in samples]
+    points = []
+    for move in moves:
+        lo = bisect.bisect_left(times, move.print_time)
+        hi = bisect.bisect_left(times, move.print_time + move.move_t)
+        if hi - lo >= 2:
+            points.append((move.start_v,
+                           sum(s[1] for s in samples[lo:hi]) / (hi - lo)))
+    if len(points) < 2:
         return None
-    cv_moves = [m for m in all_moves if m.accel == 0.0]
-    last_moves = cv_moves[-2:]
-    if not last_moves:
+    mean_v = sum(p[0] for p in points) / len(points)
+    mean_f = sum(p[1] for p in points) / len(points)
+    den = sum((p[0] - mean_v) ** 2 for p in points)
+    if not den:
         return None
-    times = (last_moves[0].print_time, last_moves[1].print_time,
-             last_moves[1].print_time + last_moves[1].move_t)
-    last_move_samples = [s[1] for s in all_samples
-                         if times[1] <= s[0] < times[2]]
-    prev_move_samples = [s[1] for s in all_samples
-                         if times[0] <= s[0] < times[1]]
-    if len(last_move_samples) < 2 or len(prev_move_samples) < 2:
-        return None
-    diff = (sum(prev_move_samples) / len(prev_move_samples)
-            - sum(last_move_samples) / len(last_move_samples))
-    if diff > FORCE_EPS:
+    slope = sum((p[0] - mean_v) * (p[1] - mean_f) for p in points) / den
+    change = slope * (max(p[0] for p in points) - min(p[0] for p in points))
+    if change > FORCE_EPS:
         return 1
-    if diff < -FORCE_EPS:
+    if change < -FORCE_EPS:
         return -1
     return None
 
@@ -341,7 +348,7 @@ def _background_process_exec(printer, method, args):
             return
         child_conn.send((False, res))
         child_conn.close()
-    calc_proc = multiprocessing.Process(target=wrapper)
+    calc_proc = multiprocessing.get_context('fork').Process(target=wrapper)
     calc_proc.daemon = True
     calc_proc.start()
     reactor = printer.get_reactor()
