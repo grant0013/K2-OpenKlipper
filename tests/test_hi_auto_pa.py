@@ -132,5 +132,17 @@ class KampAndRubTest(unittest.TestCase):
         self.assertIn("SET_KINEMATIC_POSITION Z=0", rub)
 
 
+class StartToolTest(unittest.TestCase):
+    def test_first_tool_picks_the_slot(self):
+        start = section("gcode_macro START_PRINT")
+        self.assertIn("params.TOOL|default(0)|int", start)
+        self.assertLess(start.index('tmap["T%d" % tool]'),
+                        start.index("CFS_PRINT_START SLOT={cfs_slot}"))
+        import json
+        prof = json.loads((ROOT / "orca" / "Creality Hi OpenKlipper.json").read_text())
+        self.assertIn("TOOL=[initial_no_support_extruder]",
+                      prof["machine_start_gcode"])
+
+
 if __name__ == '__main__':
     unittest.main()
