@@ -1,6 +1,6 @@
 # tap_select.py - choose a consistent set of PRTouch taps
 #
-# Part of K2-PRTouch - an open reimplementation of Creality K2's strain-gauge probe.
+# Part of PRTouch - an open reimplementation of Creality K2's strain-gauge probe.
 # Copyright (C) 2026 Grant Harkness <grantharkness0013@gmail.com>
 # Portions adapted from Jacob10383's K2 Plus custom firmware
 # (https://github.com/Jacob10383/k2-plus-custom-firmware, extras/prtouch.py), GPLv3.

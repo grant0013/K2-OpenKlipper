@@ -30,7 +30,7 @@ case "$1" in
 setup)
     mkdir -p "$DATA/config" "$DATA/logs" "$DATA/gcodes" "$DATA/comms"
     {
-        echo "# MANAGED BY K2 OpenKlipper host.sh: replaced on every setup."
+        echo "# MANAGED BY OpenKlipper host.sh (Creality Hi): replaced on every setup."
         echo "# Do not edit; put changes in printer-overrides.cfg."
         echo
         cat "$OKL/config/mainline_stage2_hi.cfg"

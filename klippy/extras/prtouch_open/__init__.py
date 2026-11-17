@@ -1,6 +1,6 @@
 # prtouch_open — Klipper extras package
 #
-# Part of K2-PRTouch — an open reimplementation of Creality K2's strain-gauge probe.
+# Part of PRTouch — an open reimplementation of Creality K2's strain-gauge probe.
 # Copyright (C) 2026 Grant Harkness <grantharkness0013@gmail.com>
 # Distributed under the GNU GPLv3 license.
 #
@@ -20,7 +20,7 @@
 #      That swap is Phase B in our M1 install plan; this __init__.py is
 #      intentionally inert (no top-level side effects) so Phase A can drop
 #      the package without changing live probe behaviour.
-"""K2-PRTouch open reimplementation — package init.
+"""PRTouch open reimplementation — package init.
 
 Sub-modules:
     cfg.py            PrtouchConfig — printer.cfg schema reader

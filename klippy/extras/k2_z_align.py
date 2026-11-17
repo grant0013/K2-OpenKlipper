@@ -119,13 +119,13 @@ class K2ZAlign:
 
         self.gcode.register_command(
             "KZ_ALIGN_STATUS", self.cmd_KZ_ALIGN_STATUS,
-            desc="Report the K2 bottom Z optical-switch state")
+            desc="Report the Z reference switch state")
         self.gcode.register_command(
             "KZ_ALIGN_BOTTOM", self.cmd_KZ_ALIGN_BOTTOM,
             desc="Supervised MCU-controlled move to the bottom Z reference")
         self.gcode.register_command(
             "KZ_ALIGN_ABORT", self.cmd_KZ_ALIGN_ABORT,
-            desc="Immediately stop an active K2 bottom-reference move")
+            desc="Immediately stop an active Z switch reference move")
         self.gcode.register_command(
             "KZ_ALIGN_MEASURE", self.cmd_KZ_ALIGN_MEASURE,
             desc="Find the Z where the bottom switches trigger (Z homed)")
@@ -260,7 +260,7 @@ class K2ZAlign:
 
     def cmd_KZ_ALIGN_STATUS(self, gcmd):
         gcmd.respond_info(
-            "K2 Z bottom switch: %s; active=%s; last_flag=%s; last_delta=%s"
+            "Z reference switch: %s; active=%s; last_flag=%s; last_delta=%s"
             % (self._describe_switches(), self.active, self.last_flag,
                self.last_delta))
 
@@ -355,16 +355,16 @@ class K2ZAlign:
 
     def cmd_KZ_ALIGN_ABORT(self, gcmd):
         self._abort()
-        gcmd.respond_info("K2 Z bottom-reference abort sent")
+        gcmd.respond_info("Z switch reference: abort sent")
 
     def _check_motion_allowed(self, gcmd, name):
         if not self.allow_motion:
             raise gcmd.error(
-                "K2 Z bottom-reference motion is disabled in the config")
+                "Z switch reference motion is disabled in the config")
         if gcmd.get_int("CONFIRM", 0, minval=0, maxval=1) != 1:
             raise gcmd.error("%s requires CONFIRM=1" % (name,))
         if self.active:
-            raise gcmd.error("K2 Z bottom-reference motion is already active")
+            raise gcmd.error("Z switch reference motion is already active")
 
         toolhead = self.printer.lookup_object("toolhead")
         print_stats = self.printer.lookup_object("print_stats", None)
@@ -390,7 +390,7 @@ class K2ZAlign:
                 )
                 if not startup_recovery:
                     raise gcmd.error(
-                        "K2 Z bottom reference refused while print state "
+                        "Z switch reference refused while print state "
                         "is %s (homed=%s total=%.3fs print=%.3fs)"
                         % (state, homed or "none", total_duration,
                            print_duration))
@@ -469,14 +469,14 @@ class K2ZAlign:
                 delta = self._wait_result(
                     gcmd, lambda: self._send_query(1, quick, slow, rising,
                                                    safe),
-                    "K2 Z bottom reference")
+                    "Z switch reference")
                 if (not self.retry_tolerance
                         or abs(delta) < self.retry_tolerance):
                     break
                 attempt += 1
                 if attempt > self.retries:
                     raise gcmd.error(
-                        "K2 Z bottom reference: the Z motors still differ by "
+                        "Z switch reference: the Z motors still differ by "
                         "%d steps after %d tries (limit %d)"
                         % (delta, attempt, self.retry_tolerance))
                 logging.info("k2_z_align: delta %d >= %d, try %d",
@@ -497,7 +497,7 @@ class K2ZAlign:
                 toolhead.wait_moves()
             elapsed = self.reactor.monotonic() - started
             gcmd.respond_info(
-                "K2 Z bottom reference complete in %.3fs: "
+                "Z switch reference complete in %.3fs: "
                 "Z=%.6f, retracted to Z=%.6f, delta=%d"
                 % (elapsed, self.position_endstop,
                    self.position_endstop - self.retract_dist, delta))

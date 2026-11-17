@@ -728,25 +728,25 @@ class K2CFS:
             desc="Disarm buffer-controlled CFS feed")
         self.gcode.register_command(
             'CFS_PURGE_POSITION', self.cmd_CFS_PURGE_POSITION,
-            desc="Move to the K2 purge bucket using the stock safe route")
+            desc="Move to the purge chute using the stock safe route")
         self.gcode.register_command(
             'CFS_PURGE_RETURN', self.cmd_CFS_PURGE_RETURN,
-            desc="Leave the K2 purge bucket using the stock safe route")
+            desc="Leave the purge chute using the stock safe route")
         self.gcode.register_command(
             'NOZZLE_WIPE', self.cmd_NOZZLE_WIPE,
-            desc="Wipe the nozzle on the K2 rear silicone cleaner")
+            desc="Wipe the nozzle on the nozzle wiper")
         self.gcode.register_command(
             'CFS_CUTTER_POSITION', self.cmd_CFS_CUTTER_POSITION,
-            desc="Move to the K2 cutter staging point without cutting")
+            desc="Move to the cutter staging point without cutting")
         self.gcode.register_command(
             'CFS_CUTTER_RETURN', self.cmd_CFS_CUTTER_RETURN,
-            desc="Leave the K2 cutter staging point without cutting")
+            desc="Leave the cutter staging point without cutting")
         self.gcode.register_command(
             'CFS_CUTTER_CALIBRATE', self.cmd_CFS_CUTTER_CALIBRATE,
             desc="Find where the knife sensor trips (toolhead empty)")
         self.gcode.register_command(
             'CFS_CUTTER_SENSOR', self.cmd_CFS_CUTTER_SENSOR,
-            desc="Report the K2 cutter hall-sensor logical state")
+            desc="Report the cutter sensor state")
         self.gcode.register_command(
             'CFS_CUTTER_TEST', self.cmd_CFS_CUTTER_TEST,
             desc="Dry cuts with the toolhead empty: does the knife press "
@@ -759,10 +759,10 @@ class K2CFS:
             desc="Cut and release filament before CFS rewind")
         self.gcode.register_command(
             'CFS_LOAD', self.cmd_CFS_LOAD,
-            desc="Load a selected CFS slot using the stock K2 handshake")
+            desc="Load a selected CFS slot using Creality's stock handshake")
         self.gcode.register_command(
             'CFS_PURGE', self.cmd_CFS_PURGE,
-            desc="Purge loaded CFS filament using the stock K2 baseline")
+            desc="Purge loaded CFS filament using Creality's stock baseline")
         self.gcode.register_command(
             'CFS_PRINT_START', self.cmd_CFS_PRINT_START,
             desc="Select, load, and purge the initial CFS print slot")
@@ -1751,7 +1751,7 @@ class K2CFS:
             self.gcode.run_script_from_command(
                 self._purge_wipe_script(bool(park)))
         except Exception as exc:
-            raise gcmd.error("K2 nozzle wipe failed: %s" % exc)
+            raise gcmd.error("Nozzle wipe failed: %s" % exc)
         finally:
             if accel_changed:
                 self.gcode.run_script_from_command(
@@ -1761,10 +1761,10 @@ class K2CFS:
                     "RESTORE_GCODE_STATE NAME=NOZZLE_WIPE")
         if park:
             gcmd.respond_info(
-                "K2 nozzle wipe complete; parked at X%.3f Y%.3f"
+                "Nozzle wipe complete; parked at X%.3f Y%.3f"
                 % (self.purge_return_x, self.purge_safe_y))
         else:
-            gcmd.respond_info("K2 nozzle wipe complete; left at the chute")
+            gcmd.respond_info("Nozzle wipe complete; left at the chute")
 
     def _require_position(self, gcmd, position, expected_x, expected_y,
                           description):

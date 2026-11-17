@@ -1,4 +1,4 @@
-# KlipperScreen panel for the Creality CFS on K2 OpenKlipper (K2 and Hi).
+# KlipperScreen panel for the Creality CFS on Hark Tech OpenKlipper (K2 and Hi).
 #
 # Shows the four CFS slots (colour, filament, what is feeding the nozzle),
 # the box temperature and humidity, and offers Load / Unload when the

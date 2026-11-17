@@ -1,6 +1,6 @@
 # step.py — stepper-position capture subsystem
 #
-# Part of K2-PRTouch — an open reimplementation of Creality K2's strain-gauge probe.
+# Part of PRTouch — an open reimplementation of Creality K2's strain-gauge probe.
 # Copyright (C) 2026 Grant Harkness <grantharkness0013@gmail.com>
 # Distributed under the GNU GPLv3 license.
 #
@@ -137,7 +137,7 @@ class StepCapture:
         oid_xstp, oid_ystp, oid_zstp = self.bound_oids
         if None in (self.oid, oid_xstp, oid_ystp, oid_zstp, self.swp_pin):
             raise self.mcu.get_printer().config_error(
-                "K2-PRTouch step capture was not fully bound before config"
+                "PRTouch step capture was not fully bound before config"
             )
         self.mcu.add_config_cmd(
             "config_prtouch_step oid=%d oid_xstp=%d oid_ystp=%d "

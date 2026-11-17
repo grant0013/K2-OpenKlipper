@@ -1,6 +1,6 @@
 # zip.py — decoder for the prtouch_v3 ticks/datas wire format
 #
-# Part of K2-PRTouch — an open reimplementation of Creality K2's strain-gauge probe.
+# Part of PRTouch — an open reimplementation of Creality K2's strain-gauge probe.
 # Copyright (C) 2026 Grant Harkness <grantharkness0013@gmail.com>
 # Distributed under the GNU GPLv3 license.
 """Decode the resault_prtouch_pres / resault_prtouch_step binary payload.

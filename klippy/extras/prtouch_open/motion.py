@@ -1,6 +1,6 @@
 # motion.py — probe_by_step + run_G28_Z orchestration
 #
-# Part of K2-PRTouch — an open reimplementation of Creality K2's strain-gauge probe.
+# Part of PRTouch — an open reimplementation of Creality K2's strain-gauge probe.
 # Copyright (C) 2026 Grant Harkness <grantharkness0013@gmail.com>
 # Distributed under the GNU GPLv3 license.
 #

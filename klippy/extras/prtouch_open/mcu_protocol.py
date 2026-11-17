@@ -1,6 +1,6 @@
 # mcu_protocol.py — wire-level wrappers for the K2 prtouch_v3 MCU command set
 #
-# Part of K2-PRTouch — an open reimplementation of Creality K2's strain-gauge probe.
+# Part of PRTouch — an open reimplementation of Creality K2's strain-gauge probe.
 # Copyright (C) 2026 Grant Harkness <grantharkness0013@gmail.com>
 # Distributed under the GNU GPLv3 license.
 #

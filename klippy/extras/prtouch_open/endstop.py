@@ -1,6 +1,6 @@
 # endstop.py — PRTouchEndstopWrapper (duck-typed probe-endstop facade)
 #
-# Part of K2-PRTouch — an open reimplementation of Creality K2's strain-gauge probe.
+# Part of PRTouch — an open reimplementation of Creality K2's strain-gauge probe.
 # Copyright (C) 2026 Grant Harkness <grantharkness0013@gmail.com>
 # Distributed under the GNU GPLv3 license.
 #
@@ -167,8 +167,8 @@ class PRTouchEndstopWrapper:
       `BED_MESH_CALIBRATE` work through us.
     """
 
-    cmd_PRTOUCH_TEST_help = "K2-PRTouch: open replacement of PRTOUCH_TEST"
-    cmd_PRTOUCH_READY_help = "K2-PRTouch: open replacement of PRTOUCH_READY"
+    cmd_PRTOUCH_TEST_help = "PRTouch: open replacement of PRTOUCH_TEST"
+    cmd_PRTOUCH_READY_help = "PRTouch: open replacement of PRTOUCH_READY"
 
     def __init__(self, config):
         self.cfg = cfg_mod.PrtouchConfig(config)
@@ -189,7 +189,7 @@ class PRTouchEndstopWrapper:
         _, clk_pin_bare = _parse_pin_mcu(self.cfg.clk_pin)
         _, sdo_pin_bare = _parse_pin_mcu(self.cfg.sdo_pin)
         logging.info(
-            "K2-PRTouch __init__: pres_mcu=%s swp=%s clk=%s sdo=%s | "
+            "PRTouch __init__: pres_mcu=%s swp=%s clk=%s sdo=%s | "
             "step_mcu=%s swp=%s",
             pres_mcu_name, swp_pin_bare, clk_pin_bare, sdo_pin_bare,
             step_mcu_name, step_swp_pin_bare,
@@ -280,35 +280,35 @@ class PRTouchEndstopWrapper:
         )
         self.obj.gcode.register_command(
             'PRTOUCH_OPEN_BASELINE', self.cmd_K2_PRTOUCH_BASELINE,
-            desc="K2-PRTouch: read a single sample window without moving Z (M1 wire-layer smoke test)",
+            desc="PRTouch: read a single sample window without moving Z (M1 wire-layer smoke test)",
         )
         self.obj.gcode.register_command(
             'PRTOUCH_OPEN_TAP', self.cmd_K2_PRTOUCH_TAP,
-            desc="K2-PRTouch: stream samples for N seconds and report peak-to-peak — tap the nozzle to test",
+            desc="PRTouch: stream samples for N seconds and report peak-to-peak — tap the nozzle to test",
         )
         self.obj.gcode.register_command(
             'PRTOUCH_OPEN_TRIGGER_TEST', self.cmd_K2_PRTOUCH_TRIGGER_TEST,
-            desc="K2-PRTouch: run the full filter+check_trigger cascade on live samples; reports whether trigger ever fires",
+            desc="PRTouch: run the full filter+check_trigger cascade on live samples; reports whether trigger ever fires",
         )
         self.obj.gcode.register_command(
             'PRTOUCH_OPEN_PROBE_BUF', self.cmd_K2_PRTOUCH_PROBE_BUF,
-            desc="K2-PRTouch: diagnostic — sweep idx + is_src to find the live MCU sample buffer pointer",
+            desc="PRTouch: diagnostic — sweep idx + is_src to find the live MCU sample buffer pointer",
         )
         self.obj.gcode.register_command(
             'PRTOUCH_OPEN_TAP_LIVE', self.cmd_K2_PRTOUCH_TAP_LIVE,
-            desc="K2-PRTouch: brackets each read with start/stop streaming — fresh buffer every iteration",
+            desc="PRTouch: brackets each read with start/stop streaming — fresh buffer every iteration",
         )
         self.obj.gcode.register_command(
             'PRTOUCH_OPEN_PROBE_ONCE', self.cmd_K2_PROBE_ONCE,
-            desc="K2-PRTouch: chunked Z descent + trigger cascade — open-source Z-probing motion",
+            desc="PRTouch: chunked Z descent + trigger cascade — open-source Z-probing motion",
         )
         self.obj.gcode.register_command(
             'PRTOUCH_OPEN_LISTEN', self.cmd_K2_PROBE_LISTEN,
-            desc="K2-PRTouch: diagnostic — does the MCU push resault_prtouch_pres unsolicited?",
+            desc="PRTouch: diagnostic — does the MCU push resault_prtouch_pres unsolicited?",
         )
         self.obj.gcode.register_command(
             'PRTOUCH_OPEN_DURING_MOTION', self.cmd_K2_PROBE_DURING_MOTION,
-            desc="K2-PRTouch: M2 — reactor-timer sampler runs in parallel with non-blocking Z descent",
+            desc="PRTouch: M2 — reactor-timer sampler runs in parallel with non-blocking Z descent",
         )
 
         # Start/stop the pressure and step sessions around only those homing
@@ -388,7 +388,7 @@ class PRTouchEndstopWrapper:
         err = ack.get('err', 0)
         if err:
             raise self.obj.printer.command_error(
-                "K2-PRTouch: %s refused by the MCU (ack err=%s expar0=%s "
+                "PRTouch: %s refused by the MCU (ack err=%s expar0=%s "
                 "expar1=%s); not probing"
                 % (label, err, ack.get('expar0'), ack.get('expar1')))
 
@@ -421,11 +421,11 @@ class PRTouchEndstopWrapper:
     def _handle_motor_off(self, print_time=None):
         if not self._probe_active:
             return
-        logging.warning("K2-PRTouch: motors off during a probe; disarming")
+        logging.warning("PRTouch: motors off during a probe; disarming")
         try:
             self.probe_finish(None)
         except Exception:
-            logging.exception("K2-PRTouch: disarm on motors off failed")
+            logging.exception("PRTouch: disarm on motors off failed")
             self._probe_active = False
 
     def _handle_async_pres(self, params):
@@ -477,12 +477,12 @@ class PRTouchEndstopWrapper:
                 if mcu_helper is not None and hasattr(mcu_helper, '_oid'):
                     return mcu_helper._oid
                 logging.warning(
-                    "K2-PRTouch: could not extract OID for stepper %s "
+                    "PRTouch: could not extract OID for stepper %s "
                     "— prtouch_step may not bind correctly", stepper_name,
                 )
                 return 0
         # Stepper not found
-        logging.warning("K2-PRTouch: stepper %s not found in kinematics", stepper_name)
+        logging.warning("PRTouch: stepper %s not found in kinematics", stepper_name)
         return 0
 
     # ---- Klipper endstop-wrapper interface --------------------------------
@@ -529,7 +529,7 @@ class PRTouchEndstopWrapper:
     def probe_prepare(self, hmove):
         if self._probe_active:
             raise self.obj.printer.command_error(
-                "K2-PRTouch pressure session already active")
+                "PRTouch pressure session already active")
         self.last_no_trigger = False
         self.last_cleanup_ok = False
         # Slow the hotend fans before the baseline is taken: their
@@ -569,7 +569,7 @@ class PRTouchEndstopWrapper:
         reactor = self.obj.printer.get_reactor()
         reactor.pause(reactor.monotonic() + warmup)
         logging.info(
-            "K2-PRTouch hardware session armed: filters=%d,%d,%d "
+            "PRTouch hardware session armed: filters=%d,%d,%d "
             "holds=%d,%d,%d dead=%d warmup=%.4f",
             self.cfg.pres_ned_tftr, self.cfg.pres_ned_hftr,
             self.cfg.pres_ned_lftr, min_hold, max_hold, add_hold,
@@ -580,7 +580,7 @@ class PRTouchEndstopWrapper:
         if self.cfg.pres_arm_checks and self._swap_triggered():
             self.probe_finish(None)
             raise self.obj.printer.command_error(
-                "K2-PRTouch: contact line PA15->PC7 is already triggered "
+                "PRTouch: contact line PA15->PC7 is already triggered "
                 "after arming, before any movement; refusing to probe. Lift "
                 "the nozzle clear of the bed, clean it, and retry.")
 
@@ -603,11 +603,11 @@ class PRTouchEndstopWrapper:
         try:
             released = self._wait_swap_release()
         except Exception:
-            logging.exception("K2-PRTouch: PC7 release query failed")
+            logging.exception("PRTouch: PC7 release query failed")
             released = False
         if not released:
             self.last_cleanup_ok = False
-            msg = ("K2-PRTouch: contact line PC7 did not release within "
+            msg = ("PRTouch: contact line PC7 did not release within "
                    "%.3fs after the probe" % (self.cfg.pres_release_timeout,))
             logging.warning(msg)
             self.obj.gcode.respond_info(msg)
@@ -676,13 +676,13 @@ class PRTouchEndstopWrapper:
                               max(values) - min(values)))
             else:
                 summary = "samples=0"
-            msg = ("K2-PRTouch no-trigger pressure buffer: tri_chxs=%s "
+            msg = ("PRTouch no-trigger pressure buffer: tri_chxs=%s "
                    "buf_len=%s %s (full window in klippy.log)"
                    % (meta.get('tri_chxs'), meta.get('buf_len'), summary))
             logging.info("%s\n  pressure=%s\n  ticks=%s", msg, values, ticks)
             self.obj.gcode.respond_info(msg)
         except Exception:
-            logging.exception("K2-PRTouch: pressure buffer dump failed")
+            logging.exception("PRTouch: pressure buffer dump failed")
 
     def query_endstop(self, print_time):
         return self._mcu_endstop.query_endstop(print_time)
@@ -716,19 +716,19 @@ class PRTouchEndstopWrapper:
     # ---- gcode commands (M1: minimal stubs) ------------------------------
 
     def cmd_PRTOUCH_TEST(self, gcmd):
-        """K2-PRTouch test: read a single sample buffer and respond with stats.
+        """PRTouch test: read a single sample buffer and respond with stats.
 
         Minimal M1 surface — proves the wire layer works end-to-end. The
         equivalent of upstream prtouch.py:760.
         """
-        gcmd.respond_info("K2-PRTouch M1: cmd_PRTOUCH_TEST stub")
+        gcmd.respond_info("PRTouch M1: cmd_PRTOUCH_TEST stub")
         # TODO(M1): when sampler.read_baseline() is implemented, call it here
         # and report min/max/mean of the sample window so we have a smoke test
         # for the read path.
 
     def cmd_PRTOUCH_READY(self, gcmd):
         """Mark the bed/sensor as 'ready for probing'. Stub for now."""
-        gcmd.respond_info("K2-PRTouch M1: cmd_PRTOUCH_READY stub")
+        gcmd.respond_info("PRTouch M1: cmd_PRTOUCH_READY stub")
 
     def cmd_K2_PRTOUCH_BASELINE(self, gcmd):
         """Read a single sample window from the pressure subsystem.
@@ -742,14 +742,14 @@ class PRTouchEndstopWrapper:
             CHANNEL=<int>      — which channel index (default 0)
         """
         if self.sampler is None:
-            raise gcmd.error("K2-PRTouch: sampler not initialised — MCU identify hasn't fired yet")
+            raise gcmd.error("PRTouch: sampler not initialised — MCU identify hasn't fired yet")
         if not self.sampler.proto._configured:
-            raise gcmd.error("K2-PRTouch: runtime wrappers not built yet (MCU config phase incomplete)")
+            raise gcmd.error("PRTouch: runtime wrappers not built yet (MCU config phase incomplete)")
 
         duration_ms = gcmd.get_int('DURATION_MS', 200, minval=10, maxval=5000)
         channel = gcmd.get_int('CHANNEL', 0, minval=0, maxval=3)
 
-        gcmd.respond_info("K2-PRTouch BASELINE: starting %dms stream on ch%d..."
+        gcmd.respond_info("PRTouch BASELINE: starting %dms stream on ch%d..."
                           % (duration_ms, channel))
         reactor = self.obj.printer.get_reactor()
         try:
@@ -758,23 +758,23 @@ class PRTouchEndstopWrapper:
                 add_hold=self.cfg.add_hold,
             )
         except Exception as e:
-            raise gcmd.error("K2-PRTouch BASELINE: start_streaming failed: %s" % (e,))
+            raise gcmd.error("PRTouch BASELINE: start_streaming failed: %s" % (e,))
 
         try:
             reactor.pause(reactor.monotonic() + duration_ms / 1000.0)
             try:
                 response = self.sampler.read_buffer(channel, idx=0, length=self.cfg.pi_count)
             except Exception as e:
-                raise gcmd.error("K2-PRTouch BASELINE: read_buffer failed: %s" % (e,))
+                raise gcmd.error("PRTouch BASELINE: read_buffer failed: %s" % (e,))
         finally:
             try:
                 self.sampler.stop_streaming()
             except Exception:
-                logging.exception("K2-PRTouch BASELINE: stop_streaming failed")
+                logging.exception("PRTouch BASELINE: stop_streaming failed")
 
         # Decode the response — `datas` should be a binary blob of samples.
         if not response:
-            gcmd.respond_info("K2-PRTouch BASELINE: empty response")
+            gcmd.respond_info("PRTouch BASELINE: empty response")
             return
         datas = response.get('datas', b'') if isinstance(response, dict) else b''
         ticks = response.get('ticks', b'') if isinstance(response, dict) else b''
@@ -785,7 +785,7 @@ class PRTouchEndstopWrapper:
         datas_hex = datas.hex()[:128]
         ticks_hex = ticks.hex()[:128]
         gcmd.respond_info(
-            "K2-PRTouch BASELINE ch%d: response meta oid=%s tri_chxs=%s buf_len=%s "
+            "PRTouch BASELINE ch%d: response meta oid=%s tri_chxs=%s buf_len=%s "
             "idx=%s len=%s datas=%dB ticks=%dB"
             % (channel,
                response.get('oid'), response.get('tri_chxs'),
@@ -841,12 +841,12 @@ class PRTouchEndstopWrapper:
             CHANNEL=<int>       — channel index (default 0)
         """
         if self.sampler is None or not self.sampler.proto._configured:
-            raise gcmd.error("K2-PRTouch: sampler not ready")
+            raise gcmd.error("PRTouch: sampler not ready")
 
         duration_s = gcmd.get_float('DURATION_S', 5.0, minval=0.5, maxval=60.0)
         channel = gcmd.get_int('CHANNEL', 0, minval=0, maxval=3)
         gcmd.respond_info(
-            "K2-PRTouch TAP: streaming %.1fs on ch%d — tap the nozzle now"
+            "PRTouch TAP: streaming %.1fs on ch%d — tap the nozzle now"
             % (duration_s, channel)
         )
 
@@ -875,7 +875,7 @@ class PRTouchEndstopWrapper:
                 pass
 
         if not all_vals:
-            gcmd.respond_info("K2-PRTouch TAP: no samples received!")
+            gcmd.respond_info("PRTouch TAP: no samples received!")
             return
 
         vmin = min(all_vals)
@@ -883,7 +883,7 @@ class PRTouchEndstopWrapper:
         vmean = sum(all_vals) / len(all_vals)
         p2p = vmax - vmin
         gcmd.respond_info(
-            "K2-PRTouch TAP done: n=%d min=%d max=%d mean=%.0f p2p=%d"
+            "PRTouch TAP done: n=%d min=%d max=%d mean=%.0f p2p=%d"
             % (len(all_vals), vmin, vmax, vmean, p2p)
         )
         # Quartile snapshot for distribution context
@@ -909,12 +909,12 @@ class PRTouchEndstopWrapper:
             DEBUG=1           respond_info every iteration (verbose)
         """
         if self.sampler is None or not self.sampler.proto._configured:
-            raise gcmd.error("K2-PRTouch: sampler not ready")
+            raise gcmd.error("PRTouch: sampler not ready")
 
         n = gcmd.get_int('N', 60, minval=1, maxval=500)
         debug = gcmd.get_int('DEBUG', 0)
         gcmd.respond_info(
-            "K2-PRTouch TRIGGER_TEST: %d cycles, start/stop bracket — tap the nozzle"
+            "PRTouch TRIGGER_TEST: %d cycles, start/stop bracket — tap the nozzle"
             % n
         )
         gcmd.respond_info(
@@ -990,7 +990,7 @@ class PRTouchEndstopWrapper:
             reactor.pause(reactor.monotonic() + 0.04)
 
         gcmd.respond_info(
-            "K2-PRTouch TRIGGER_TEST done: triggers=%d max_filtered=%d max_p2p=%d"
+            "PRTouch TRIGGER_TEST done: triggers=%d max_filtered=%d max_p2p=%d"
             % (trigger_count, int(max_filtered), max_p2p)
         )
         if trigger_reasons:
@@ -999,7 +999,7 @@ class PRTouchEndstopWrapper:
                 gcmd.respond_info("  reason '%s': %d times" % (reason, n_))
 
         gcmd.respond_info(
-            "K2-PRTouch TRIGGER_TEST done: triggers=%d max_filtered_abs=%d"
+            "PRTouch TRIGGER_TEST done: triggers=%d max_filtered_abs=%d"
             % (trigger_count, int(max_filtered))
         )
         if trigger_reasons:
@@ -1024,12 +1024,12 @@ class PRTouchEndstopWrapper:
             scan for max p2p
         """
         if self.sampler is None or not self.sampler.proto._configured:
-            raise gcmd.error("K2-PRTouch: sampler not ready")
+            raise gcmd.error("PRTouch: sampler not ready")
         iters = gcmd.get_int('N', 30, minval=1, maxval=200)
         from . import zip as _zip
         reactor = self.obj.printer.get_reactor()
         gcmd.respond_info(
-            "K2-PRTouch TAP_LIVE: %d cycles, start/stop bracket — tap nozzle now"
+            "PRTouch TAP_LIVE: %d cycles, start/stop bracket — tap nozzle now"
             % iters
         )
         best_p2p = 0
@@ -1060,7 +1060,7 @@ class PRTouchEndstopWrapper:
                     )
             reactor.pause(reactor.monotonic() + 0.05)
         gcmd.respond_info(
-            "K2-PRTouch TAP_LIVE done. Best p2p=%d at iter %d (idle baseline ~400-700)"
+            "PRTouch TAP_LIVE done. Best p2p=%d at iter %d (idle baseline ~400-700)"
             % (best_p2p, best_iter)
         )
 
@@ -1082,7 +1082,7 @@ class PRTouchEndstopWrapper:
           4. After trigger or full descent: retracts to start Z
         """
         if self.sampler is None or not self.sampler.proto._configured:
-            raise gcmd.error("K2-PRTouch: sampler not ready")
+            raise gcmd.error("PRTouch: sampler not ready")
 
         speed = gcmd.get_float('SPEED', 2.0, minval=0.1, maxval=10.0)
         max_dist = gcmd.get_float('MAX_DIST', 5.0, minval=0.1, maxval=50.0)
@@ -1100,13 +1100,13 @@ class PRTouchEndstopWrapper:
         if 'z' not in homed_axes:
             if not force_homed:
                 raise gcmd.error(
-                    "K2-PRTouch: Z not homed. Use FORCE=1 to override "
+                    "PRTouch: Z not homed. Use FORCE=1 to override "
                     "(only if you KNOW the current Z position is correct)"
                 )
             # Treat the current toolhead position as homed Z
             toolhead.set_position(start_pos, homing_axes=[2])
             gcmd.respond_info(
-                "K2-PRTouch PROBE: FORCE=1 — claiming Z=%.3f as homed" % start_z
+                "PRTouch PROBE: FORCE=1 — claiming Z=%.3f as homed" % start_z
             )
 
         # Safety: cap descent at axis_minimum + a margin
@@ -1114,7 +1114,7 @@ class PRTouchEndstopWrapper:
         axis_min = self.obj.toolhead.kin.axes_min if hasattr(self.obj.toolhead.kin, 'axes_min') else None
         z_floor = max(0.5, start_z - max_dist)  # don't go below 0.5mm above bed
         gcmd.respond_info(
-            "K2-PRTouch PROBE: start_z=%.3f max_dist=%.2fmm chunk=%.2fmm "
+            "PRTouch PROBE: start_z=%.3f max_dist=%.2fmm chunk=%.2fmm "
             "speed=%.2fmm/s z_floor=%.3f"
             % (start_z, max_dist, chunk_size, speed, z_floor)
         )
@@ -1205,12 +1205,12 @@ class PRTouchEndstopWrapper:
 
         if triggered:
             gcmd.respond_info(
-                "K2-PRTouch PROBE done: TRIGGERED z=%.3f reason=%s (last p2p=%d)"
+                "PRTouch PROBE done: TRIGGERED z=%.3f reason=%s (last p2p=%d)"
                 % (trigger_z, trigger_reason, last_p2p)
             )
         else:
             gcmd.respond_info(
-                "K2-PRTouch PROBE done: no trigger after %.2fmm descent (last p2p=%d)"
+                "PRTouch PROBE done: no trigger after %.2fmm descent (last p2p=%d)"
                 % (max_dist, last_p2p)
             )
 
@@ -1225,7 +1225,7 @@ class PRTouchEndstopWrapper:
             IS_SRC=<0|1>  — 0=MCU-filtered (ftr_data), 1=raw (buf_data). Default 0.
         """
         if self.sampler is None or not self.sampler.proto._configured:
-            raise gcmd.error("K2-PRTouch: sampler not ready")
+            raise gcmd.error("PRTouch: sampler not ready")
         is_src = gcmd.get_int('IS_SRC', 0, minval=0, maxval=1)
 
         from . import zip as _zip
@@ -1237,7 +1237,7 @@ class PRTouchEndstopWrapper:
         # Let the buffer fill
         reactor.pause(reactor.monotonic() + 0.5)
 
-        gcmd.respond_info("K2-PRTouch PROBE_BUF: is_src=%d" % is_src)
+        gcmd.respond_info("PRTouch PROBE_BUF: is_src=%d" % is_src)
         try:
             # Probe idx 0..63 (full ring) with length=8
             for idx in [0, 8, 16, 24, 32, 40, 48, 56]:
@@ -1296,7 +1296,7 @@ class PRTouchEndstopWrapper:
         bit gates the push behaviour.
         """
         if self.sampler is None or not self.sampler.proto._configured:
-            raise gcmd.error("K2-PRTouch: sampler not ready")
+            raise gcmd.error("PRTouch: sampler not ready")
         duration_ms = gcmd.get_int('DURATION_MS', 1000, minval=100, maxval=5000)
         cfg_regs = gcmd.get_int('CFG_REGS', 60, minval=0, maxval=255)
 
@@ -1374,7 +1374,7 @@ class PRTouchEndstopWrapper:
             DRY=<0|1>          if 1, skip the actual move (sample only)
         """
         if self.sampler is None or not self.sampler.proto._configured:
-            raise gcmd.error("K2-PRTouch: sampler not ready")
+            raise gcmd.error("PRTouch: sampler not ready")
 
         speed = gcmd.get_float('SPEED', 1.0, minval=0.05, maxval=5.0)
         max_dist = gcmd.get_float('MAX_DIST', 1.5, minval=0.1, maxval=10.0)
@@ -1393,12 +1393,12 @@ class PRTouchEndstopWrapper:
         if 'z' not in homed_axes:
             if not force_homed:
                 raise gcmd.error(
-                    "K2-PRTouch: Z not homed. Use FORCE=1 to override "
+                    "PRTouch: Z not homed. Use FORCE=1 to override "
                     "(only if you know the current Z position is correct)"
                 )
             toolhead.set_position(start_pos, homing_axes=[2])
             gcmd.respond_info(
-                "K2-PRTouch DURING_MOTION: FORCE=1 — claiming Z=%.3f as homed" % start_z
+                "PRTouch DURING_MOTION: FORCE=1 — claiming Z=%.3f as homed" % start_z
             )
 
         target_z = max(0.2, start_z - max_dist)
@@ -1640,7 +1640,7 @@ class PRTouchEndstopWrapper:
         """
         if (self.sampler is None or self.sampler.proto is None
                 or not self.sampler.proto._configured):
-            raise self.obj.printer.command_error("K2-PRTouch: sampler not ready")
+            raise self.obj.printer.command_error("PRTouch: sampler not ready")
 
         toolhead = self.obj.toolhead
         printer = self.obj.printer
@@ -1655,7 +1655,7 @@ class PRTouchEndstopWrapper:
             contact_mode = 'amplitude'
         if contact_mode not in ('amplitude', 'stock'):
             raise printer.command_error(
-                "K2-PRTouch: unknown host contact mode '%s'"
+                "PRTouch: unknown host contact mode '%s'"
                 % (contact_mode,))
         contact_release_threshold = max(
             1, int(round(
@@ -1695,13 +1695,13 @@ class PRTouchEndstopWrapper:
             dtrapq = motion_report.dtrapqs.get("toolhead")
             if dtrapq is None:
                 raise printer.command_error(
-                    "K2-PRTouch: live toolhead trap queue is unavailable")
+                    "PRTouch: live toolhead trap queue is unavailable")
             main_mcu = printer.lookup_object("mcu")
             print_time = main_mcu.estimated_print_time(eventtime)
             pos, unused_velocity = dtrapq.get_trapq_position(print_time)
             if pos is None:
                 raise printer.command_error(
-                    "K2-PRTouch: could not resolve live toolhead position")
+                    "PRTouch: could not resolve live toolhead position")
             return pos[2]
 
         def sampler_cb(eventtime):
@@ -1892,7 +1892,7 @@ class PRTouchEndstopWrapper:
 
         if state['error'] is not None:
             raise printer.command_error(
-                "K2-PRTouch sampling failed during probe: %s"
+                "PRTouch sampling failed during probe: %s"
                 % (state['error'],))
 
         if state['trigger_z'] is None:
@@ -1921,11 +1921,11 @@ class PRTouchEndstopWrapper:
         probe = printer.lookup_object('probe', None)
         if probe is None:
             logging.warning(
-                "K2-PRTouch: no 'probe' object at ready; _probe not patched")
+                "PRTouch: no 'probe' object at ready; _probe not patched")
             return
         if not hasattr(probe, '_probe'):
             logging.info(
-                "K2-PRTouch: modern upstream probe-session adapter active; "
+                "PRTouch: modern upstream probe-session adapter active; "
                 "legacy _probe monkey patch not required")
             return
         if getattr(probe, '_prtouch_host_patched', False):
@@ -1959,13 +1959,13 @@ class PRTouchEndstopWrapper:
                 try:
                     epos[2] += atc.get_z_compensation_value(pos)
                 except Exception:
-                    logging.exception("K2-PRTouch: axis_twist_comp failed")
+                    logging.exception("PRTouch: axis_twist_comp failed")
             printer.lookup_object('gcode').respond_info(
-                "probe at %.3f,%.3f is z=%.6f (K2-PRTouch host-driven)"
+                "probe at %.3f,%.3f is z=%.6f (PRTouch host-driven)"
                 % (epos[0], epos[1], epos[2]))
             return epos[:3]
 
         probe._probe = _host_probe
         probe._prtouch_host_patched = True
         logging.info(
-            "K2-PRTouch: probe._probe patched to host-driven run_host_probe")
+            "PRTouch: probe._probe patched to host-driven run_host_probe")
