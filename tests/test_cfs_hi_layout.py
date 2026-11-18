@@ -332,7 +332,7 @@ class StuckKnifeTest(unittest.TestCase):
         with self.assertRaises(RuntimeError) as ctx:
             self.cut(cfs)
         self.assertTrue(str(ctx.exception).endswith(
-            "cutter did not return after ram/release"))
+            "cutter did not return after ram/release (Creality key841)"))
         self.assertEqual(len(rams), 1)
         self.assertEqual(self.jogs(gcode), [])
 

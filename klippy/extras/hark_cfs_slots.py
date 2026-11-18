@@ -65,8 +65,12 @@ SETTINGS = (
     ('retract_speed', 'RETRACT_SPEED', float, 'filament_retraction_speed'),
     ('fan_min', 'FAN_MIN', int, 'fan_min_speed'),
     ('fan_max', 'FAN_MAX', int, 'fan_max_speed'),
+    # mm^3/s; k2_cfs purges at a share of it (purge_flow_fraction)
+    ('max_flow', 'MAX_FLOW', float, 'filament_max_volumetric_speed'),
 )
 SETTING_KEYS = tuple(s[0] for s in SETTINGS)
+# Upper limit of a float setting's gcode parameter (default 10)
+SETTING_MAX = {'max_flow': 100.}
 # Fluidd closes a prompt when the command behind a prompt button completes,
 # which would also close a prompt sent by that command. Send the next dialog
 # just after the command has finished.
@@ -265,6 +269,17 @@ class HarkCfsSlots:
                 if fil:
                     self.slots[slot] = self._slot_record(
                         fil, colour=rec['color'], source=rec['source'])
+                    upgraded = True
+            elif rec['loaded']:
+                # A setting added since the slot was saved (max_flow):
+                # take it from the slot's profile, keep everything else
+                saved = data['slots'].get(slot, {})
+                missing = [k for k in SETTING_KEYS if k not in saved]
+                fil = self._find_filament(rec['filament']) if missing \
+                    else None
+                if fil:
+                    for key in missing:
+                        rec[key] = fil.get(key, 0)
                     upgraded = True
         if upgraded:
             self._save()
@@ -637,7 +652,8 @@ class HarkCfsSlots:
             if cast is int:
                 value = gcmd.get_int(param, None, minval=0, maxval=500)
             else:
-                value = gcmd.get_float(param, None, minval=0., maxval=10.)
+                value = gcmd.get_float(param, None, minval=0.,
+                                       maxval=SETTING_MAX.get(key, 10.))
             if value is not None:
                 rec[key] = value
 

@@ -96,10 +96,10 @@ STATUS_INFO = {
     0x13: ('RETRUDE_ERR1', 'UNLOAD_BUFFER_TIMEOUT',
            "The hub tried to pull back, but the buffer never released "
            "within 5 s, so the filament is likely jammed. Check for a jam "
-           "between the hub and the printhead."),
+           "between the hub and the printhead (Creality key851)."),
     0x14: (None, 'UNLOAD_HUB_PE_TIMEOUT',
            "The retract waited for the hub path to clear, and it never "
-           "did. Check for filament stuck in the hub."),
+           "did. Check for filament stuck in the hub (Creality key849)."),
     0x16: (None, 'UNLOAD_NO_FILAMENT',
            "This slot shows no filament at its inlet."),
     0x17: (None, 'UNLOAD_INLET_CLEAR',
@@ -115,11 +115,31 @@ STATUS_INFO = {
     0x50: (None, 'RUNOUT', "The spool ran out."),
     0x51: (None, 'BUFFER_REFILL_STALLED',
            "The hub is feeding, but the buffer stays empty. Check the PTFE "
-           "from the hub into the buffer."),
+           "from the hub into the buffer (Creality key846)."),
     0x52: (None, 'BUFFER_REFILL_NO_MOTION',
            "The hub tried to refill the buffer, but the filament moved "
-           "less than 5 mm. Check for a jam or tangle."),
+           "less than 5 mm. Check for a jam or tangle (Creality key847)."),
 }
+STATUS_BOX_SLOW = 0x51
+STATUS_BOX_TANGLE = 0x52
+# Box alarms that pause a print (box_alarm_pause): what stock says
+# (box_wrapper key846 "empty printing: box speed < extruder speed", key847
+# "material enwind") and what to do about it
+BOX_ALARMS = {
+    STATUS_BOX_SLOW: (
+        846, "the CFS is feeding slower than the extruder uses filament",
+        "check that the spool turns freely and the PTFE from the CFS to the"
+        " toolhead is not pinched or kinked"),
+    STATUS_BOX_TANGLE: (
+        847, "the filament looks tangled on the spool",
+        "untangle the spool so it unwinds freely"),
+}
+# Cross-section of 1.75 mm filament (mm^2), when the extruder has none
+FILAMENT_AREA = math.pi * .875 ** 2
+# Inside a CFS sequence's SAVE/RESTORE_GCODE_STATE: the print's speed and
+# flow sliders (M220/M221) must not scale the cut ram, the unload/load
+# extruder moves or the purge. RESTORE brings the user's values back.
+FIXED_RATE_GCODE = "M220 S100\nM221 S100"
 
 
 def status_label(code):
@@ -250,6 +270,18 @@ class K2CFS:
     cutter_cut_attempts = 1
     cutter_cal_path = None
     cutter_cal_stall_mode = 0
+    # Off unless the config turns them on (the K2 as before)
+    purge_slow_fraction = .2
+    purge_flow_fraction = 0.
+    purge_speed_max = 9.58
+    purge_clog_check = False
+    purge_clog_min_length = 60.
+    purge_clog_min_fraction = .3
+    box_alarm_pause = False
+    box_alarm_polls = 2
+    load_stall_timeout = 0.
+    wheel_read_warned = False
+    box_alarm_seen = None
     # name -> (payload bytes, decoder method name)
     # Payload EXCLUDES addr/len/crc (k2_motor_bus builds the frame).
     # Opcode map mined 2026-07-07 from 6 days / ~205k transactions of stock
@@ -370,8 +402,30 @@ class K2CFS:
             'purge_extrude_speed', 6., above=0., maxval=9.58)
         self.purge_chunk_length = config.getfloat(
             'purge_chunk_length', 90., above=0., maxval=90.)
+        # The 1 mm/s pushes between the fast ones that make the strand come
+        # out in pieces. 0.2 = Creality Print's K2 FLUSH (after each of the
+        # five fast pushes, 2 % of the block slowly: 10 % in all); 0.1 =
+        # half as much slow pushing, 0 = one steady push per block. Each
+        # block's length is the same whatever the setting.
         self.purge_slow_fraction = config.getfloat(
-            'purge_slow_fraction', .2, above=0., maxval=.5)
+            'purge_slow_fraction', .2, minval=0., maxval=.5)
+        # Purge speed from the slot's filament max volumetric speed
+        # (filament_max_volumetric_speed, the slot record's max_flow):
+        # purge_flow_fraction of it, at most purge_speed_max mm/s, so TPU or
+        # PVA purge slower than PLA. 0 = purge_extrude_speed for everything.
+        self.purge_flow_fraction = config.getfloat(
+            'purge_flow_fraction', 0., minval=0., maxval=1.)
+        self.purge_speed_max = config.getfloat(
+            'purge_speed_max', 9.58, above=0., maxval=9.58)
+        # Stock's flush watchdog (key845 "the nozzle is blocked"): the hub
+        # measuring wheel must turn by purge_clog_min_fraction of each purge
+        # block of at least purge_clog_min_length mm, or the purge stops
+        # with an error (a colour change then pauses).
+        self.purge_clog_check = config.getboolean('purge_clog_check', False)
+        self.purge_clog_min_length = config.getfloat(
+            'purge_clog_min_length', 60., minval=20.)
+        self.purge_clog_min_fraction = config.getfloat(
+            'purge_clog_min_fraction', .3, above=0., maxval=1.)
         self.purge_fast_multiplier = config.getfloat(
             'purge_fast_multiplier', 1.2, minval=1., maxval=1.2)
         self.purge_followup_chunk_length = config.getfloat(
@@ -556,6 +610,11 @@ class K2CFS:
         # colour change pauses the print, as Prusa's MMU3 retries silently
         self.load_retries = config.getint(
             'load_retries', 2, minval=0, maxval=5)
+        # End a load attempt early when the hub measuring wheel has not
+        # moved for this long and the nozzle sensor is still clear (the
+        # retries above then take over). 0 = wait out load_timeout.
+        self.load_stall_timeout = config.getfloat(
+            'load_stall_timeout', 0., minval=0., maxval=60.)
         # Raw bus frames in console messages (they always go to klippy.log)
         self.console_frames = config.getboolean('console_frames', False)
         # Per-slot counts (loads, failed attempts, paused changes, clogs,
@@ -620,6 +679,13 @@ class K2CFS:
         self.clog_wheel_reset_length = config.getfloat(
             'clog_wheel_reset_length', 18., above=0.)
         self.clog_baseline = None
+        # Pause a print when the box raises 0x51 (feeding slower than the
+        # extruder, Creality key846) or 0x52 (tangled, key847) on
+        # box_alarm_polls polls in a row, as stock does
+        self.box_alarm_pause = config.getboolean('box_alarm_pause', False)
+        self.box_alarm_polls = config.getint(
+            'box_alarm_polls', 2, minval=1, maxval=10)
+        self.box_alarm_seen = None
         self.load_engage_length = config.getfloat(
             'load_engage_length', 5., above=0., maxval=5.)
         self.load_engage_speed = config.getfloat(
@@ -983,6 +1049,11 @@ class K2CFS:
                     return eventtime + interval
         self._check_running_out()
         try:
+            self._check_box_alarm(m)
+        except Exception:
+            logging.exception("k2_cfs: box alarm check failed")
+            self.box_alarm_seen = None
+        try:
             self._check_clog(eventtime)
         except Exception:
             logging.exception("k2_cfs: clog check failed")
@@ -1030,6 +1101,11 @@ class K2CFS:
         if self.status.get('feed_slot') in self.slot_stats:
             self._count(self.status['feed_slot'], 'clogs')
         logging.info("k2_cfs: %s", msg)
+        self._pause_print(msg)
+
+    def _pause_print(self, msg):
+        # From a timer: stop the print now, then PAUSE (the macro parks)
+        # with the message, the way a runout pauses
         pause_resume = self.printer.lookup_object('pause_resume', None)
         if pause_resume is None:
             return
@@ -1040,8 +1116,38 @@ class K2CFS:
                 self.gcode.respond_raw("!! " + msg)
                 self.gcode.run_script("PAUSE")
             except Exception:
-                logging.exception("k2_cfs: clog pause failed")
+                logging.exception("k2_cfs: pause failed")
         self.printer.get_reactor().register_callback(pause)
+
+    def _check_box_alarm(self, m):
+        # The box's own feed faults arrive as the status byte of the state
+        # poll: 0x51 the hub cannot keep the buffer filled (stock key846),
+        # 0x52 the filament is tangled (key847). The stock wrapper pauses
+        # the print on both; one reply could be a moment's slip, so act on
+        # the same alarm box_alarm_polls polls running.
+        code = m.get('status') if isinstance(m, dict) else None
+        if (not self.box_alarm_pause or code not in BOX_ALARMS
+                or not self._printing()):
+            self.box_alarm_seen = None
+            return
+        seen = self.box_alarm_seen
+        count = seen[1] + 1 if seen and seen[0] == code else 1
+        self.box_alarm_seen = (code, count)
+        if count < self.box_alarm_polls:
+            logging.info("k2_cfs: box alarm 0x%02x (poll %d of %d)",
+                         code, count, self.box_alarm_polls)
+            return
+        self.box_alarm_seen = None
+        key, what, todo = BOX_ALARMS[code]
+        slot = self.status.get('feed_slot')
+        msg = ("CFS slot %s: %s (box alarm 0x%02x, Creality key%d). Print"
+               " paused: %s, then RESUME."
+               % (slot or '?', what, code, key, todo))
+        self.status['last_box_alarm'] = msg
+        if slot in self.slot_stats:
+            self._count(slot, 'clogs')
+        logging.info("k2_cfs: %s", msg)
+        self._pause_print(msg)
 
     def _check_running_out(self):
         # Early runout warning. The end of a spool passes the slot's entry
@@ -1174,26 +1280,57 @@ class K2CFS:
         out['humidity'] = body[1]
         if len(body) >= 6:
             state, mask, selection_setting = body[3], body[4], body[5]
-            slots = [name for name, bit in self.SLOT_MASKS.items()
-                     if mask & bit]
-            out.update({
-                'box_state': state,
-                'box_state_name': self.BOX_STATE_NAMES.get(state, 'unknown'),
-                'box_runout': status == STATUS_RUNOUT,
-                'active_mask': mask,
-                'active_slots': slots,
-                'active_slot': slots[0] if len(slots) == 1 else None,
-                'selection_setting': selection_setting,
-            })
+        elif len(body) >= 4:
+            # The 4-byte reply of other box firmware (a community capture
+            # of a Hi's CFS, gitstonelabs creality-cfs-klipper):
+            # <temp> <humidity> <mask> <state>. Seen there: mask 08/02 while
+            # slot D/B fed, state 01 preloading, 04 with status 0x0c.
+            mask, state, selection_setting = body[2], body[3], None
+        else:
+            return out
+        slots = [name for name, bit in self.SLOT_MASKS.items()
+                 if mask & bit]
+        out.update({
+            'box_state': state,
+            'box_state_name': self.BOX_STATE_NAMES.get(state, 'unknown'),
+            'box_runout': status == STATUS_RUNOUT,
+            'active_mask': mask,
+            'active_slots': slots,
+            'active_slot': slots[0] if len(slots) == 1 else None,
+        })
+        if selection_setting is not None:
+            out['selection_setting'] = selection_setting
+        if len(body) < 6:
+            out['short_reply'] = True
         return out
 
     def _dec_wheel(self, p):
         # observed: 00 0e <4-byte big-endian float>, mm the hub wheel has
         # measured (Jacob10383's query_encoder)
-        if len(p) >= 6 and p[0] == STATUS_OK:
+        # The function echo is checked too: a late reply to another
+        # command (a stage-5 send the box answers after its timeout) must
+        # not read as a wheel position
+        if len(p) >= 6 and p[0] == STATUS_OK and p[1] == 0x0e:
             return {'wheel_mm': struct.unpack('>f', bytes(p[2:6]))[0],
                     'raw': p.hex(' ')}
         return {'raw': p.hex(' ')}
+
+    def _read_wheel(self):
+        # Hub measuring wheel position (mm, float), or None when the box
+        # does not answer or the reply is not a wheel reading; the checks
+        # that need it are then skipped (said once in klippy.log)
+        try:
+            wheel = self._run_query('MEASURING_WHEEL').get('wheel_mm')
+        except Exception:
+            logging.exception("k2_cfs: measuring wheel read")
+            wheel = None
+        if wheel is None or math.isnan(wheel) or math.isinf(wheel):
+            if not self.wheel_read_warned:
+                self.wheel_read_warned = True
+                logging.info("k2_cfs: no measuring wheel reading; the purge"
+                             " clog and load stall checks skip it")
+            return None
+        return wheel
 
     def _measuring(self):
         # MEASURING with any queued slot events read off first
@@ -1845,7 +1982,7 @@ class K2CFS:
                 and not gcmd.get_int('FORCE', 0, minval=0, maxval=1)):
             raise gcmd.error(
                 "Filament is at the nozzle: the calibration push would cut "
-                "it. Unload first (or FORCE=1)")
+                "it. Unload first (or FORCE=1) (Creality key854)")
         if self.cutter_switch_state is not True:
             raise gcmd.error("The cutter is not in its returned state")
         direction = self.cutter_dir
@@ -1864,7 +2001,8 @@ class K2CFS:
         travel_rate = self.cutter_speed * 60.
         reactor = self.printer.get_reactor()
         trip = None
-        self.gcode.run_script_from_command("SAVE_GCODE_STATE NAME=K2_CUT_CAL")
+        self.gcode.run_script_from_command(
+            "SAVE_GCODE_STATE NAME=K2_CUT_CAL\n" + FIXED_RATE_GCODE)
         try:
             self.gcode.run_script_from_command(
                 "G90\nG1 Y%.3f F%.3f\nG1 X%.3f F%.3f\nG1 X%.3f F%.3f\nM400"
@@ -1984,7 +2122,7 @@ class K2CFS:
 
         clear()
         self.gcode.run_script_from_command(
-            "SAVE_GCODE_STATE NAME=K2_CUT_STALL")
+            "SAVE_GCODE_STATE NAME=K2_CUT_STALL\n" + FIXED_RATE_GCODE)
         hits = []
         previous = False
         x = start
@@ -2045,7 +2183,7 @@ class K2CFS:
                 raise gcmd.error(
                     found + " That is outside what this printer allows for"
                     " a cut position, so it was NOT saved; the cut position"
-                    " stays X%.2f." % self.cutter_cut_x)
+                    " stays X%.2f (Creality key855)." % self.cutter_cut_x)
             was = self.cutter_cut_x
             self._save_cutter_cal(result, 'stall', {
                 'hits': hits[-2:], 'offset': self.cutter_stall_offset})
@@ -2131,7 +2269,7 @@ class K2CFS:
                 and not gcmd.get_int('FORCE', 0, minval=0, maxval=1)):
             raise gcmd.error(
                 "Filament is at the nozzle: the test would cut it. Unload"
-                " first (or FORCE=1)")
+                " first (or FORCE=1) (Creality key854)")
         if self.cutter_switch_state is not True:
             raise gcmd.error("The cutter is not in its returned state")
         count = gcmd.get_int('COUNT', 3, minval=1, maxval=20)
@@ -2147,7 +2285,7 @@ class K2CFS:
                  % (self.cutter_y, travel, self.cutter_x, travel))
         results = []
         self.gcode.run_script_from_command(
-            "SAVE_GCODE_STATE NAME=K2_CUT_TEST")
+            "SAVE_GCODE_STATE NAME=K2_CUT_TEST\n" + FIXED_RATE_GCODE)
         try:
             for index in range(count):
                 self.gcode.run_script_from_command(stage)
@@ -2352,7 +2490,7 @@ class K2CFS:
                 'SET_BOX_MODE IDLE',
                 [0xff, 0x04, 0x00, self.MODE_IDLE])
             self.gcode.run_script_from_command(
-                "SAVE_GCODE_STATE NAME=K2_CFS_UNLOAD")
+                "SAVE_GCODE_STATE NAME=K2_CFS_UNLOAD\n" + FIXED_RATE_GCODE)
             saved = True
             if self.unload_rewind_pause_ms:
                 self.gcode.run_script_from_command(
@@ -2410,7 +2548,7 @@ class K2CFS:
                 and not self._clear_nozzle_stub(gcmd):
             raise gcmd.error(
                 "CFS unload finished but the nozzle sensor still "
-                "detects filament after %.1fs"
+                "detects filament after %.1fs (Creality key863)"
                 % self.unload_sensor_timeout)
         self.status.update({
             'feed_enabled': False,
@@ -2644,7 +2782,7 @@ class K2CFS:
         runout_disabled = False
         try:
             self.gcode.run_script_from_command(
-                "SAVE_GCODE_STATE NAME=K2_CFS_CUT_UNLOAD")
+                "SAVE_GCODE_STATE NAME=K2_CFS_CUT_UNLOAD\n" + FIXED_RATE_GCODE)
             saved = True
             # A deliberate unload transitions the same physical switch used
             # for print runout. Mask only its runout handler while retaining
@@ -2721,7 +2859,8 @@ class K2CFS:
                     + ("" if self.cutter_cut_attempts == 1
                        and not self.cutter_free_push
                        else " (%d cuts, extruder jogs: the blade is still"
-                            " in)" % self.cutter_cut_attempts))
+                            " in)" % self.cutter_cut_attempts)
+                    + " (Creality key841)")
             after_cut = ["M83"]
             if self.cutter_retract_length:
                 after_cut.append("G1 E-%.3f F%.3f" % (
@@ -2846,7 +2985,7 @@ class K2CFS:
                 'TIGHTEN_UP DISABLE',
                 [0xff, 0x0f, self.TENSION_DISABLE])
             self.gcode.run_script_from_command(
-                "SAVE_GCODE_STATE NAME=K2_CFS_LOAD")
+                "SAVE_GCODE_STATE NAME=K2_CFS_LOAD\n" + FIXED_RATE_GCODE)
             saved = True
             self._load_stage('EXTRUDE STAGE 0', mask, 0)
             self._load_stage('EXTRUDE STAGE 4', mask, 4)
@@ -2855,6 +2994,7 @@ class K2CFS:
             deadline = reactor.monotonic() + self.load_timeout
             err8_retries = 0
             flexed = False
+            stall_ref = None
             while True:
                 try:
                     self._run_actuation(
@@ -2906,6 +3046,7 @@ class K2CFS:
                     raise RuntimeError(
                         "no filament at nozzle sensor after %.1fs"
                         % self.load_timeout)
+                stall_ref = self._check_load_stall(stall_ref, now, slot)
                 # Watch the sensor until the next stage-5 send, so the load
                 # moves on as soon as filament arrives instead of up to a
                 # whole interval later (the box keeps feeding meanwhile)
@@ -2991,6 +3132,31 @@ class K2CFS:
         })
         gcmd.respond_info(
             "CFS slot %s load complete; nozzle sensor is triggered" % slot)
+
+    # The wheel counts as moving once it has turned this far (mm)
+    LOAD_STALL_MIN_MOVE = 2.
+
+    def _check_load_stall(self, ref, now, slot):
+        # load_stall_timeout: the hub wheel has not turned for that long
+        # and the nozzle sensor is still clear, so this attempt is not
+        # going anywhere; end it now and let the retries (or the pause)
+        # take over instead of waiting out load_timeout. ref = (time,
+        # wheel) of the last movement; returns the new one.
+        if not self.load_stall_timeout:
+            return ref
+        wheel = self._read_wheel()
+        if wheel is None:
+            return ref
+        if ref is None or abs(wheel - ref[1]) >= self.LOAD_STALL_MIN_MOVE:
+            return (now, wheel)
+        if now - ref[0] < self.load_stall_timeout:
+            return ref
+        if self._nozzle_has_filament() is True:
+            return ref
+        raise RuntimeError(
+            "the CFS measuring wheel has not turned for %.0fs and no"
+            " filament reached the nozzle sensor; stopping this load of"
+            " slot %s early" % (now - ref[0], slot))
 
     def _purge_wipe_script(self, final):
         # Creality Print's K2 wipe, run after every flush block: swing in
@@ -3098,9 +3264,7 @@ class K2CFS:
             'LENGTH', self.purge_extrude_length,
             minval=30. if short
             else min(140., self.purge_minimum_actual_length), maxval=360.)
-        speed = gcmd.get_float(
-            'SPEED', self.purge_extrude_speed,
-            above=0., maxval=9.58)
+        speed = gcmd.get_float('SPEED', None, above=0., maxval=9.58)
         actual_length, segments = self._purge_segments(
             length, clamp=not short)
         slot = [s for s, m in self.SLOT_MASKS.items() if m == mask][0]
@@ -3109,6 +3273,8 @@ class K2CFS:
             # the old colour comes out first
             slots.append(self.status['last_unloaded_slot'])
         flush_fan = self._purge_fan(slots)
+        if speed is None:
+            speed = self._purge_flow_speed(slots)
         # Creality Print's K2 FLUSH block: fast pushes broken by 1 mm/s
         # pauses so the strand comes out in pieces, part fan low while
         # flushing, a full blast so the strand sets and snaps off, then the
@@ -3120,19 +3286,9 @@ class K2CFS:
         for index, chunk in enumerate(segments):
             final = index == len(segments) - 1
             lines = ["M83", "M106 S%d" % flush_fan]
-            if change and index == 0 and chunk > 36.:
-                rest = chunk - 36.
-                lines.append("G1 E36.000 F%.3f" % rate)
-                for unused in range(4):
-                    lines.append("G1 E%.3f F60" % (rest * .02))
-                    lines.append("G1 E%.3f F%.3f" % (rest * .23, rate))
-            else:
-                pre = retract if index else 0.
-                for pulse in range(5):
-                    lines.append("G1 E%.3f F%.3f"
-                                 % (chunk * .18 + (pre if not pulse else 0.),
-                                    rate))
-                    lines.append("G1 E%.3f F60" % (chunk * .02))
+            lines.extend(self._purge_pushes(
+                chunk, rate, retract if index else 0.,
+                change and index == 0 and chunk > 36.))
             lines.append("M400")
             if self.purge_cool_time:
                 lines.extend([
@@ -3143,8 +3299,10 @@ class K2CFS:
             if retract:
                 lines.append("G1 E-%.3f F%.3f"
                              % (retract, self.purge_retract_speed * 60.))
-            scripts.append("\n".join(lines))
-            scripts.append(self._purge_wipe_script(final))
+            check = (self.purge_clog_check
+                     and chunk >= self.purge_clog_min_length)
+            scripts.append(("\n".join(lines), chunk if check else 0.))
+            scripts.append((self._purge_wipe_script(final), 0.))
         toolhead = self.printer.lookup_object('toolhead')
         fans_before = self._fan_speeds()
         prior_accel = toolhead.get_status(0.).get('max_accel')
@@ -3154,13 +3312,16 @@ class K2CFS:
         accel_changed = False
         try:
             self.gcode.run_script_from_command(
-                "SAVE_GCODE_STATE NAME=K2_CFS_PURGE")
+                "SAVE_GCODE_STATE NAME=K2_CFS_PURGE\n" + FIXED_RATE_GCODE)
             saved = True
             accel_changed = True
             self.gcode.run_script_from_command(
                 "SET_VELOCITY_LIMIT ACCEL=%.3f" % self.clean_accel)
-            for script in scripts:
+            for script, check_length in scripts:
+                wheel = self._read_wheel() if check_length else None
                 self.gcode.run_script_from_command(script)
+                if wheel is not None:
+                    self._check_purge_wheel(wheel, check_length)
         except Exception as exc:
             raise gcmd.error("CFS purge failed: %s" % exc)
         finally:
@@ -3191,6 +3352,83 @@ class K2CFS:
         gcmd.respond_info(
             "CFS purge complete: requested %.3fmm, stock-clamped %.3fmm "
             "at %.3fmm/s" % (length, actual_length, speed))
+
+    def _purge_pushes(self, chunk, rate, pre, change_first):
+        # One flush block's extruder moves: pulses of a fast push and a
+        # 1 mm/s push of purge_slow_fraction / 10 of the block (0.2 =
+        # Creality Print's five 18 % + 2 % pulses, or after a change's 36 mm
+        # opening push four 23 % + 2 % pulses of the rest); 0 = one steady
+        # push.
+        slow = self.purge_slow_fraction / 10.
+        slow_rate = "F60" if rate >= 60. else "F%.3f" % rate
+        lines = []
+        if change_first:
+            rest = chunk - 36.
+            lines.append("G1 E36.000 F%.3f" % rate)
+            if not slow:
+                lines.append("G1 E%.3f F%.3f" % (rest, rate))
+                return lines
+            for unused in range(4):
+                lines.append("G1 E%.3f %s" % (rest * slow, slow_rate))
+                lines.append("G1 E%.3f F%.3f" % (rest * (.25 - slow), rate))
+            return lines
+        if not slow:
+            lines.append("G1 E%.3f F%.3f" % (chunk + pre, rate))
+            return lines
+        for pulse in range(5):
+            lines.append("G1 E%.3f F%.3f"
+                         % (chunk * (.2 - slow) + (pre if not pulse else 0.),
+                            rate))
+            lines.append("G1 E%.3f %s" % (chunk * slow, slow_rate))
+        return lines
+
+    def _filament_area(self):
+        extruder = self.printer.lookup_object('extruder', None)
+        area = getattr(extruder, 'filament_area', None)
+        if not isinstance(area, (int, float)) or area <= 0.:
+            area = FILAMENT_AREA
+        return area
+
+    def _purge_flow_speed(self, slots):
+        # purge_extrude_speed, or with purge_flow_fraction set: that share
+        # of the slowest of these slots' max volumetric speeds (old colour
+        # and new both pass the nozzle), at most purge_speed_max
+        speed = self.purge_extrude_speed
+        if not self.purge_flow_fraction:
+            return speed
+        cfs_slots = self.printer.lookup_object('hark_cfs_slots', None)
+        if cfs_slots is None:
+            return speed
+        records = cfs_slots.get_status(0.)['slots']
+        flows = []
+        for slot in slots:
+            try:
+                flow = float(records.get(slot, {}).get('max_flow') or 0.)
+            except (TypeError, ValueError):
+                flow = 0.
+            if flow > 0.:
+                flows.append(flow)
+        if not flows:
+            return speed
+        return max(.5, min(self.purge_speed_max,
+                           self.purge_flow_fraction * min(flows)
+                           / self._filament_area()))
+
+    def _check_purge_wheel(self, before, length):
+        # Stock's flush watchdog (key845): the box follows the extruder,
+        # so while the nozzle takes length mm the hub wheel turns too. A
+        # blocked nozzle (or feed) leaves it nearly still.
+        after = self._read_wheel()
+        if after is None:
+            return
+        moved = abs(after - before)
+        if moved >= self.purge_clog_min_fraction * length:
+            return
+        msg = ("CFS purge: the measuring wheel barely moved (%.1f of %.0f"
+               " mm) - nozzle or feed blocked? (Creality key845)"
+               % (moved, length))
+        logging.info("k2_cfs: %s", msg)
+        raise RuntimeError(msg)
 
     def _purge_fan(self, slots):
         # Part fan (0-255) while the purge comes out: the lowest that
