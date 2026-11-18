@@ -109,6 +109,188 @@ CALIBRATE_REQUEST = 0x00
 CALIBRATION_OK = 0x01
 ENCODER_STAGE1_DONE = 0x0c
 
+# System parameters (opcode 06), RAM only: a power cycle restores the motor
+# board's flash values.
+#   read    00 06 02 <id>          -> 00 06 <value>
+#   write   00 06 01 <id> <value>  -> 00 06 <value>   (echo of what it stored)
+#   commit  00 06 03               -> 00 06 01
+# The value is float32 LE, or int16 LE for PARAM_INT_IDS. Frames as captured
+# from stock motor_init (gitstonelabs creality-klipper-unlocked,
+# docs/protocol/README.md 3.2 and 5.3: X write 06 01 46 00 00 c8 42 =
+# 0x46 100.0, int16 write 06 01 ad 01 00, commit 06 03 -> 06 01). Opcode 07
+# (flash) is never built here.
+PARAM_WRITE = 0x01
+PARAM_READ = 0x02
+PARAM_COMMIT = 0x03
+PARAM_COMMIT_OK = 0x01
+# The 52 parameters stock motor_init reads (and writes when they differ),
+# from the same capture; names as in Creality's motor_control.cfg (with
+# the x_ / y_ prefix dropped) and tools/motor/motor_param_map.json.
+STOCK_PARAMS = {
+    0x0c: 'param_stall_mode', 0x0d: 'param_stall_cur_A',
+    0x0e: 'param_stall_pos_err_rad', 0x14: 'param_ud_cal_set',
+    0x15: 'param_motion_dir',
+    0x17: 'param_encoder_calibtate_official_ud_cal_set',
+    0x29: 'motor_param_R', 0x2a: 'motor_param_L', 0x2b: 'motor_param_Ke',
+    0x42: 'controller_param_en_feedforward_idiq',
+    0x43: 'controller_param_en_feedforward_uduq',
+    0x46: 'controller_pos_loop_pid_param_kp',
+    0x56: 'controller_spd_loop_pid_param_kp',
+    0x57: 'controller_spd_loop_pid_param_ki',
+    0x59: 'controller_spd_loop_pid_param_kc',
+    0x5e: 'controller_spd_loop_pid_fal_param_en',
+    0x5f: 'controller_spd_loop_pid_fal_param_a',
+    0x61: 'controller_spd_loop_pid_fal_param_zoom',
+    0x66: 'controller_cur_loop_pid_param_kp',
+    0x67: 'controller_cur_loop_pid_param_ki',
+    0x69: 'controller_cur_loop_pid_param_kc',
+    0x6e: 'controller_cur_loop_pid_fal_param_en',
+    0x6f: 'controller_cur_loop_pid_fal_param_a',
+    0x71: 'controller_cur_loop_pid_fal_param_zoom',
+    0x74: 'controller_leso_param_b0k', 0x76: 'controller_leso_param_z3k',
+    0x77: 'controller_leso_param_wp', 0x78: 'controller_leso_param_ws',
+    0x79: 'controller_leso_param_wd', 0x7a: 'controller_fwc_param_en',
+    0x7b: 'controller_fwc_param_I_max', 0x7f: 'controller_fwc_param_wm_base',
+    0x80: 'controller_cur_filter_param_en',
+    0x82: 'controller_cur_filter_param_fc',
+    0xad: 'protection_param_protect_en',
+    0xb3: 'protection_param_prt_peak_cur_A',
+    0xb4: 'protection_param_prt_continuous_cur_A',
+    0xb5: 'protection_param_prt_continuous_time_s',
+    0xb6: 'protection_param_prt_over_speed_rad_s',
+    0xb7: 'protection_param_prt_over_speed_time_s',
+    0xbb: 'protection_param_prt_track_max_err',
+    0xbc: 'protection_param_prt_track_err_time',
+    0xbd: 'protection_param_power_voltage_min',
+    0xbe: 'protection_param_mcu_temp_max',
+    0xc8: 'step_controller_param_subdivision',
+    0xcc: 'cmd_int_param_char_cmd_support', 0xd9: 'zazen_param_zazen_en',
+    0xda: 'zazen_param_zazen_trigger_time_s',
+    0xdc: 'zazen_param_zazen_gain_spd_kp',
+    0xdd: 'zazen_param_zazen_gain_spd_ki',
+    0xde: 'zazen_param_zazen_gain_cur_kp',
+    0xdf: 'zazen_param_zazen_gain_cur_ki',
+}
+# int16 parameters (same capture); every other one is float32
+PARAM_INT_IDS = frozenset((0x0c, 0x42, 0x43, 0x5e, 0x6e, 0x7a, 0x80, 0xad,
+                           0xc8, 0xcc, 0xd9))
+# Never written from a config, whatever it says
+PARAM_WRITE_REFUSED = {
+    0x09: "electrical offset: factory calibration, only MOTOR_CALIBRATE "
+          "changes it",
+    0x0a: "phase order: factory calibration",
+    0x19: "electrical offset error: factory calibration",
+    0x29: "motor resistance R: motor model constant",
+    0x2a: "motor inductance L: motor model constant",
+    0x2b: "motor back-EMF constant Ke: motor model constant",
+    0x5e: "speed-loop FAL enable: it locked both K2 X/Y controllers off "
+          "the bus until a power cycle (docs/MOTOR-CONTROLLER.md)",
+    0x6e: "current-loop FAL enable: same class as 0x5e, never tested",
+}
+
+
+def param_read_request(pid):
+    return (0x00, FUNC_SYS_PARAM, PARAM_READ, pid)
+
+
+def encode_param(pid, value):
+    """The value bytes of a write: int16 LE for PARAM_INT_IDS, else
+    float32 LE."""
+    if pid in PARAM_INT_IDS:
+        if float(value) != int(value):
+            raise ValueError("param 0x%02x is an integer, got %r"
+                             % (pid, value))
+        return struct.pack('<h', int(value))
+    return struct.pack('<f', float(value))
+
+
+def param_write_request(pid, value):
+    """00 06 01 <id> <value>. Refuses PARAM_WRITE_REFUSED here too, so no
+    caller can build one."""
+    if pid in PARAM_WRITE_REFUSED:
+        raise ValueError("param 0x%02x may not be written: %s"
+                         % (pid, PARAM_WRITE_REFUSED[pid]))
+    return (0x00, FUNC_SYS_PARAM, PARAM_WRITE, pid) + tuple(
+        encode_param(pid, value))
+
+
+def decode_param(pid, payload):
+    """A read or write-echo payload as a number, or None when it is not
+    the width this parameter has (00 06 af = not readable)."""
+    payload = bytes(payload or b'')
+    if pid in PARAM_INT_IDS:
+        if len(payload) != 2:
+            return None
+        return struct.unpack('<h', payload)[0]
+    if len(payload) != 4:
+        return None
+    return struct.unpack('<f', payload)[0]
+
+
+def param_matches(pid, current, wanted):
+    """True when the motor already holds wanted (float32 rounding
+    allowed)."""
+    if current is None:
+        return False
+    if pid in PARAM_INT_IDS:
+        return int(current) == int(wanted)
+    stored = struct.unpack('<f', struct.pack('<f', float(wanted)))[0]
+    return abs(float(current) - stored) <= 1e-6 * max(1., abs(stored))
+
+
+def format_param(pid, value):
+    if value is None:
+        return '?'
+    if pid in PARAM_INT_IDS:
+        return "%d" % (value,)
+    # float32 -> shortest text that reads back the same (0.085, not
+    # 0.0850000009)
+    return "%.6g" % (value,)
+
+
+def parse_param_writes(text):
+    """'0x46=100, 0x56=0.085' -> [(0x46, 100.0), (0x56, 0.085)]. Raises
+    ValueError naming the ID for a refused, unknown, repeated or badly
+    typed parameter."""
+    out = []
+    seen = set()
+    for item in (text or '').replace('\n', ',').split(','):
+        item = item.strip()
+        if not item:
+            continue
+        if '=' not in item:
+            raise ValueError("'%s' is not id=value" % (item,))
+        key, value = [part.strip() for part in item.split('=', 1)]
+        try:
+            pid = int(key, 0)
+        except ValueError:
+            raise ValueError("'%s': id must be a number such as 0x56"
+                             % (item,))
+        if pid in PARAM_WRITE_REFUSED:
+            raise ValueError("param 0x%02x may not be written: %s"
+                             % (pid, PARAM_WRITE_REFUSED[pid]))
+        if pid not in STOCK_PARAMS:
+            raise ValueError("param 0x%02x is not one stock motor_init "
+                             "sets; refusing to write it" % (pid,))
+        if pid in seen:
+            raise ValueError("param 0x%02x is listed twice" % (pid,))
+        try:
+            number = float(value)
+        except ValueError:
+            raise ValueError("param 0x%02x: '%s' is not a number"
+                             % (pid, value))
+        if number != number or number in (float('inf'), float('-inf')):
+            raise ValueError("param 0x%02x: '%s' is not a finite number"
+                             % (pid, value))
+        if pid in PARAM_INT_IDS:
+            if number != int(number) or not -32768 <= number <= 32767:
+                raise ValueError("param 0x%02x (%s) is an int16, got '%s'"
+                                 % (pid, STOCK_PARAMS[pid], value))
+            number = int(number)
+        seen.add(pid)
+        out.append((pid, number))
+    return out
+
 
 def crc8(data):
     crc = 0
