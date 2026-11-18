@@ -126,6 +126,15 @@ class SaveTest(unittest.TestCase):
         self.assertAlmostEqual(self.saved(self.render(step=0.094,
                                                       sweep=0.066)), 0.066)
 
+    def test_just_over_tolerance_slides_towards_the_lead(self):
+        # 18 Nov bench run 2: step 0.0716, sweep 0.0629, 0.0087 apart
+        pa = self.saved(self.render(step=0.0716, sweep=0.0629))
+        self.assertAlmostEqual(pa, 0.0629 + 0.45625 * 0.0087, places=4)
+        # and run 1 (mean) lands next to it
+        self.assertAlmostEqual(self.saved(self.render(step=0.0691,
+                                                      sweep=0.0641)),
+                               0.0666, places=4)
+
     def test_pla_disagreement_takes_the_scaled_step(self):
         # PLA: step 0.085 x 0.87 = 0.074 (the printed chevron)
         self.assertAlmostEqual(self.saved(self.render(
