@@ -51,7 +51,7 @@ class NozzleScrub(unittest.TestCase):
         for cfg in ("mainline_stage2.cfg", "mainline_stage2_k2plus.cfg"):
             body = macro(cfg, "_NOZZLE_CLEAR_SCRUB")
             self.assertRegex(
-                body, r"M400\n\s+M109 S\{cool\}\n\s+M106 S0\n[^\n]*\n"
+                body, r"M400\n\s+_HEAT_FAST S=\{cool\}\n\s+M106 S0\n[^\n]*\n"
                       r"\s+G1 Z5 F300\n")
 
     def test_print_start_scrubs_hot_and_presses_deeper(self):
