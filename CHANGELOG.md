@@ -40,8 +40,9 @@
 - **Chamber warm-up for warping materials (K2).** For ASA, ABS and PC
   (`_FILAMENT_PROFILE variable_chamber_soak`, exact type match), `START_PRINT`
   waits before the Z tap, with the bed hot and every fan off, until the
-  chamber reaches 50 C or `soak_max` (15 min) runs out, and reports what it
-  reached. The K2 has no chamber heater, so keep the lid shut. Off on the
+  chamber reaches its target (ASA 44 C, ABS and PC 50 C) or `soak_max` (15 min)
+  runs out, and reports what it reached. A 105 C bed took a K2 chamber from
+  39 to 43.8 C in 15 min, and an ASA test bar printed flat with it. The K2 has no chamber heater, so keep the lid shut. Off on the
   K2 Plus, which heats its chamber itself.
 
 ## v0.4.25-alpha.1 (2026-11-09)

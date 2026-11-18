@@ -53,7 +53,7 @@ class FilamentProfile(unittest.TestCase):
                             body.index("_CFS_TC SLOT="))
 
     def test_chamber_warmup_defaults(self):
-        self.assertIn("variable_chamber_soak: {'ASA': 50, 'ABS': 50, 'PC': 50}",
+        self.assertIn("variable_chamber_soak: {'ASA': 44, 'ABS': 50, 'PC': 50}",
                       section(CFGS[0], "gcode_macro _FILAMENT_PROFILE"))
         # The K2 Plus has a chamber heater of its own
         self.assertIn("variable_chamber_soak: {}",
