@@ -37,8 +37,12 @@
 #   00 0e 02      = handshake, reply 02 0e <own addr>
 #   00 0c 0b      = status / protection check (MOTOR_..._PROTECTION DATA=11)
 #   00 0c 05      = clear error/warning codes (no reply), sent twice
-#   00 06 02 <id> = read one flash parameter (float32 LE); X/Y only
-#   00 06 03      = end of parameter read-back, reply 00 06 01
+#   00 06 02 <id> = read one parameter (float32 LE, int16 for a few); X/Y
+#                   only
+#   00 06 01 <id> <value> = write one parameter (RAM only), reply echoes
+#                   the stored value; only with write_params_<motor> set
+#   00 06 03      = commit the parameters (stock sends it after its writes;
+#                   we used to call it "end of read-back"), reply 00 06 01
 # During the wake stock also holds the X/Y step/dir lines (main MCU PB7-PB10,
 # shared with the steppers) at PB9=0 PB10=0 PB7=1 PB8=0, then lets them go.
 # The drivers sample them: with PB7 low the 0x82 motor never answers. The
@@ -94,12 +98,28 @@
 #                              (00 08 11); 0 = only on MOTOR_TEMPS. Skipped
 #                              while the bus is busy or the CFS is working.
 #   #temp_warn: 100          - warn above this (firmware limit 115 C)
+#   #write_params_x:         - parameters to set at wake on motor x (one
+#   #write_params_y:           option per bus_motors name), as id=value
+#                              pairs: 0x46=100, 0x56=0.085, 0xc8=16. Empty
+#                              (the default) writes nothing. Each one is
+#                              read first and written only when it
+#                              differs, then read back; a mismatch is a
+#                              warning, not a failed wake. RAM only: the
+#                              motor's flash values return at power-off.
+#                              Never during a stall homing. Refused at
+#                              config load: 0x09 0x0a 0x19 (calibration),
+#                              0x29-0x2b (motor R/L/Ke), 0x5e and 0x6e
+#                              (FAL), and any ID outside the 52 stock
+#                              motor_init sets. Opcode 07 (flash) is never
+#                              sent.
 #
 # Gcode:
 #   MOTOR_STALL_MODE DATA=<1|2>     - sent to both 0x81 and 0x82
 #   MOTOR_BUS_SEND ADDR=<int> PAYLOAD=<hex> [CHECK=1] - raw frame (len+crc
 #                                     added); CHECK=1 waits for a valid reply
-#   MOTOR_INIT                      - run the wake-up again
+#   MOTOR_INIT                      - run the wake-up again (waits for
+#                                     moves to finish; refused while a
+#                                     print is printing or paused)
 #   MOTOR_FAULTS                    - read and decode X/Y/E protection
 #   MOTOR_CLEAR_FAULTS [BLOCK=1]    - read, clear, read again; BLOCK=1 raises
 #                                     an error if an error is still latched
@@ -115,6 +135,12 @@
 #                                     calibration: True. Never during a print.
 #   #calibration: False      - allow MOTOR_CALIBRATE
 #   #calibration_timeout: 60 - seconds to wait for the motor's answer
+#
+# Stall homing left armed: when stepper_enable:motor_off fires (a failed
+# G28 calls it, so do M18/M84) while MOTOR_STALL_MODE DATA=1 is in force,
+# the X/Y motors get stall mode 2 and a fault clear, and stall_armed is
+# reset. Otherwise the tracking fault the failed home latched blocks every
+# later home until a power cycle, and hark_safety's motor watch stays off.
 #
 # Reply validation, the protection, stall mode, temperature and address
 # reads, the fault recovery and the electrical-offset calibration (frame
@@ -135,10 +161,15 @@ WAKE = (0x00, 0x0e, 0x01)
 HANDSHAKE = (0x00, 0x0e, 0x02)
 STATUS = (0x00, 0x0c, 0x0b)
 CLEAR_ERRORS = (0x00, 0x0c, 0x05)
-END_PARAM_READ = (0x00, 0x06, 0x03)
-# Flash parameters stock reads back from each X/Y motor at start-up
-PARAM_IDS = (0x09, 0x0a, 0x19, 0x46, 0x56, 0x57, 0x66, 0x67, 0x74, 0x76,
-             0x77, 0x78, 0x79, 0xbb, 0xbc)
+# Stock's commit after its parameter writes (we named it end of read-back)
+PARAM_COMMIT = (0x00, proto.FUNC_SYS_PARAM, proto.PARAM_COMMIT)
+END_PARAM_READ = PARAM_COMMIT
+# Parameters read from each X/Y motor at wake and logged: calibration,
+# stall current / position error, loop gains, LESO observer, field-weakening
+# base speed, continuous current limit, tracking-error trip, microsteps
+PARAM_IDS = (0x09, 0x0a, 0x19, 0x0d, 0x0e, 0x46, 0x56, 0x57, 0x59, 0x66,
+             0x67, 0x74, 0x76, 0x77, 0x78, 0x79, 0x7f, 0xb4, 0xbb, 0xbc,
+             0xc8)
 BUS_MOTORS = (('x', 0x81), ('y', 0x82))
 EXTRUDER_ADDR = 0x81
 STALL_MOTORS = ('x', 'y')
@@ -233,6 +264,18 @@ class K2MotorBus:
         self.last_faults = {}
         self.stall_armed = False
         self.stall_changed = 0.
+        # Bumped by every MOTOR_STALL_MODE: a disarm queued from motor_off
+        # must not undo a newer arm
+        self._stall_gen = 0
+        # One stall mode change at a time, so X and Y never end up in
+        # different modes
+        self._stall_lock = self.reactor.mutex()
+        self._closed = False
+        # {motor: [(param id, value)]} written at wake when they differ
+        self.param_writes = self._parse_param_writes(config)
+        # {motor: {'0x56': {...}}} from the last wake, for get_status
+        self.param_results = {}
+        self.param_warnings = []
         # (name, pin, oid, wake level, chip); chip = per-MCU commands
         self.wake_pins = []
         chips = {}
@@ -297,6 +340,8 @@ class K2MotorBus:
                                     "X/Y closed-loop motor (two steps)")
         self.printer.register_event_handler("klippy:disconnect",
                                             self._close)
+        self.printer.register_event_handler("stepper_enable:motor_off",
+                                            self._handle_motor_off)
 
     # --- wire helpers ---
     @staticmethod
@@ -316,6 +361,18 @@ class K2MotorBus:
         if 'e' in names or len(set(names)) != len(names):
             raise config.error("bus_motors: names must be unique and not e")
         return tuple(motors)
+
+    def _parse_param_writes(self, config):
+        writes = {}
+        for name, addr in self.bus_motors:
+            option = 'write_params_' + name
+            try:
+                items = proto.parse_param_writes(config.get(option, ''))
+            except ValueError as e:
+                raise config.error("[k2_motor_bus] %s: %s" % (option, e))
+            if items:
+                writes[name] = items
+        return writes
 
     @staticmethod
     def _crc8(data):
@@ -339,6 +396,9 @@ class K2MotorBus:
                      self.baud)
 
     def _close(self):
+        # A motor_off disarm still queued must not reopen the port after
+        # this (a RESTART builds a new k2_motor_bus on the same reactor)
+        self._closed = True
         if self.ser is not None:
             try:
                 self.ser.close()
@@ -604,16 +664,23 @@ class K2MotorBus:
             send(addr, payload)
         return True
 
-    def _read_params(self, name, addr):
-        values = []
+    @staticmethod
+    def _param_value(pid, resp):
+        """The value in a reply to 00 06 02 / 00 06 01, or None. xfer has
+        already checked the frame (reply_check strict)."""
+        if not resp or len(resp) < 7:
+            return None
+        return proto.decode_param(pid, bytes(resp[5:-1]))
+
+    def _read_params(self, name, addr, extra=()):
+        """Read PARAM_IDS (and extra) from one motor and log them. Returns
+        {param id: value or None}. Sends no commit."""
+        values = {}
         near_zero = {}
-        for pid in PARAM_IDS:
-            resp = self.xfer(addr, (0x00, 0x06, 0x02, pid))[1]
-            value = None
-            if len(resp) >= 10:
-                value = struct.unpack('<f', resp[5:9])[0]
-            values.append("%02x=%s" % (pid, '?' if value is None
-                                       else "%g" % value))
+        for pid in PARAM_IDS + tuple(p for p in extra if p not in PARAM_IDS):
+            resp = self.xfer(addr, proto.param_read_request(pid))[1]
+            value = K2MotorBus._param_value(pid, resp)
+            values[pid] = value
             if pid in proto.CALIBRATION_PARAM_IDS:
                 near_zero[pid] = proto.is_near_zero_calibration(value)
         # Electrical offset (09) and its error (19): near zero means the
@@ -629,9 +696,88 @@ class K2MotorBus:
             logging.info("k2_motor_bus: motor %s param 19 at or below %.2f "
                          "with param 09 normal (K2 Plus motors read 0.15)",
                          name, proto.CALIBRATION_NEAR_ZERO)
-        done = self.xfer(addr, END_PARAM_READ)[1]
-        logging.info("k2_motor_bus: motor %s params %s, end %s", name,
-                     " ".join(values), done.hex(' ') if done else '(none)')
+        logging.info("k2_motor_bus: motor %s params %s", name, " ".join(
+            "%02x=%s" % (pid, proto.format_param(pid, value))
+            for pid, value in values.items()))
+        return values
+
+    def _param_warn(self, msg):
+        logging.warning("k2_motor_bus: %s", msg)
+        self.param_warnings.append(msg)
+
+    def _write_params(self, name, addr, values):
+        """Set write_params_<name> on one motor: write each parameter that
+        reads differently, then read it back. Returns the number of writes
+        sent. Never fails the wake: a mismatch is a warning."""
+        results = self.param_results[name] = {}
+        wanted_list = self.param_writes.get(name, ())
+        if not wanted_list:
+            return 0
+        if self.stall_armed:
+            self._param_warn("motor %s parameters not written: stall homing "
+                             "is armed" % (name.upper(),))
+            return 0
+        sent = 0
+        for pid, wanted in wanted_list:
+            tag = "motor %s param 0x%02x" % (name.upper(), pid)
+            current = values.get(pid)
+            want_text = proto.format_param(pid, wanted)
+            entry = results['0x%02x' % pid] = {
+                'before': current, 'wanted': wanted, 'after': current}
+            if current is None:
+                entry['result'] = 'read failed'
+                self._param_warn("%s: not written (wanted %s), the read got "
+                                 "no valid reply" % (tag, want_text))
+                continue
+            if proto.param_matches(pid, current, wanted):
+                entry['result'] = 'same'
+                continue
+            resp = self.xfer(addr, proto.param_write_request(pid, wanted))[1]
+            sent += 1
+            echo = K2MotorBus._param_value(pid, resp)
+            back = K2MotorBus._param_value(pid, self.xfer(
+                addr, proto.param_read_request(pid))[1])
+            entry['after'] = values[pid] = back
+            if proto.param_matches(pid, back, wanted):
+                entry['result'] = 'verified'
+                logging.info("k2_motor_bus: %s: %s -> %s (verified)", tag,
+                             proto.format_param(pid, current), want_text)
+            else:
+                entry['result'] = 'mismatch'
+                self._param_warn(
+                    "%s: %s -> %s NOT verified: reads back %s (write echo "
+                    "%s)" % (tag, proto.format_param(pid, current),
+                             want_text, proto.format_param(pid, back),
+                             proto.format_param(pid, echo)))
+        return sent
+
+    def _configure_motor(self, name, addr):
+        """Wake step for one X/Y motor: read the parameters, write the
+        configured ones that differ, then commit (00 06 03), as stock
+        motor_init does."""
+        extra = tuple(pid for pid, value in self.param_writes.get(name, ()))
+        values = self._read_params(name, addr, extra)
+        sent = self._write_params(name, addr, values)
+        done = self.xfer(addr, PARAM_COMMIT)[1]
+        committed = (len(done) >= 7 and done[4] == proto.FUNC_SYS_PARAM
+                     and bytes(done[5:-1]) == bytes([proto.PARAM_COMMIT_OK]))
+        logging.info("k2_motor_bus: motor %s %d param writes, commit %s",
+                     name, sent, done.hex(' ') if done else '(none)')
+        if sent and not committed:
+            self._param_warn("motor %s parameter commit (00 06 03) not "
+                             "acknowledged: %s" % (
+                                 name.upper(),
+                                 done.hex(' ') if done else 'no reply'))
+        if sent:
+            results = self.param_results.get(name, {})
+            ok = sum(1 for r in results.values() if r['result'] == 'verified')
+            self.gcode.respond_info(
+                "Motor %s: %d of %d parameters set to config values "
+                "(%d already matched)" % (
+                    name.upper(), ok, len(results),
+                    sum(1 for r in results.values()
+                        if r['result'] == 'same')))
+        return values
 
     def wake_motors(self):
         """Replay stock motor_control's start-up handshake. After a power
@@ -647,12 +793,16 @@ class K2MotorBus:
         for msg in self.calibration_warnings:
             logging.warning("k2_motor_bus: %s", msg)
             self.gcode.respond_raw("!! Motor check: %s" % (msg,))
+        for msg in self.param_warnings:
+            self.gcode.respond_raw("!! Motor parameters: %s" % (msg,))
         return self.motors_ready
 
     def _wake_once(self):
         before = None
         self.motors = {}
         self.calibration_warnings = []
+        self.param_warnings = []
+        self.param_results = {}
         try:
             bus = lambda addr, payload: self.xfer(addr, payload)[1]
             if self.wake_pins:
@@ -670,7 +820,7 @@ class K2MotorBus:
                 before = None
             for name, addr in self.bus_motors:
                 if self.motors[name]:
-                    self._read_params(name, addr)
+                    self._configure_motor(name, addr)
             if self.e_send is not None:
                 ebus = lambda addr, payload: self.e_xfer(addr, payload)[1]
                 for addr in self.extruder_addrs:
@@ -1011,6 +1161,10 @@ class K2MotorBus:
                 'temps': dict(self.temps),
                 'e_reported_addr': self.e_reported_addr,
                 'calibration_warnings': list(self.calibration_warnings),
+                'param_writes': dict((n, dict(r))
+                                     for n, r in self.param_results.items()),
+                'param_warnings': list(self.param_warnings),
+                'stall_armed': self.stall_armed,
                 'calibrating': self.calibrating,
                 'last_calibration': (
                     None if self.last_calibration is None
@@ -1024,6 +1178,11 @@ class K2MotorBus:
         # hark_safety leaves the bus alone while stall homing is armed
         self.stall_armed = mode == 1
         self.stall_changed = self.reactor.monotonic()
+        self._stall_gen += 1
+        with self._stall_lock:
+            self._stall_mode_locked(gcmd, mode)
+
+    def _stall_mode_locked(self, gcmd, mode):
         if mode == 1 and self.homing_fault_check != 'off':
             # Their homing start: a fault latched from before must not be
             # mistaken for the stall that ends the homing move
@@ -1063,6 +1222,53 @@ class K2MotorBus:
                 raise gcmd.error("MOTOR_STALL_MODE: %s. Homing stopped"
                                  % (msg,))
             gcmd.respond_raw("!! MOTOR_STALL_MODE: %s" % (msg,))
+
+    def _handle_motor_off(self):
+        # stepper_enable:motor_off: a failed G28 (homing.py), M18/M84, a
+        # restart. Only acts when our MOTOR_STALL_MODE DATA=1 is still in
+        # force, so printers that never arm stall homing are untouched. The
+        # bus work runs from a reactor callback, not inside the event.
+        if not self.stall_armed or self._closed:
+            return
+        gen = self._stall_gen
+        logging.info("k2_motor_bus: motors off with stall homing armed; "
+                     "returning X/Y to stall mode 2 and clearing faults")
+        self.reactor.register_callback(
+            lambda eventtime: self._disarm_after_motor_off(gen))
+
+    def _disarm_after_motor_off(self, gen):
+        """Stall mode 2 and a fault clear on X/Y after motors-off with stall
+        homing armed (what stock's MOTOR_CHECK_PROTECTION_AFTER_HOME does
+        on a failed home). Skipped when a newer MOTOR_STALL_MODE came in
+        meanwhile."""
+        if self._closed or gen != self._stall_gen or not self.stall_armed:
+            return
+        names = tuple(name for name, addr in self.stall_motors)
+        try:
+            with self._stall_lock:
+                if gen != self._stall_gen:
+                    return
+                results = self.set_stall_mode(2)
+                before, after, persistent = self.recover_faults(
+                    names, always_clear=True)
+                if gen == self._stall_gen:
+                    self.stall_armed = False
+                    self.stall_changed = self.reactor.monotonic()
+            unconfirmed = [n.upper() for n, a, ok, f, r in results if not ok]
+            logging.info("k2_motor_bus: after motors off: stall mode 2 %s; "
+                         "faults before %s, after %s",
+                         ("not confirmed by %s" % (", ".join(unconfirmed),))
+                         if unconfirmed else "confirmed",
+                         self.describe_faults(before),
+                         self.describe_faults(after))
+            if persistent:
+                msg = ("motor error still latched after a clear: %s. Power "
+                       "cycle the printer if homing keeps failing"
+                       % (self.describe_faults(persistent),))
+                logging.warning("k2_motor_bus: %s", msg)
+                self.gcode.respond_raw("!! Motors off: %s" % (msg,))
+        except Exception:
+            logging.exception("k2_motor_bus: disarm after motors off failed")
 
     def cmd_MOTOR_FAULTS(self, gcmd):
         lines = []
@@ -1268,6 +1474,19 @@ class K2MotorBus:
             raise gcmd.error(text)
 
     def cmd_MOTOR_INIT(self, gcmd):
+        # The wake holds the X/Y (and E) step/dir lines. Steps still queued
+        # would run with a dir line forced, leaving the MCU's idea of that
+        # pin wrong (the Hi wrong-way homing), so never mid-print and never
+        # with moves in flight.
+        stats = self.printer.lookup_object('print_stats', None)
+        if stats is not None:
+            state = stats.get_status(self.reactor.monotonic()).get('state')
+            if state in ('printing', 'paused'):
+                raise gcmd.error("MOTOR_INIT: not while a print is %s"
+                                 % (state,))
+        toolhead = self.printer.lookup_object('toolhead', None)
+        if toolhead is not None:
+            toolhead.wait_moves()
         ok = self.wake_motors()
         gcmd.respond_info("Motors %s: %s" % ("ready" if ok else "NOT ready",
                                              self.motors))

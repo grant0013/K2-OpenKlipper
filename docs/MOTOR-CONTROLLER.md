@@ -116,10 +116,16 @@ counts problems but takes replies as before; `off` turns the checks off.
 ## Reading and writing parameters
 
 ```
-read   00 06 02 <id>              -> 00 06 <value>
-write  00 06 01 <id> <value>      -> 00 06 <value>  (echo)
-end    00 06 03                   -> 00 06 01
+read    00 06 02 <id>              -> 00 06 <value>
+write   00 06 01 <id> <value>      -> 00 06 <value>  (echo)
+commit  00 06 03                   -> 00 06 01
 ```
+
+`00 06 03` is the commit stock sends after its writes (we used to call it
+"end of read-back"). The write and commit layouts are from the stock
+`motor_init` capture in gitstonelabs' creality-klipper-unlocked
+(`docs/protocol/README.md` 3.2 and 5.3): `81 09 00 06 01 46 00 00 c8 42`
+writes 0x46 = 100.0, `81 07 00 06 01 ad 01 00` writes an int16.
 
 Float parameters are 4-byte little-endian `float32`; integer parameters are
 2-byte little-endian. A reply of `00 06 af` means the ID is not readable.
@@ -135,6 +141,30 @@ X position-loop gain (0x46 = 300.0):
 MOTOR_BUS_SEND ADDR=129 PAYLOAD=00060246
 MOTOR_BUS_SEND ADDR=129 PAYLOAD=000603
 ```
+
+### Setting parameters at wake (`write_params_<motor>`)
+
+`[k2_motor_bus]` can set parameters on each X/Y motor at every wake (boot
+and `MOTOR_INIT`), between the parameter read and the commit, as stock
+`motor_init` does:
+
+```
+write_params_x: 0x46=100, 0x56=0.085, 0xc8=16
+write_params_y: 0x46=100, 0x56=0.065, 0xc8=16
+```
+
+- Empty (the default) writes nothing; the K2 and K2 Plus configs set none.
+- Each parameter is read first and written only when it differs, then read
+  back. klippy.log shows `motor X param 0x56: 0.035 -> 0.085 (verified)`;
+  a read-back mismatch, a failed read (nothing is written then) or a
+  missing commit acknowledgement is a console warning, never a failed
+  wake. `get_status` has `param_writes` and `param_warnings`.
+- Not while stall homing is armed.
+- int16 for 0x0c 0x42 0x43 0x5e 0x6e 0x7a 0x80 0xad 0xc8 0xcc 0xd9, float32
+  for the rest.
+- Refused at config load: 0x09, 0x0a, 0x19 (calibration), 0x29-0x2b (motor
+  R, L, Ke), 0x5e and 0x6e (FAL), and any ID outside the 52 stock
+  `motor_init` sets. Nothing ever sends opcode 07.
 
 ## Parameter map
 
@@ -158,6 +188,31 @@ Jacob10383's `motor_map.json` (marked `source`). The useful ones, with stock K2 
 | 0x0c-0x0e | stall mode / current / position error | 2 / 0.7 / 0.012 |
 | 0xbb / 0xbc | tracking-error trip / time | 0.3 rad / 0.1 s |
 | 0xd9-0xdf | "zazen" idle mode (reduced gains after 1 s still) | on |
+
+### Creality Hi stock values
+
+From stock Hi firmware v1.1.0.74,
+`/usr/share/klipper/config/F018_CR4NU200360C20/motor_control.cfg`. Stock
+`motor_control` wrote them at every start; the motor boards' own flash
+values differ (X 0x46 = 300, 0x56 = 0.035, 0x57 = 15, 0x74 = 1,
+0xbb = 0.1), so after a cold boot without stock firmware the motors run
+those until `config/mainline_stage2_hi.cfg` (`write_params_x` /
+`write_params_y`) sets these:
+
+| ID | Parameter | Hi X | Hi Y |
+| --- | --- | --- | --- |
+| 0x46 | position loop kp | 100 | 100 |
+| 0x56 / 0x57 / 0x59 | speed loop kp / ki / kc | 0.085 / 50 / 0.5 | 0.065 / 50 / 0.5 |
+| 0x66 / 0x67 | current loop kp / ki | 2.0 / 200 | 2.0 / 200 |
+| 0x74, 0x76-0x79 | LESO b0k, z3k, wp, ws, wd | 10, 0, 4000, 4000, 400 | same |
+| 0x0d / 0x0e | stall current / position error | 0.70 A / 0.015 rad | same |
+| 0xbb / 0xbc | tracking-error trip / time | 0.3 rad / 0.1 s | same |
+| 0xb4 / 0xb5 | continuous overcurrent / time | 4.0 A / 1.0 s | same |
+| 0xc8 | microsteps (int16) | 16 | 16 |
+| 0x7f | field weakening base speed (read only here) | 100 | 100 |
+
+Stock also sets R/L/Ke (0x29-0x2b: X 0.6 / 0.001 / 0.101859, Y 0.78 /
+0.0014 / 0.098676); we never write those.
 
 **Locked (not readable or writable through opcode 06):** the three speed-loop
 notch filters (0x92-0x9d), the torque-ripple compensator (0x9e-0xa7), the
@@ -187,6 +242,25 @@ The controllers track to about a hundredth of a millimetre, because the
 feedforward cancels the usual lag. Wall quality on the K2 is limited by frame
 resonance (35-46 Hz) and acceleration, not by motor tuning: tune input shaping
 and wall acceleration first.
+
+## Failed homing and latched faults
+
+A home that ends against the frame instead of on a stall trips the
+tracking-error protection. In stall mode 1 nothing clears it, so every later
+home fails until a power cycle (jperry004's creality-hi-homing-fix, bug 2),
+and `stall_armed` stays set, which also keeps `[hark_safety]` off the bus.
+
+- When `stepper_enable:motor_off` fires (a failed `G28` calls it, so do
+  `M18`/`M84`) while `MOTOR_STALL_MODE DATA=1` is in force, `k2_motor_bus`
+  sends stall mode 2 to X and Y, clears their faults and resets
+  `stall_armed`, from a reactor callback. A newer `MOTOR_STALL_MODE` wins.
+  Printers that never arm stall homing are untouched.
+- The Hi `[homing_override]` runs `MOTOR_STALL_MODE DATA=2` +
+  `MOTOR_CLEAR_FAULTS` before each `MOTOR_STALL_MODE DATA=1`, and again
+  after each axis home (in place of the raw `000c0b` reads).
+- `MOTOR_INIT` waits for moves to finish and is refused while a print is
+  printing or paused: the wake holds the step/dir lines, and steps in flight
+  then would leave the MCU's dir pin state wrong.
 
 ## The FAL incident (read before experimenting)
 
