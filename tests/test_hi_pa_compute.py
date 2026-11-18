@@ -54,6 +54,7 @@ def make(answer, remote="root@hi"):
     p._read_capture = lambda name: (samples, "capture.csv")
     p._material_cfg = lambda material: PETG
     p.calls = []
+    p.printer = types.SimpleNamespace(command_error=GcodeError)
 
     def run(material):
         p.calls.append(material)
@@ -88,7 +89,8 @@ class HelpersTest(unittest.TestCase):
 class CommandTest(unittest.TestCase):
     def test_result_applied_when_set(self):
         p = make("0.062")
-        g = FakeGcmd(NAME="hi_pa_sweep", MATERIAL="PETG", SET=1)
+        g = FakeGcmd(NAME="hi_pa_sweep", MATERIAL="PETG", SET=1,
+                     METHOD="pa_compute")
         p.cmd_HI_PA_COMPUTE(g)
         self.assertEqual(p.calls, ["Hyper PETG"])
         self.assertAlmostEqual(p.last["pa"], 0.038)
@@ -99,13 +101,122 @@ class CommandTest(unittest.TestCase):
 
     def test_minus_one_is_a_failure_not_a_pa(self):
         p = make("-1")
-        g = FakeGcmd(NAME="hi_pa_sweep", MATERIAL="PETG", SET=1)
+        g = FakeGcmd(NAME="hi_pa_sweep", MATERIAL="PETG", SET=1,
+                     METHOD="pa_compute")
         with self.assertRaises(GcodeError) as cm:
             p.cmd_HI_PA_COMPUTE(g)
         self.assertIn("found no pressure advance", str(cm.exception))
         self.assertEqual(p.gcode.scripts, [])
-        self.assertEqual(p.last, {})
+        self.assertIsNone(p.last["pa"])
         os.unlink(p.csv_path)
+
+
+# --- the knee: where the fast stroke's force peaks ------------------------
+STROKE = 40. / 150.          # F9000 fast stroke, s
+V_FAST = 1.853 / STROKE      # its filament speed, mm/s
+
+
+def sweep(knee_round, rounds=31, sign=1., ragged=()):
+    """A synthetic sweep: per round a slow ~1.5 s stretch, then the fast
+    stroke whose force keeps rising to its end before knee_round and
+    overshoots early from it on. Returns (samples, moves)."""
+    samples, moves, t = [], [], 0.
+    for r in range(rounds):
+        moves.append((t + 0.1, 0.1, 0., 6.9 / 0.1 * 0.1))   # slow ramp-up
+        for i in range(150):                                 # slow stretch
+            samples.append((t + i * 0.01, int(sign * 1000)))
+        t += 1.5
+        moves.append((t, 0.05, 0., V_FAST / 0.05))           # fast accel
+        moves.append((t - 0.4, 0.01, 40., -4000.))           # unretract
+        early = r >= knee_round
+        if r in ragged:
+            early = not early
+        for i in range(int(STROKE / 0.005)):
+            x = i * 0.005 / STROKE
+            f = (5000 * (1.3 - x) if early and x > 0.15 else
+                 5000 * x / 0.15 * 1.3 if early else 5000 * x)
+            samples.append((t + i * 0.005, int(sign * (1000 + f))))
+        t += STROKE + 1.0
+    return samples, [(a, b, c, d) for a, b, c, d in moves]
+
+
+class KneeTest(unittest.TestCase):
+    def knee(self, samples, moves, start=0.010, step=0.002, rounds=31):
+        starts = hpc.fast_strokes(moves, V_FAST)
+        self.assertEqual(len(starts), rounds)
+        pos = hpc.peak_positions(sorted(samples), starts, STROKE)
+        return hpc.knee_result(pos, start, step)
+
+    def test_clean_flip(self):
+        r = self.knee(*sweep(20))
+        self.assertEqual(r["status"], "ok")
+        self.assertAlmostEqual(r["pa"], 0.010 + 20 * 0.002)
+
+    def test_gauge_reading_the_other_way(self):
+        r = self.knee(*sweep(12, sign=-1.))
+        self.assertAlmostEqual(r["pa"], 0.010 + 12 * 0.002)
+
+    def test_ragged_flip_lands_mid_way(self):
+        # late/early mixed over rounds 14-17 (as shifted sweep 2, 18 Nov)
+        r = self.knee(*sweep(15, ragged=(15, 17)))
+        self.assertEqual(r["status"], "ok")
+        self.assertTrue(0.010 + 14 * 0.002 <= r["pa"] <= 0.010 + 18 * 0.002)
+
+    def test_knee_past_either_end(self):
+        self.assertEqual(self.knee(*sweep(40))["status"], "high")
+        self.assertEqual(self.knee(*sweep(0))["status"], "low")
+
+    def test_no_clear_flip(self):
+        positions = [0.9, 0.1] * 15 + [0.9]
+        self.assertEqual(hpc.knee_result(positions, 0.01, 0.002)["status"],
+                         "unclear")
+
+    def test_fast_strokes_skip_retracts_and_slow_strokes(self):
+        moves = [(0., 0.05, 0., V_FAST / 0.05), (1., 0.01, 0., 4000.),
+                 (2., 0.1, 0., 6.9), (3., 0.05, 0., V_FAST / 0.05)]
+        self.assertEqual(hpc.fast_strokes(moves, V_FAST), [0., 3.])
+
+
+class KneeCommandTest(unittest.TestCase):
+    def make(self, knee_round, answer="-1"):
+        p = make(answer)
+        samples, moves = sweep(knee_round)
+        p._read_capture = lambda name: (samples, "capture.csv")
+        p._read_moves = lambda name: moves
+        return p
+
+    def test_knee_is_the_default(self):
+        p = self.make(20)
+        g = FakeGcmd(NAME="hi_pa_sweep", MATERIAL="PETG", SET=1)
+        p.cmd_HI_PA_COMPUTE(g)
+        self.assertAlmostEqual(p.last["pa"], 0.050)
+        self.assertEqual(p.calls, [])            # no pa_compute run
+        self.assertEqual(p.gcode.scripts,
+                         ["SET_PRESSURE_ADVANCE ADVANCE=0.0500"])
+
+    def test_cross_check_failing_does_not_fail_the_knee(self):
+        p = self.make(20, answer="-1")
+        g = FakeGcmd(NAME="hi_pa_sweep", MATERIAL="PETG", CROSS=1)
+        p.cmd_HI_PA_COMPUTE(g)
+        self.assertAlmostEqual(p.last["pa"], 0.050)
+        self.assertIsNone(p.last["pa_compute"])
+        self.assertIn("pa_compute none", g.replies[-1])
+        if os.path.exists(p.csv_path):
+            os.unlink(p.csv_path)
+
+    def test_quiet_records_a_miss_instead_of_raising(self):
+        p = self.make(40)
+        g = FakeGcmd(NAME="hi_pa_sweep", MATERIAL="PETG", QUIET=1)
+        p.cmd_HI_PA_COMPUTE(g)
+        self.assertIsNone(p.last["pa"])
+        self.assertEqual(p.last["knee_status"], "high")
+        self.assertIn("start higher", g.replies[-1])
+
+    def test_a_miss_raises_without_quiet(self):
+        p = self.make(0)
+        with self.assertRaises(GcodeError) as cm:
+            p.cmd_HI_PA_COMPUTE(FakeGcmd(NAME="hi_pa_sweep"))
+        self.assertIn("start lower", str(cm.exception))
 
 
 if __name__ == "__main__":

@@ -33,6 +33,18 @@
 # pa_compute answers -1 when it cannot find a PA in the trace; that is
 # reported as a failure, not turned into a PA.
 #
+# METHOD=knee (the default) reads the PA from the sweep without pa_compute:
+# in every round's fast stroke the gauge force peaks at the END of the
+# stroke while the PA is too low (the pressure is still building) and near
+# its START once the PA is enough (it overshoots). The knee is the round
+# where that flips, found as the split that best separates late peaks from
+# early ones. 18 Nov 2026, black Hyper PETG 250 C: knee 0.066 / 0.068 / 0.068
+# over three sweeps where pa_compute answered on two of five (0.068, 0.076).
+# CROSS=1 also runs pa_compute and reports it next to the knee. QUIET=1
+# records a failure in get_status instead of raising (the automatic blend
+# carries on with its other test). The capture's _extruder.csv gives the
+# fast strokes' start times.
+#
 # Copyright (C) 2026 Hark Tech. This file may be distributed under the terms
 # of the GNU GPLv3 license.
 
@@ -102,6 +114,108 @@ def remote_compute_command(program, config_path, material, csv_path):
         shlex.quote(config_path), shlex.quote(material))
 
 
+def fast_strokes(moves, v_fast, tol=0.15):
+    """Start print times of the sweep's fast strokes: extruder moves that
+    accelerate up to about v_fast (mm/s of filament). The retract and
+    unretract moves (40 mm/s) and the slow strokes fall outside tol."""
+    out = []
+    for t, move_t, start_v, accel in sorted(moves):
+        end_v = start_v + accel * move_t
+        if accel > 0. and abs(end_v - v_fast) <= tol * v_fast:
+            out.append(t)
+    return out
+
+
+def _median(vals):
+    vals = sorted(vals)
+    n = len(vals)
+    if not n:
+        return None
+    mid = n // 2
+    return vals[mid] if n % 2 else 0.5 * (vals[mid - 1] + vals[mid])
+
+
+def peak_positions(samples, starts, stroke_t, pre=(0.5, 0.05)):
+    """Where in each fast stroke the gauge force peaks, 0 = start, 1 = end.
+    samples [(print_time, raw)] sorted; the force is taken against the
+    level just before the stroke. The gauge's sign is found from the data
+    (extruding pushes it one way on every round)."""
+    import bisect
+    times = [t for t, v in samples]
+    segs = []
+    for s in starts:
+        a, b = bisect.bisect_left(times, s - pre[0]), bisect.bisect_left(
+            times, s - pre[1])
+        c, d = bisect.bisect_left(times, s), bisect.bisect_left(
+            times, s + stroke_t)
+        base = _median([v for t, v in samples[a:b]])
+        seg = [v - base for t, v in samples[c:d]] if base is not None else []
+        segs.append(seg)
+    total = sum(sum(seg) for seg in segs)
+    sign = -1. if total < 0 else 1.
+    out = []
+    for seg in segs:
+        if len(seg) < 5:
+            out.append(None)
+            continue
+        vals = [sign * v for v in seg]
+        out.append(vals.index(max(vals)) / float(len(vals)))
+    return out
+
+
+def find_knee(positions, late=0.6, early=0.5, near=1.):
+    """(first_early_round, errors) splitting the rounds into late peaks
+    before and early peaks after with the fewest misfits; a peak between
+    early and late counts half either way, a missing round not at all.
+    first_early_round 0 = every round early (knee below the sweep), len =
+    none early (knee above it). Where the flip is ragged (late and early
+    peaks mixed over a few rounds) every split within `near` misfits of the
+    best is averaged, so the knee lands mid-way through the mixed rounds
+    rather than at their first early one; the round is then fractional."""
+    n = len(positions)
+    def lateness(p):
+        if p is None:
+            return None
+        return 1. if p >= late else 0. if p < early else 0.5
+    lt = [lateness(p) for p in positions]
+    costs = [sum(1. - x for x in lt[:k] if x is not None)
+             + sum(x for x in lt[k:] if x is not None) for k in range(n + 1)]
+    low = min(costs)
+    ks = [k for k, c in enumerate(costs) if c <= low + near + 1e-9]
+    # an edge split (all early / none early) stays an edge answer
+    if 0 in ks and costs[0] <= low + 1e-9:
+        return 0, low
+    if n in ks and costs[n] <= low + 1e-9:
+        return n, low
+    ks = [k for k in ks if 0 < k < n] or ks
+    return sum(ks) / float(len(ks)), low
+
+
+def knee_result(positions, start, step, max_errors=None):
+    """{'status': ok|low|high|unclear, 'pa', 'round', 'errors'}."""
+    valid = [p for p in positions if p is not None]
+    n = len(positions)
+    if len(valid) < max(8, n // 2):
+        return {'status': 'unclear', 'pa': None, 'round': None,
+                'errors': None, 'rounds': len(valid)}
+    k, errors = find_knee(positions)
+    limit = max(2., 0.2 * len(valid)) if max_errors is None else max_errors
+    out = {'round': round(k, 2), 'errors': errors, 'rounds': len(valid),
+           'pa': round(start + k * step, 4) if 0 < k < n else None}
+    # too many misfits: no knee at all, wherever the best split fell
+    if errors > limit:
+        out['status'] = 'unclear'
+    elif k <= 1:
+        out['status'] = 'low'
+    elif k >= n - 1:
+        out['status'] = 'high'
+    else:
+        out['status'] = 'ok'
+    if out['status'] != 'ok':
+        out['pa'] = None
+    return out
+
+
 def map_result(value, material_cfg, start, step, count):
     """pa_compute's answer -> (round, PA of our sweep)."""
     strat = float(material_cfg.get("paStrat"))
@@ -141,6 +255,17 @@ class HiPACompute:
                 t, v = line.strip().split(",")
                 samples.append((float(t), int(v)))
         return samples, path
+
+    def _read_moves(self, name):
+        log = self.printer.lookup_object("pa_pressure_log", None)
+        path = os.path.join(log.out_dir, name + "_extruder.csv")
+        moves = []
+        with open(path) as f:
+            next(f)
+            for line in f:
+                t, mt, sv, ac = line.strip().split(",")[:4]
+                moves.append((float(t), float(mt), float(sv), float(ac)))
+        return moves
 
     def _exec(self, argv, stdin_path=None, timeout=60.):
         """Run argv without blocking the reactor; return (returncode,
@@ -207,6 +332,30 @@ class HiPACompute:
         # pa_compute prints its errors (unknown material) on stdout
         return out + err
 
+    def _pa_compute(self, name, material, samples, start, step, count):
+        """Creality's pa_compute on the capture: (round, PA) or raises."""
+        material_cfg = self._material_cfg(material)
+        binned = bin_samples(samples, self.bin_s)
+        if len(binned) < count * 10:
+            raise self.gcode.error("Capture %s has only %d samples after "
+                                   "binning" % (name, len(binned)))
+        write_stress_csv(self.csv_path, binned, time.time())
+        out = self._run(material)
+        logging.info("hi_pa_compute: %s%s %s -> %r", self.program,
+                     " on %s" % (self.remote,) if self.remote else "",
+                     material, out)
+        m = RESULT_RE.search(out)
+        if not m:
+            raise self.gcode.error("pa_compute gave no result: %s"
+                                   % (out.strip()[-300:],))
+        value = float(m.group(1))
+        if value < 0:
+            raise self.gcode.error(
+                "pa_compute (%s) found no pressure advance in the %s sweep "
+                "(answer %.4f)" % (material, name, value))
+        rnd, pa = map_result(value, material_cfg, start, step, count)
+        return value, rnd, pa, len(binned)
+
     def cmd_HI_PA_COMPUTE(self, gcmd):
         name = gcmd.get("NAME")
         key = gcmd.get("MATERIAL", "PLA").upper()
@@ -217,44 +366,82 @@ class HiPACompute:
         start = gcmd.get_float("START", 0.010, minval=0.)
         step = gcmd.get_float("STEP", 0.002, above=0.)
         count = gcmd.get_int("COUNT", 31, minval=2)
+        fast = gcmd.get_float("FAST", 9000., above=0.)
+        method = gcmd.get("METHOD", "knee").lower()
+        if method not in ("knee", "pa_compute"):
+            raise gcmd.error("METHOD must be knee or pa_compute")
+        cross = gcmd.get_int("CROSS", 0, minval=0, maxval=1)
+        quiet = gcmd.get_int("QUIET", 0, minval=0, maxval=1)
         apply_pa = gcmd.get_int("SET", 0, minval=0, maxval=1)
-        material_cfg = self._material_cfg(material)
+        self.last = {}
+        last = {"name": name, "method": method, "start": start,
+                "step": step, "count": count, "knee": None,
+                "knee_status": None, "pa_compute": None, "pa": None,
+                "stamp": round(time.time(), 3)}
+
+        def fail(msg):
+            last["error"] = msg
+            self.last = last
+            if quiet:
+                gcmd.respond_info(msg)
+                return
+            raise gcmd.error(msg)
         try:
             samples, src = self._read_capture(name)
         except OSError as exc:
-            raise gcmd.error("Cannot read the capture %s: %s" % (name, exc))
-        binned = bin_samples(samples, self.bin_s)
-        if len(binned) < count * 10:
-            raise gcmd.error("Capture %s has only %d samples after binning"
-                             % (name, len(binned)))
-        write_stress_csv(self.csv_path, binned, time.time())
-        out = self._run(material)
-        logging.info("hi_pa_compute: %s%s %s -> %r", self.program,
-                     " on %s" % (self.remote,) if self.remote else "",
-                     material, out)
-        m = RESULT_RE.search(out)
-        if not m:
-            raise gcmd.error("pa_compute gave no result: %s"
-                             % (out.strip()[-300:],))
-        value = float(m.group(1))
-        if value < 0:
-            raise gcmd.error(
-                "pa_compute (%s) found no pressure advance in the %s sweep "
-                "(answer %.4f). The trace is kept in %s; PA left as it was."
-                % (material, name, value, self.csv_path))
-        rnd, pa = map_result(value, material_cfg, start, step, count)
-        self.last = {"name": name, "material": material, "raw": value,
-                     "round": rnd, "pa": pa, "samples": len(samples),
-                     "bins": len(binned), "stamp": round(time.time(), 3)}
-        gcmd.respond_info(
-            "HI_PA_COMPUTE %s: %d samples -> %d bins (%s); pa_compute (%s) "
-            "says %.4f = round %d of %d -> PA %.4f for this sweep"
-            % (name, len(samples), len(binned), self.csv_path, material,
-               value, rnd + 1, count, pa))
+            return fail("Cannot read the capture %s: %s" % (name, exc))
+        last["samples"] = len(samples)
+        if method == "knee" or cross:
+            try:
+                moves = self._read_moves(name)
+            except (OSError, ValueError, AttributeError) as exc:
+                moves = None
+                last["knee_status"] = "no extruder log (%s)" % (exc,)
+            if moves is not None:
+                stroke_t = 40. / (fast / 60.)
+                starts = fast_strokes(moves, 1.853 / stroke_t)
+                positions = peak_positions(sorted(samples), starts[:count],
+                                           stroke_t)
+                k = knee_result(positions, start, step)
+                last.update(knee=k["pa"], knee_status=k["status"],
+                            knee_round=k["round"], knee_errors=k["errors"],
+                            strokes=len(starts))
+                logging.info("hi_pa_compute: knee %s positions %s", k,
+                             [None if x is None else round(x, 2)
+                              for x in positions])
+        if method == "pa_compute" or cross:
+            try:
+                value, rnd, pa, bins = self._pa_compute(
+                    name, material, samples, start, step, count)
+                last.update(pa_compute=pa, raw=value, round=rnd, bins=bins)
+            except self.printer.command_error as exc:
+                last["pa_compute_error"] = str(exc)
+        chosen = last["knee"] if method == "knee" else last["pa_compute"]
+        parts = []
+        if method == "knee" or cross:
+            parts.append("knee %s" % ("%.4f" % last["knee"]
+                                      if last["knee"] is not None else
+                                      "none (%s)" % (last["knee_status"],)))
+        if method == "pa_compute" or cross:
+            parts.append("pa_compute %s" % ("%.4f" % last["pa_compute"]
+                                            if last["pa_compute"] is not None
+                                            else "none"))
+        summary = "HI_PA_COMPUTE %s (sweep %.3f-%.3f): %s" % (
+            name, start, start + step * (count - 1), ", ".join(parts))
+        if chosen is None:
+            why = {"low": "the knee is below this sweep: start lower",
+                   "high": "the knee is above this sweep: start higher"}.get(
+                last.get("knee_status"), "no pressure advance found")
+            return fail("%s; %s. PA left as it was." % (summary, why)
+                        if method == "knee" else "%s; %s. PA left as it "
+                        "was." % (summary, last.get("pa_compute_error", why)))
+        last["pa"] = chosen
+        self.last = last
+        gcmd.respond_info("%s -> PA %.4f" % (summary, chosen))
         if apply_pa:
             self.gcode.run_script_from_command(
-                "SET_PRESSURE_ADVANCE ADVANCE=%.4f" % (pa,))
-            gcmd.respond_info("Pressure advance set to %.4f" % (pa,))
+                "SET_PRESSURE_ADVANCE ADVANCE=%.4f" % (chosen,))
+            gcmd.respond_info("Pressure advance set to %.4f" % (chosen,))
 
     def get_status(self, eventtime):
         return dict(self.last)

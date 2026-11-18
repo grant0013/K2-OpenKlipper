@@ -44,9 +44,11 @@ class CrealitySweepTest(unittest.TestCase):
         cal = section("gcode_macro HI_PA_CAL")
         arm = cal.index("CFS_FEED_START SLOT={slot} CONFIRM=1")
         self.assertLess(arm, cal.index("HI_PURGE HEATER_OFF=0"))
-        self.assertLess(arm, cal.index("PA_LOG_START"))
+        self.assertLess(arm, cal.index("_HI_PA_SWEEP START="))
         stop = cal.index("CFS_FEED_STOP")
-        self.assertLess(cal.index("PA_LOG_STOP"), stop)
+        self.assertLess(cal.index("_HI_PA_SWEEP START="), stop)
+        core = section("gcode_macro _HI_PA_SWEEP")
+        self.assertLess(core.index("PA_LOG_START"), core.index("PA_LOG_STOP"))
         self.assertLess(stop, cal.index("_HI_PA_CAL_RESULT"))
         self.assertIn("CFS_PRELOAD ENABLE=1", cal[stop:])
 
