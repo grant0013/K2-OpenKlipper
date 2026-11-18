@@ -52,11 +52,11 @@ class StartPrintTest(unittest.TestCase):
 
 
 class FanTest(unittest.TestCase):
-    def test_tachometers_log_only(self):
+    def test_tachometers_pause_after_bench_check(self):
         self.assertIn("tachometer_pin: ^nozzle_mcu:PA10", section("fan"))
         self.assertIn("tachometer_pin: ^nozzle_mcu:PA9",
                       section("heater_fan hotend_fan"))
-        self.assertIn("fan_action: log", section("hark_safety"))
+        self.assertIn("fan_action: pause", section("hark_safety"))
 
 
 if __name__ == "__main__":

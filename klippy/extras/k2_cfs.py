@@ -281,6 +281,7 @@ class K2CFS:
     box_alarm_polls = 2
     load_stall_timeout = 0.
     wheel_read_warned = False
+    WHEEL_READ_TRIES = 3
     box_alarm_seen = None
     # name -> (payload bytes, decoder method name)
     # Payload EXCLUDES addr/len/crc (k2_motor_bus builds the frame).
@@ -1319,18 +1320,27 @@ class K2CFS:
         # Hub measuring wheel position (mm, float), or None when the box
         # does not answer or the reply is not a wheel reading; the checks
         # that need it are then skipped (said once in klippy.log)
-        try:
-            wheel = self._run_query('MEASURING_WHEEL').get('wheel_mm')
-        except Exception:
-            logging.exception("k2_cfs: measuring wheel read")
-            wheel = None
-        if wheel is None or math.isnan(wheel) or math.isinf(wheel):
-            if not self.wheel_read_warned:
-                self.wheel_read_warned = True
-                logging.info("k2_cfs: no measuring wheel reading; the purge"
-                             " clog and load stall checks skip it")
-            return None
-        return wheel
+        # A late reply to an earlier command (the box answers a stage-5
+        # send after its timeout, 00 10 ...) can land on this query; asking
+        # again reads past it (18 Nov 2026 bench: the first read during a
+        # load came back as one)
+        r = {}
+        for unused in range(self.WHEEL_READ_TRIES):
+            try:
+                r = self._run_query('MEASURING_WHEEL')
+            except Exception:
+                logging.exception("k2_cfs: measuring wheel read")
+                r = {}
+            wheel = r.get('wheel_mm')
+            if (wheel is not None and not math.isnan(wheel)
+                    and not math.isinf(wheel)):
+                return wheel
+        if not self.wheel_read_warned:
+            self.wheel_read_warned = True
+            logging.info("k2_cfs: no measuring wheel reading (%s); this"
+                         " purge clog or load stall check skips it",
+                         r.get('raw') or r.get('resp') or 'no reply')
+        return None
 
     def _measuring(self):
         # MEASURING with any queued slot events read off first
@@ -3423,6 +3433,8 @@ class K2CFS:
             return
         moved = abs(after - before)
         if moved >= self.purge_clog_min_fraction * length:
+            logging.info("k2_cfs: purge wheel check: %.1f of %.0f mm, ok",
+                         moved, length)
             return
         msg = ("CFS purge: the measuring wheel barely moved (%.1f of %.0f"
                " mm) - nozzle or feed blocked? (Creality key845)"

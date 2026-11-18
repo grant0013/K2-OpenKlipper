@@ -455,6 +455,20 @@ class PurgeClogCheckTest(unittest.TestCase):
         self.purge(cfs)
         self.assertTrue(cfs.wheel_read_warned)
 
+    def test_a_late_reply_is_read_past(self):
+        # 18 Nov 2026 bench: a stage-5 reply landed on the wheel query;
+        # asking again gets the wheel, so the check still runs
+        cfs = purge_cfs([None, -500., -545., None, -545., -600.])
+        self.purge(cfs)
+        self.assertEqual(cfs.wheel_reads, 6)
+        self.assertFalse(cfs.wheel_read_warned)
+
+    def test_a_box_that_never_answers_gives_up_after_three(self):
+        cfs = purge_cfs([None] * 12)
+        self.purge(cfs)
+        self.assertEqual(cfs.wheel_reads, 2 * cfs.WHEEL_READ_TRIES)
+        self.assertTrue(cfs.wheel_read_warned)
+
     def test_off_reads_nothing(self):
         cfs = purge_cfs([-500., -500., -500., -500.], clog_check=False)
         self.purge(cfs)
