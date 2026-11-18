@@ -5,16 +5,20 @@ screen does).
 
 A compact sibling of harkscreen.py (the K2's 800x480 screen): it reuses that
 file's Moonraker client, touch reader, M73 ETA and config loader, with pages
-sized for the small panel: status, print files, filament (the CFS slots:
-load, unload, measure pressure advance, pick the filament profile and
-colour; the spool holder when no CFS answers), controls (move, preheat,
-nozzle clean) and machine (IP, brightness, automatic PA, restart, back to
-stock). Draws with Pillow straight to /dev/fb0; talks to Moonraker, so it
-works the same with Klipper on the printer or on an external host.
+sized for the small panel: status (with live Z adjust while printing:
+babystep the nozzle and save the offset for future prints), print files,
+filament (the CFS slots: load, unload, measure pressure advance, pick the
+filament profile and colour; the spool holder when no CFS answers),
+controls (move, preheat, nozzle clean) and machine (IP, brightness,
+automatic PA, restart, back to stock, and a calibration card: input
+shaper, accel, bed mesh range, Z tilt, pressure advance). Draws with Pillow
+straight to /dev/fb0; talks to Moonraker, so it works the same with Klipper
+on the printer or on an external host. Taps are ignored for a moment after
+a page change, so a quick double tap does not land on the new page.
 
 This file may be distributed under the terms of the GNU GPLv3 license.
 """
-import os, subprocess, sys, threading, time
+import math, os, subprocess, sys, threading, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harkscreen as hs  # noqa: E402
@@ -52,8 +56,13 @@ OBJECTS = {
     "extruder": ["temperature", "target", "pressure_advance"],
     "heater_bed": ["temperature", "target"],
     "fan": ["speed"],
-    "toolhead": ["homed_axes", "position"],
-    "gcode_move": ["speed_factor"],
+    "toolhead": ["homed_axes", "position", "max_accel",
+                 "square_corner_velocity"],
+    "gcode_move": ["speed_factor", "homing_origin"],
+    # Z adjust (saved offset) and the calibration card
+    "gcode_macro START_PRINT": ["hot_z_comp", "z_offset"],
+    "bed_mesh": ["profile_name", "mesh_min", "mesh_max", "probed_matrix"],
+    "z_tilt": ["applied"],
     "webhooks": ["state", "state_message"],
     "k2_motor_bus": ["motors_ready"],
     "pause_resume": ["is_paused"],
@@ -121,7 +130,86 @@ def pa_auto_on(st):
         sw = st.get("gcode_macro _PA_AUTO", {}).get("on_print_start", 0)
     return bool(sw)
 
-TABS = (("status", "Status"), ("files", "Files"), ("filament", "Filament"),
+
+TAP_LOCK = 0.26            # s: taps ignored after a page change
+Z_STEPS = (-0.02, -0.01, 0.01, 0.02)
+
+
+def _shaper(kind, freq, dr):
+    """(A, T) of Klipper's standard input shapers (shaper_defs.py)."""
+    df = math.sqrt(1. - dr ** 2)
+    t_d = 1. / (freq * df)
+    if kind == "zv":
+        K = math.exp(-dr * math.pi / df)
+        return [1., K], [0., .5 * t_d]
+    if kind == "mzv":
+        K = math.exp(-.75 * dr * math.pi / df)
+        a1 = 1. - 1. / math.sqrt(2.)
+        return ([a1, (math.sqrt(2.) - 1.) * K, a1 * K * K],
+                [0., .375 * t_d, .75 * t_d])
+    if kind == "zvd":
+        K = math.exp(-dr * math.pi / df)
+        return [1., 2. * K, K ** 2], [0., .5 * t_d, t_d]
+    if kind == "ei":
+        v = 1. / 20.
+        a1 = (0.24968 + 0.24961 * v) + ((0.80008 + 1.23328 * v)
+                                        + (0.49599 + 3.17316 * v) * dr) * dr
+        a3 = (0.25149 + 0.21474 * v) + ((-0.83249 + 1.41498 * v)
+                                        + (0.85181 - 4.90094 * v) * dr) * dr
+        t2 = 0.4999 + (((0.46159 + 8.57843 * v) * v)
+                       + (((4.26169 - 108.644 * v) * v)
+                          + ((1.75601 + 336.989 * v) * v) * dr) * dr) * dr
+        return [a1, 1. - a1 - a3, a3], [0., t2 * t_d, t_d]
+    return None
+
+
+def shaper_max_accel(kind, freq, damping=0.1, scv=5.):
+    """Klipper's 'recommended max_accel' for a shaper (the bisection in
+    shaper_calibrate.py, smoothing <= 0.12), or None if unknown."""
+    try:
+        sh = _shaper(str(kind).lower(), float(freq), float(damping))
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+    if sh is None or float(freq) <= 0:
+        return None
+    A, T = sh
+    inv_d = 1. / sum(A)
+    ts = sum(a * t for a, t in zip(A, T)) * inv_d
+
+    def smoothing(accel):
+        half = accel * .5
+        o90 = o180 = 0.
+        for a, t in zip(A, T):
+            if t >= ts:
+                o90 += a * (scv + half * (t - ts)) * (t - ts)
+            o180 += a * half * (t - ts) ** 2
+        return max(o90 * inv_d * math.sqrt(2.), o180 * inv_d)
+
+    ok = lambda accel: smoothing(accel) <= 0.12
+    if not ok(1e-9):
+        return 0.
+    left = right = 1.
+    while not ok(left):
+        right, left = left, left * .5
+    if right == left:
+        while ok(right):
+            right *= 2.
+    while right - left > 1e-8:
+        mid = (left + right) * .5
+        if ok(mid):
+            left = mid
+        else:
+            right = mid
+    return left
+
+
+def mesh_range(bm):
+    """max - min of the probed bed mesh in mm, or None with no mesh."""
+    pts = [z for row in (bm or {}).get("probed_matrix") or [] for z in
+           (row or []) if isinstance(z, (int, float))]
+    return (max(pts) - min(pts)) if pts else None
+
+TABS =(("status", "Status"), ("files", "Files"), ("filament", "Filament"),
         ("control", "Control"), ("machine", "Machine"))
 BRIGHTNESS = (25, 50, 75, 100)
 SLEEP_CHOICES = ((300, "5 min"), (600, "10 min"), (1800, "30 min"),
@@ -232,6 +320,8 @@ class Data(threading.Thread):
         self.screen = screen
         self.st, self.err = {}, "Starting"
         self.lib_at = 0.
+        self.settings_at = 0.
+        self.was_ready = False
 
     def run(self):
         files_at = 0.
@@ -244,6 +334,16 @@ class Data(threading.Thread):
                 if wh.get("state") != "ready":
                     err = wh.get("state_message") or "Klipper %s" % wh.get(
                         "state", "?")
+                ready = wh.get("state") == "ready"
+                if ready and not self.was_ready:
+                    self.reapply(mr)
+                self.was_ready = ready
+                if (self.screen.page == "machine"
+                        and self.screen.sub == "cal"
+                        and time.time() - self.settings_at > 60):
+                    self.screen.settings = mr.settings()
+                    self.screen.dirty = True
+                    self.settings_at = time.time()
                 if (self.screen.page == "files"
                         and time.time() - files_at > 10):
                     self.screen.files = mr.files()
@@ -263,10 +363,24 @@ class Data(threading.Thread):
                     err = "Waiting for Moonraker"
             if self.screen.page != "files":
                 files_at = 0.
+            if self.screen.sub != "cal":
+                self.settings_at = 0.
             if (st, err) != (self.st, self.err):
                 self.st, self.err = st, err
                 self.screen.dirty = True
             time.sleep(self.screen.cfg.num("screen", "refresh"))
+
+    def reapply(self, mr):
+        """Klipper (re)started: SET_GCODE_VARIABLE does not survive that,
+        so send the Z offset saved on the Z adjust page again."""
+        z = self.screen.prefs.get("z_offset")
+        if z is None:
+            return
+        try:
+            mr.run_gcode("SET_GCODE_VARIABLE MACRO=START_PRINT "
+                         "VARIABLE=z_offset VALUE=%.3f" % float(z), timeout=10)
+        except Exception as e:
+            print("z_offset: %s" % e, flush=True)
 
 
 class Screen:
@@ -278,6 +392,8 @@ class Screen:
         self.notice = None         # (text, colour, until)
         self.files = []
         self.library = []          # filament profiles for the slot editor
+        self.settings = {}         # configfile settings (calibration card)
+        self.lock_until = 0.       # taps ignored until (page change)
         self.file_page = 0
         self.step = 10.
         self.prefs = hs.load_prefs()
@@ -420,7 +536,10 @@ class Screen:
         if err and (not st or self.page == "status"):
             self.draw_error(d, err)
         elif self.page == "status":
-            self.draw_status(d, st, err)
+            if self.sub == "zadjust":
+                self.draw_zadjust(d, st)
+            else:
+                self.draw_status(d, st, err)
         elif self.page == "files":
             if self.sub:
                 self.draw_file(d, st, self.sub)
@@ -445,7 +564,10 @@ class Screen:
             else:
                 self.draw_control(d, st)
         elif self.page == "machine":
-            self.draw_machine(d, st, err)
+            if self.sub == "cal":
+                self.draw_cal(d, st)
+            else:
+                self.draw_machine(d, st, err)
         self.draw_nav(d)
         if self.notice and time.time() < self.notice[2]:
             text, colour = self.notice[:2]
@@ -575,6 +697,11 @@ class Screen:
             self.text(d, (x, top + i * 15), line, "s", "muted")
         p = self.progress(st)
         self.text(d, (x, top + 34), "%d%%" % (p * 100), "xl", "text")
+        e, b = st.get("extruder", {}), st.get("heater_bed", {})
+        for i, (lb, h) in enumerate((("N", e), ("B", b))):
+            self.text(d, (W - 8, top + 40 + i * 17), "%s %d/%d" % (
+                lb, h.get("temperature") or 0, h.get("target") or 0), "s",
+                "muted", "ra")
         rem = self.remaining(st)
         info = ps.get("info") or {}
         sub = []
@@ -598,16 +725,56 @@ class Screen:
                     "Resume" if paused else "Pause",
                     ("gcode", "RESUME" if paused else "PAUSE", None),
                     "ok" if paused else "panel")
-        self.button(d, (12 + third, y0, 12 + 2 * third, y1), "Cancel",
+        self.button(d, (12 + third, y0, 12 + 2 * third, y1), "Z adjust",
+                    ("sub", "zadjust"))
+        # Cancel on the far side, away from Pause
+        self.button(d, (18 + 2 * third, y0, W - 6, y1), "Cancel",
                     ("confirm", "Cancel this print?",
                      ("gcode", "CANCEL_PRINT", "Print cancelled")), "accent")
-        e, b = st.get("extruder", {}), st.get("heater_bed", {})
-        self.text(d, (W - 10, (y0 + y1) // 2 - 8), "%d/%d" % (
-            e.get("temperature") or 0, e.get("target") or 0), "s", "muted",
-            "rm")
-        self.text(d, (W - 10, (y0 + y1) // 2 + 8), "%d/%d" % (
-            b.get("temperature") or 0, b.get("target") or 0), "s", "muted",
-            "rm")
+
+    def z_values(self, st):
+        """(live offset, START_PRINT z_offset, hot_z_comp, value to save)."""
+        sp = st.get("gcode_macro START_PRINT", {})
+        ho = st.get("gcode_move", {}).get("homing_origin") or [0, 0, 0]
+        live = float(ho[2] if len(ho) > 2 else 0.)
+        hot = float(sp.get("hot_z_comp") or 0.)
+        saved = float(sp.get("z_offset") or 0.)
+        return live, saved, hot, round(live + hot, 3)
+
+    def draw_zadjust(self, d, st):
+        """Babystep the nozzle while printing; Save keeps it for every
+        print (START_PRINT applies Z = -hot_z_comp + z_offset)."""
+        top = HEAD_H + 4
+        busy = self.printing(st)
+        # not while paused: RESUME restores the G-code state saved at the
+        # pause, offset included, so a step made then would be undone
+        stepping = self.state(st) == "printing"
+        live, saved, hot, new = self.z_values(st)
+        self.text(d, (8, top + 2), "Z offset now", "s", "muted")
+        self.text(d, (8, top + 16), "%+.3f mm" % live, "xl", "text")
+        self.text(d, (W - 8, top + 4), "saved offset %+.3f" % saved, "s",
+                  "ok" if abs(saved - new) < 5e-4 else "muted", "ra")
+        if hot:
+            self.text(d, (W - 8, top + 20), "hot comp %+.3f" % -hot, "s",
+                      "muted", "ra")
+        self.text(d, (W - 8, top + 36), "negative = closer", "s", "muted",
+                  "ra")
+        gap = 6
+        sw = (W - gap * 5) // 4
+        sy0, sy1 = top + 60, top + 104
+        for i, step in enumerate(Z_STEPS):
+            x0 = gap + i * (sw + gap)
+            self.button(d, (x0, sy0, x0 + sw, sy1), "%+.2f" % step,
+                        ("z_step", step), "panel", "l", enabled=stepping)
+        if not stepping:
+            self.text(d, (W // 2, sy1 + 12), "Paused: resume to adjust"
+                      if busy else "Only while printing", "s", "muted", "mm")
+        y0, y1 = H - NAV_H - 44, H - NAV_H - 6
+        self.button(d, (6, y0, 106, y1), "Back", ("sub", None))
+        self.button(d, (114, y0, W - 6, y1), "Save %+.3f" % new,
+                    ("confirm", "Save Z offset %+.3f for future prints?"
+                     % new, ("z_save",)), "ok",
+                    enabled=busy and abs(saved - new) >= 5e-4)
 
     def draw_files(self, d, st):
         files = self.files
@@ -746,13 +913,17 @@ class Screen:
         top = HEAD_H + 6
         ver = hs.read_text(os.path.join(OKL_DIR, "VERSION")) or "?"
         wh = st.get("webhooks", {})
-        rows = [("IP", self.ip), ("Firmware", "OpenKlipper " + ver),
-                ("Klipper", wh.get("state") or "?"),
-                ("Motors", "ready" if st.get("k2_motor_bus", {}).get(
-                    "motors_ready") else "not ready")]
-        for i, (k, v) in enumerate(rows):
-            self.text(d, (8, top + i * 18), k, "s", "muted")
-            self.text(d, (84, top + i * 18), v, "s", "text", width=W - 92)
+        # two short rows, two columns: room for three rows of buttons
+        rows = [((8, 74, 196), "IP", self.ip),
+                ((204, 256, W - 8), "Klipper", wh.get("state") or "?"),
+                ((8, 74, 196), "Firmware", ver),
+                ((204, 256, W - 8), "Motors",
+                 "ready" if st.get("k2_motor_bus", {}).get("motors_ready")
+                 else "not ready")]
+        for i, ((xl, xv, xe), k, v) in enumerate(rows):
+            y = top + (i // 2) * 18
+            self.text(d, (xl, y), k, "s", "muted")
+            self.text(d, (xv, y), v, "s", "text", width=xe - xv)
         bri = self.prefs.get("brightness", 100)
         slp = int(self.prefs.get("sleep_after",
                                  self.cfg.num("screen", "sleep_after")))
@@ -773,7 +944,78 @@ class Screen:
                   "off" if pa_auto_on(st) else "on")),
              "ok" if pa_auto_on(st) else "panel"),
         ]
-        self.grid(d, items, 3, 2, top + 78, H - NAV_H - 6)
+        gtop, bottom, gap = top + 40, H - NAV_H - 6, 6
+        rh = (bottom - gtop - 2 * gap) // 3
+        self.grid(d, items, 3, 2, gtop, gtop + 2 * rh + gap)
+        self.button(d, (gap, bottom - rh, W - gap, bottom), "Calibration",
+                    ("sub", "cal"))
+
+    def cal_rows(self, st):
+        """(label, value, colour) for the calibration card."""
+        cfg = self.settings or {}
+        ish = cfg.get("input_shaper") or {}
+        th = st.get("toolhead", {})
+        scv = th.get("square_corner_velocity") or 5.
+        rows, recs = [], []
+        for ax in "xy":
+            kind = ish.get("shaper_type_" + ax) or ish.get("shaper_type")
+            freq = ish.get("shaper_freq_" + ax)
+            if not self.settings:
+                rows.append(("Shaper " + ax.upper(), "reading...", "muted"))
+                continue
+            if not kind or not freq:
+                rows.append(("Shaper " + ax.upper(), "off", "warn"))
+                continue
+            rec = shaper_max_accel(kind, freq,
+                                   ish.get("damping_ratio_" + ax, 0.1), scv)
+            recs.append(rec)
+            rows.append(("Shaper " + ax.upper(), "%s %.1f Hz%s" % (
+                kind, float(freq),
+                "   max accel %d" % (rec // 100 * 100) if rec else ""),
+                "text"))
+        acc = th.get("max_accel")
+        if acc:
+            pr = cfg.get("printer") or {}
+            caps = ["%s cap %d" % (a.upper(), pr["max_%s_accel" % a])
+                    for a in "xy" if pr.get("max_%s_accel" % a)
+                    and pr["max_%s_accel" % a] < acc]
+            rows.append(("Accel", "%d%s" % (acc, ("   " + ", ".join(caps))
+                                           if caps else ""), "text"))
+        bm = st.get("bed_mesh", {})
+        rng = mesh_range(bm)
+        if rng is None:
+            rows.append(("Bed mesh", "none loaded", "muted"))
+        else:
+            rows.append(("Bed mesh", "%.3f mm  %s" % (
+                rng, bm.get("profile_name") or ""),
+                "warn" if rng > 0.3 else "text"))
+        if "z_tilt" in st:
+            zt = st["z_tilt"].get("applied")
+            rows.append(("Z tilt", "applied" if zt else "not applied",
+                         "ok" if zt else "muted"))
+        pa = st.get("extruder", {}).get("pressure_advance")
+        if pa is not None:
+            rows.append(("PA now", "%.4f" % pa, "text"))
+        last = st.get("gcode_macro _PA_STATIC_SAVE", {}).get("last") or {}
+        if last.get("slot"):
+            if last.get("saved"):
+                rows.append(("Last PA", "%s %.4f saved" % (
+                    last["slot"], last.get("pa") or 0), "ok"))
+            else:
+                rows.append(("Last PA", "%s not saved (%s)" % (
+                    last["slot"], last.get("reason") or "?"), "warn"))
+        return rows
+
+    def draw_cal(self, d, st):
+        top = HEAD_H + 4
+        rows = self.cal_rows(st)
+        rh = 17
+        for i, (k, v, colour) in enumerate(rows):
+            y = top + 2 + i * rh
+            self.text(d, (8, y), k, "s", "muted")
+            self.text(d, (84, y), v, "s", colour, width=W - 92)
+        y0, y1 = H - NAV_H - 40, H - NAV_H - 6
+        self.button(d, (W - 106, y0, W - 6, y1), "Back", ("sub", None))
 
     # --- filament (CFS slots / spool holder) -------------------------------
     def cfs_ok(self, st):
@@ -1103,6 +1345,11 @@ class Screen:
         return x, y
 
     def tap(self, x, y):
+        # Every release is queued and the loop plays them all back, so the
+        # second half of a quick double tap would land on the page the
+        # first one opened: ignore taps for a moment after a page change.
+        if time.time() < self.lock_until:
+            return
         x, y = self.map_touch(x, y)
         # Nearest button within a few pixels (fingers on a small panel)
         best = None
@@ -1122,6 +1369,9 @@ class Screen:
 
     def act(self, action):
         kind = action[0]
+        if kind in ("page", "sub", "file", "confirm", "confirm_yes",
+                    "confirm_no", "gcode_sub"):
+            self.lock_until = time.time() + TAP_LOCK
         if kind == "page":
             self.page, self.sub, self.confirm = action[1], None, None
             if action[1] == "files":
@@ -1184,16 +1434,40 @@ class Screen:
                 try:
                     Mr(self.cfg.get("screen", "moonraker")).start_print(path)
                     self.page, self.sub = "status", None
+                    self.lock_until = time.time() + TAP_LOCK
                     self.say("Print started", "ok")
                 except Exception as e:
                     self.say(str(e), "error", 8.)
             threading.Thread(target=go, daemon=True).start()
+        elif kind == "z_step":
+            self.run("SET_GCODE_OFFSET Z_ADJUST=%.3f MOVE=1" % action[1],
+                     timeout=30)
+        elif kind == "z_save":
+            self.z_save()
         elif kind == "stock":
             self.say("Switching to Creality's firmware...", "warn", 30.)
             subprocess.Popen(
                 ["sh", "-c", "sleep 1; sh %s/switch-to-stock.sh; "
                  "/etc/init.d/app restart" % OKL_DIR],
                 start_new_session=True)
+
+    def z_save(self):
+        """Keep the live Z offset for future prints. START_PRINT applies
+        Z = -hot_z_comp + z_offset, so z_offset = live + hot_z_comp. Read
+        fresh (a step just tapped may not be in the last poll); the value
+        also goes in the screen's settings file and Data.reapply() sends it
+        again whenever Klipper restarts."""
+        def go():
+            mr = Mr(self.cfg.get("screen", "moonraker"))
+            try:
+                live, _, hot, new = self.z_values(mr.query())
+                mr.run_gcode("SET_GCODE_VARIABLE MACRO=START_PRINT "
+                             "VARIABLE=z_offset VALUE=%.3f" % new, timeout=10)
+                self.save_pref("z_offset", new)
+                self.say("Z offset %+.3f saved for future prints" % new, "ok")
+            except Exception as e:
+                self.say(str(e).replace("\n", " "), "error", 8.)
+        threading.Thread(target=go, daemon=True).start()
 
     def save_pref(self, key, value):
         self.prefs[key] = value
