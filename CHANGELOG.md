@@ -9,6 +9,12 @@
   now use `_HEAT_FAST`, which carries on once the nozzle is within 3 C
   (`variable_margin`). `M109` stays for the Z tap temperature and the PA and
   flow calibrations, where a settled nozzle matters.
+- **Rear spool filament is gripped as soon as it is pushed in.** When the
+  toolhead switch sees filament with nothing running, the extruder turns 6 mm
+  (cold is fine: it stops well short of the melt zone), so you can let go
+  before `LOAD_FILAMENT`. `UNLOAD_FILAMENT` now switches the sensor back on
+  when it finishes so the next spool is seen. Set `variable_length: 0` on
+  `_FILAMENT_INSERTED` to turn it off.
 
 ## v0.4.25-alpha.1 (2026-11-09)
 
