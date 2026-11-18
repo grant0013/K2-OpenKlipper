@@ -12,6 +12,15 @@
 # touchscreen and the Mainsail CFS card. The pick is saved with CFS_SLOT_SET
 # (FLOW= or RETRACT=), so OrcaSlicer and the next print use it.
 #
+# [hark_calib] options (the defaults are the K2's):
+#   start_style: k2 | hi   hi = the Hi's one-line START_PRINT (TOOL=,
+#                          MATERIAL=, TOTAL_LAYER= so it KAMP-purges by the
+#                          test's objects and measures PA for the slot)
+#   fan: full | slot       slot = the slot's own max fan, as a print of that
+#                          filament gets it (PETG 80%), sent through the
+#                          printer's M106 like a slicer file
+#   printer_name: K2 OpenKlipper   (the test files' first line)
+#
 # Copyright (C) 2026 Grant Harkness (Hark Tech)
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
@@ -113,7 +122,19 @@ def square(g, x0, y0, size, w, walls, e, wall_v, fill_v, along_x):
     g.path(pts, e, fill_v)
 
 
-def start_lines(slot, temp, bed, header, objects):
+def fan_value(rec, fan='full'):
+    """M106 S value for the test layers: full, or the slot's max fan."""
+    if fan != 'slot':
+        return 255
+    try:
+        pct = float(rec.get('fan_max') or 100.)
+    except (TypeError, ValueError):
+        pct = 100.
+    return int(round(255. * max(0., min(100., pct)) / 100.))
+
+
+def start_lines(slot, temp, bed, header, objects, style='k2', material='',
+                layers=0):
     tool = 0 if slot == 'E' else SLOTS.index(slot)
     lines = list(header)
     for name, (x0, y0, x1, y1) in objects:
@@ -122,15 +143,23 @@ def start_lines(slot, temp, bed, header, objects):
             "POLYGON=[[%.1f,%.1f],[%.1f,%.1f],[%.1f,%.1f],[%.1f,%.1f]]"
             % (name, (x0 + x1) / 2, (y0 + y1) / 2, x0, y0, x1, y0, x1, y1,
                x0, y1))
-    lines += ["M106 S0",
-              "START_PRINT EXTRUDER_TEMP=%d BED_TEMP=%d TOOL=%d"
-              % (temp, bed, tool),
+    if style == 'hi':
+        # The Hi's one-line start: loads this tool's slot, measures its PA
+        # and purges next to the objects above (KAMP), as an Orca file does
+        start = ("START_PRINT EXTRUDER_TEMP=%d BED_TEMP=%d TOOL=%d "
+                 "MATERIAL=%s TOTAL_LAYER=%d VOLUMETRIC=12"
+                 % (temp, bed, tool, (material or 'PLA').upper(), layers))
+    else:
+        start = ("START_PRINT EXTRUDER_TEMP=%d BED_TEMP=%d TOOL=%d"
+                 % (temp, bed, tool))
+    lines += ["M106 S0", start,
               "T%d" % tool, "M83", "G90", "G1 Z0.6 F600",
               "M104 S%d" % temp, "G92 E0"]
     return lines
 
 
-def flow_pads(slot, rec, base, step):
+def flow_pads(slot, rec, base, step, style='k2', fan='full',
+              name='K2 OpenKlipper'):
     """Nine 30 mm pads, 3x3 at the bed centre, every layer above the first
     at that pad's flow ratio, labelled with it x100."""
     w, first_w, pad, pitch, layers, walls = 0.42, 0.5, 30., 40., 5, 2
@@ -144,15 +173,16 @@ def flow_pads(slot, rec, base, step):
     g = Path(rec.get('retract_length') or 1.0)
     g.out = start_lines(
         slot, temp, bed,
-        ["; K2 OpenKlipper flow-ratio pads: slot %s, %s"
-         % (slot, ", ".join("%.2f" % r for r in ratios))],
-        [(n, (x, y, x + pad, y + pad)) for n, (x, y) in zip(names, origins)])
+        ["; %s flow-ratio pads: slot %s, %s"
+         % (name, slot, ", ".join("%.2f" % r for r in ratios))],
+        [(n, (x, y, x + pad, y + pad)) for n, (x, y) in zip(names, origins)],
+        style, rec.get('type'), layers + 2)
     for layer in range(layers):
         g.z = H * (layer + 1)
         first, top = layer == 0, layer == layers - 1
         g.emit(";LAYER:%d" % layer)
         if layer == 1:
-            g.emit("M106 S255")
+            g.emit("M106 S%d" % fan_value(rec, fan))
         g.emit("SET_VELOCITY_LIMIT ACCEL=%d"
                % (2000 if first else 5000 if top else 10000))
         g.emit("G1 Z%.3f F600" % g.z)
@@ -177,7 +207,8 @@ def flow_pads(slot, rec, base, step):
     return g.out, ratios
 
 
-def retraction_test(slot, rec, start, step, count=7):
+def retraction_test(slot, rec, start, step, count=7, style='k2', fan='full',
+                    name='K2 OpenKlipper'):
     """Pairs of 5 mm pillars 20 mm apart, 12 mm tall. The travel between the
     two pillars of a pair (front to back) retracts by that pair's length, so
     the pair that strings least has the best retraction. Labelled x10.
@@ -200,18 +231,18 @@ def retraction_test(slot, rec, start, step, count=7):
         objects.append(("rt_%02d" % round(r * 10),
                         (x - 2, y_a - 9, x + size + 2, y_b + size)))
     g = Path(max(lengths) + 0.5, speed, hop=0)
+    layers = int(round(height / H))
     g.out = start_lines(
         slot, temp, bed,
-        ["; K2 OpenKlipper retraction test: slot %s, %s mm at %.0f mm/s"
-         % (slot, ", ".join("%.1f" % r for r in lengths), speed)],
-        objects)
-    layers = int(round(height / H))
+        ["; %s retraction test: slot %s, %s mm at %.0f mm/s"
+         % (name, slot, ", ".join("%.1f" % r for r in lengths), speed)],
+        objects, style, rec.get('type'), layers)
     for layer in range(layers):
         g.z = H * (layer + 1)
         first = layer == 0
         g.emit(";LAYER:%d" % layer)
         if layer == 1:
-            g.emit("M106 S255")
+            g.emit("M106 S%d" % fan_value(rec, fan))
         g.emit("SET_VELOCITY_LIMIT ACCEL=%d" % (2000 if first else 5000))
         g.emit("G1 Z%.3f F600" % g.z)
         v = 25 if first else 60
@@ -243,6 +274,11 @@ class HarkCalib:
         self.printer = config.get_printer()
         self.gcode = self.printer.lookup_object('gcode')
         self.pending = None
+        self.style = config.getchoice('start_style',
+                                      {'k2': 'k2', 'hi': 'hi'}, 'k2')
+        self.fan = config.getchoice('fan', {'full': 'full', 'slot': 'slot'},
+                                    'full')
+        self.name = config.get('printer_name', 'K2 OpenKlipper')
         for cmd, desc in (
                 ('CALIBRATE_FLOW', "Print flow-ratio pads for SLOT=, then "
                                    "pick the best"),
@@ -304,7 +340,8 @@ class HarkCalib:
         base = gcmd.get_float('BASE', rec.get('flow_ratio') or 0.95,
                               minval=0.5, maxval=1.5)
         step = gcmd.get_float('STEP', 0.02, minval=0.005, maxval=0.1)
-        lines, ratios = flow_pads(slot, rec, base, step)
+        lines, ratios = flow_pads(slot, rec, base, step, self.style,
+                                  self.fan, self.name)
         lines += ["END_PRINT", "CALIB_PICK KIND=flow SLOT=%s VALUES=%s"
                   % (slot, ",".join("%.3f" % r for r in ratios))]
         self._start(gcmd, "calib_flow_slot%s.gcode" % slot, lines)
@@ -316,7 +353,9 @@ class HarkCalib:
         step = gcmd.get_float('STEP', 0.2, minval=0.05, maxval=1.)
         start = gcmd.get_float('START', max(0.2, round(current - 3 * step, 2)),
                                minval=0., maxval=5.)
-        lines, lengths = retraction_test(slot, rec, start, step)
+        lines, lengths = retraction_test(slot, rec, start, step,
+                                         style=self.style, fan=self.fan,
+                                         name=self.name)
         lines += ["END_PRINT", "CALIB_PICK KIND=retraction SLOT=%s VALUES=%s"
                   % (slot, ",".join("%.2f" % r for r in lengths))]
         self._start(gcmd, "calib_retraction_slot%s.gcode" % slot, lines)

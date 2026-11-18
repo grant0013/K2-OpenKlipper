@@ -74,6 +74,8 @@ OBJECTS = {
     "gcode_macro _PA_STATIC_SAVE": ["last"],
     "gcode_macro _PA_AUTO": ["on_print_start"],
     "filament_switch_sensor filament_sensor": ["filament_detected"],
+    # a finished flow or retraction test waiting for its best result
+    "hark_calib": ["pending"],
 }
 
 CFS_SLOTS = "ABCD"
@@ -556,6 +558,8 @@ class Screen:
                 self.draw_profiles(d, st, slot, mtype, int(page))
             elif sub.startswith("colour:"):
                 self.draw_colours(d, st, sub[7:])
+            elif sub.startswith("calib:"):
+                self.draw_calib(d, st, sub[6:])
             else:
                 self.draw_filament(d, st)
         elif self.page == "control":
@@ -575,8 +579,11 @@ class Screen:
                         fill=self.col["panel"])
             self.text(d, (W // 2, H - NAV_H - 12), text, "s", colour, "mm",
                       W - 12)
+        pick = self.calib_pick(st)
         if self.confirm:
             self.draw_confirm(img)
+        elif pick:
+            self.draw_calib_pick(img, pick)
         return img
 
     def draw_header(self, d, st, err):
@@ -1183,7 +1190,6 @@ class Screen:
                                ("gcode", "CFS_UNLOAD_ACTIVE",
                                 "Slot %s unloaded" % slot)), "warn",
                     not busy)
-            measure = "PA_CAL_STATIC SLOT=%s SAVE=1" % slot
         else:
             load = ("Load", ("confirm",
                              "Load slot %s? Heats to %d C at the chute." % (
@@ -1191,18 +1197,11 @@ class Screen:
                              ("gcode", "CFS_LOAD_SLOT SLOT=%s" % slot,
                               "Slot %s loaded" % slot)), "accent",
                     not busy and bool(loaded))
-            measure = ("CFS_LOAD_SLOT SLOT=%s PA=0 COOL=0\n"
-                       "PA_CAL_STATIC SLOT=%s SAVE=1" % (slot, slot))
         edit_ok = not (busy and active)
         items = [
             load,
-            ("Measure PA", ("confirm",
-                            "Measure slot %s's pressure advance at the chute "
-                            "(about 3 min%s)?" % (
-                                slot, "" if active else ", loads it first"),
-                            ("gcode", measure,
-                             "Slot %s pressure advance measured" % slot)),
-             "panel", not busy and bool(loaded)),
+            ("Calibrate", ("sub", "calib:" + slot), "panel",
+             not busy and bool(loaded)),
             ("Filament", ("sub", "types:" + slot), "panel", edit_ok),
             ("Colour", ("sub", "colour:" + slot), "panel", edit_ok),
             ("Mark empty", ("confirm", "Mark slot %s as empty?" % slot,
@@ -1212,6 +1211,89 @@ class Screen:
             ("Back", ("sub", None)),
         ]
         self.grid(d, items, 3, 2, top + 66, H - NAV_H - 6)
+
+    def draw_calib(self, d, st, slot):
+        """Measure PA at the chute, or print the flow / retraction test."""
+        top = HEAD_H + 4
+        busy = self.printing(st)
+        c = st.get("k2_cfs", {})
+        rec = st.get("hark_cfs_slots", {}).get("slots", {}).get(slot, {})
+        active = (c.get("active_slot") or c.get("feed_slot")) == slot
+        loaded = bool(rec.get("loaded"))
+        self.text(d, (8, top + 2), "Slot %s: calibrate" % slot, "m", "text",
+                  width=W - 16)
+        bits = []
+        if rec.get("pressure_advance"):
+            bits.append("PA %.4f" % rec["pressure_advance"])
+        if rec.get("flow_ratio"):
+            bits.append("flow %.2f" % rec["flow_ratio"])
+        if rec.get("retract_length"):
+            bits.append("retract %.1f mm" % rec["retract_length"])
+        self.text(d, (8, top + 22), "  ".join(bits) or rec.get("name", ""),
+                  "s", "muted", width=W - 16)
+        if active:
+            measure = "PA_CAL_STATIC SLOT=%s SAVE=1" % slot
+        else:
+            measure = ("CFS_LOAD_SLOT SLOT=%s PA=0 COOL=0\n"
+                       "PA_CAL_STATIC SLOT=%s SAVE=1" % (slot, slot))
+        ok = not busy and loaded
+        items = [
+            ("Measure PA", ("confirm",
+                            "Measure slot %s's pressure advance at the chute "
+                            "(about 3 min%s)?" % (
+                                slot, "" if active else ", loads it first"),
+                            ("gcode", measure,
+                             "Slot %s pressure advance measured" % slot)),
+             "panel", ok),
+            ("Flow test", ("confirm",
+                           "Bed clear? Print 9 flow pads for slot %s "
+                           "(about 25 min), then pick the best." % slot,
+                           ("gcode", "CALIBRATE_FLOW SLOT=%s" % slot,
+                            "Flow pads printing")), "panel", ok),
+            ("Retraction", ("confirm",
+                            "Bed clear? Print the retraction test for slot "
+                            "%s (about 30 min), then pick the best." % slot,
+                            ("gcode", "CALIBRATE_RETRACTION SLOT=%s" % slot,
+                             "Retraction test printing")), "panel", ok),
+            ("Back", ("sub", "slot:" + slot)),
+        ]
+        self.grid(d, items, 2, 2, top + 44, H - NAV_H - 6)
+
+    def calib_pick(self, st):
+        """A finished flow or retraction test waiting for its best result."""
+        pick = (st.get("hark_calib") or {}).get("pending") or {}
+        return (pick if pick.get("values") and not self.printing(st)
+                else None)
+
+    def draw_calib_pick(self, img, pick):
+        """One button per tested value; the pick is saved to the slot."""
+        dim = Image.new("RGB", img.size, (0, 0, 0))
+        img.paste(Image.blend(img, dim, .55))
+        d = ImageDraw.Draw(img)
+        box = (6, 6, W - 6, H - 6)
+        d.rounded_rectangle(box, 10, fill=self.col["panel"],
+                            outline=self.col["accent"])
+        kind, slot = pick.get("kind"), pick.get("slot", "?")
+        flow = kind == "flow"
+        self.text(d, (W // 2, box[1] + 14), "%s, slot %s" % (
+            "Best flow pad" if flow else "Best retraction", slot), "m",
+            "text", "mm", W - 24)
+        self.text(d, (W // 2, box[1] + 34),
+                  "Lowest number with the top lines closed up" if flow
+                  else "Shortest with no strings between the pillars",
+                  "s", "muted", "mm", W - 24)
+        self.buttons = []
+        values = pick.get("values") or []
+        items = [(("%d" % round(v * 100)) if flow else ("%.1f" % v),
+                  ("gcode", "CALIB_SET KIND=%s SLOT=%s VALUE=%s"
+                   % (kind, slot, v), "Slot %s saved" % slot), "accent")
+                 for v in values[:9]]
+        items += [None] * (9 - len(items))
+        bottom = box[3] - 44
+        self.grid(d, items, 3, 3, box[1] + 48, bottom, gap=8)
+        self.button(d, (box[0] + 8, bottom + 4, box[2] - 8, box[3] - 6),
+                    "Keep the old value", ("gcode", "CALIB_SKIP",
+                                           "Kept the old value"))
 
     def draw_types(self, d, slot):
         top = HEAD_H + 4

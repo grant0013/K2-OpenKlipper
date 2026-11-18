@@ -81,7 +81,8 @@ def slot_record(slot):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--slot', default='C')
+    ap.add_argument('--slot', help='CFS slot A-D (K2 default C; Hi: the'
+                    ' slot START_PRINT loads, default its T0)')
     ap.add_argument('--start', type=float)
     ap.add_argument('--step', type=float, default=0.006)
     ap.add_argument('--count', type=int, default=11)
@@ -98,7 +99,7 @@ def main():
     ap.add_argument('-o')
     a = ap.parse_args()
     hi = a.printer == 'hi'
-    slot = a.slot.upper()
+    slot = (a.slot or 'C').upper()
     rec = {} if hi else slot_record(slot)
     temp = a.temp or rec.get('nozzle_temp') or 220
     bed = a.bed or rec.get('bed_temp') or 55
@@ -130,8 +131,9 @@ def main():
         # and primes (KAMP purge by the pattern). The measured-PA hold is
         # then released so every chevron prints at its own value.
         g.emit("START_PRINT EXTRUDER_TEMP=%d BED_TEMP=%d MATERIAL=%s "
-               "TOTAL_LAYER=%d VOLUMETRIC=12"
-               % (temp, bed, a.material.upper(), LAYERS))
+               "TOTAL_LAYER=%d VOLUMETRIC=12%s"
+               % (temp, bed, a.material.upper(), LAYERS,
+                  " TOOL=%d" % SLOTS.index(slot) if a.slot else ""))
         g.emit("PA_HOLD_MEASURED")
         g.emit("M83\nG90\nG1 Z0.6 F600\nM104 S%d\nG92 E0" % temp)
     else:
