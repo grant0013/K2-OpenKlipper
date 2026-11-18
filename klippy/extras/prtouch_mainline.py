@@ -194,6 +194,12 @@ class PRTouchMainlineProbe:
         self.home_allowed_noisy = config.getint(
             "home_allowed_noisy", 0, minval=0, maxval=10
         )
+        # Follow-up home taps start this far above the contact already
+        # measured instead of back at home_start_z (0 = from home_start_z):
+        # a 3-tap home then costs ~1.5 s per extra tap, not ~5 s.
+        self.home_followup_start = config.getfloat(
+            "home_followup_start", 0., minval=0., maxval=5.
+        )
         self.probe_tap_samples = config.getint(
             "probe_tap_samples", 1, minval=1, maxval=9
         )
@@ -443,9 +449,15 @@ class PRTouchMainlineProbe:
         def tap(trigger_zs):
             # Every tap starts from the same temporary absolute coordinate.
             # This prevents a retry or false trigger from walking the bed
-            # downward one retract distance at a time.
+            # downward one retract distance at a time. With
+            # home_followup_start the follow-ups start that far above the
+            # median contact so far (still an absolute coordinate).
+            tap_start = start_z
+            if trigger_zs and self.home_followup_start > 0.:
+                tap_start = min(start_z, statistics.median(trigger_zs)
+                                + self.home_followup_start)
             current = toolhead.get_position()
-            current[2] = start_z
+            current[2] = tap_start
             toolhead.manual_move(current, lift_speed)
             toolhead.wait_moves()
             if self.home_settle_time:
@@ -459,7 +471,7 @@ class PRTouchMainlineProbe:
                 target_z = max(target_z, self.probe_minimum_z)
                 movepos = toolhead.get_position()
                 movepos[2] = target_z
-                trigger_z = self.probing_move(movepos, speed, start_z, gcmd)
+                trigger_z = self.probing_move(movepos, speed, tap_start, gcmd)
             except self.printer.command_error:
                 # Return all the way to the fixed start coordinate before
                 # propagating any hardware-endstop failure.
@@ -488,7 +500,7 @@ class PRTouchMainlineProbe:
             # Unload the strain gauge immediately after every successful tap,
             # including the final one.
             current = toolhead.get_position()
-            current[2] = start_z
+            current[2] = tap_start
             toolhead.manual_move(current, lift_speed)
             toolhead.wait_moves()
             return trigger_z
@@ -507,6 +519,12 @@ class PRTouchMainlineProbe:
         spread = tap_select.sample_range(best)
 
         current = toolhead.get_position()
+        if current[2] != start_z:
+            # A follow-up tap ended nearer the bed: back to start_z first
+            current[2] = start_z
+            toolhead.manual_move(current, lift_speed)
+            toolhead.wait_moves()
+            current = toolhead.get_position()
         # We are retracted at start_z. Preserve that physical clearance while
         # defining the median nozzle/bed contact plane as logical Z=0.
         current[2] -= median_z
