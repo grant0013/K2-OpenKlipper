@@ -206,6 +206,12 @@ class ControlPID:
                 kp_high / PID_PARAM_BASE,
                 config.getfloat('pid_Ki_high_temp') / PID_PARAM_BASE,
                 config.getfloat('pid_Kd_high_temp') / PID_PARAM_BASE)
+        # K2 OpenKlipper: pid_integral_band (C), off unless set. With it,
+        # the integral does not build while the temperature is more than
+        # that many degrees from the target and still closing on it. A
+        # heat-up then cannot wind it up on the way in, which feeds the
+        # hotend's ~5 C overshoot. Stock behaviour when unset.
+        self.integral_band = config.getfloat('pid_integral_band', None)
         self.min_deriv_time = heater.get_smooth_time()
         self.temp_integ_max = 0.
         if self.Ki:
@@ -225,7 +231,16 @@ class ControlPID:
                           + temp_diff) / self.min_deriv_time
         # Calculate accumulated temperature "error"
         temp_err = target_temp - temp
-        temp_integ = self.prev_temp_integ + temp_err * time_diff
+        if (self.integral_band is not None
+                and abs(temp_err) > self.integral_band
+                and temp_deriv * (1. if temp_err > 0. else -1.)
+                    > PID_SETTLE_SLOPE):
+            # Outside the band and still closing on the target: hold the
+            # integral. If it stalls short (fresh boot, integral at 0,
+            # proportional alone not enough) it integrates as stock does.
+            temp_integ = self.prev_temp_integ
+        else:
+            temp_integ = self.prev_temp_integ + temp_err * time_diff
         temp_integ = max(0., min(self.temp_integ_max, temp_integ))
         # Calculate output
         kp, ki, kd = self.Kp, self.Ki, self.Kd

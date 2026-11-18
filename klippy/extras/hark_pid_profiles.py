@@ -27,8 +27,11 @@ class _PIDConfig:
     # Klipper down at a print start through CFS_SLOT_APPLY)
     _MISSING = object()
 
-    def __init__(self, kp, ki, kd):
+    def __init__(self, kp, ki, kd, integral_band=None):
         self.values = {'pid_Kp': kp, 'pid_Ki': ki, 'pid_Kd': kd}
+        # The heater's own pid_integral_band carries over to every profile
+        if integral_band is not None:
+            self.values['pid_integral_band'] = integral_band
 
     def getfloat(self, option, default=_MISSING, *args, **kwargs):
         if option in self.values:
@@ -47,8 +50,11 @@ class HarkPIDProfiles:
         self.path = config.get(
             'path', os.path.join(config_dir, 'hark_pid_profiles.json'))
         self.defaults = {}
+        self.bands = {}
         for name in config.getlist('heaters', ('extruder',)):
             section = config.getsection(name)
+            self.bands[name] = section.getfloat('pid_integral_band', None,
+                                                note_valid=False)
             self.defaults[name] = {
                 'kp': section.getfloat('pid_Kp', note_valid=False),
                 'ki': section.getfloat('pid_Ki', note_valid=False),
@@ -103,7 +109,8 @@ class HarkPIDProfiles:
         heater = self.printer.lookup_object('heaters').lookup_heater(
             heater_name)
         new = heaters.ControlPID(
-            heater, _PIDConfig(values['kp'], values['ki'], values['kd']))
+            heater, _PIDConfig(values['kp'], values['ki'], values['kd'],
+                               self.bands.get(heater_name)))
         # Swap under the heater lock without heater.set_control(), which
         # zeroes the target. Carry the loop state across so the switch is
         # bumpless: same temperature history, and an integral rescaled so

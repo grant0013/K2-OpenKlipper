@@ -15,6 +15,16 @@
   before `LOAD_FILAMENT`. `UNLOAD_FILAMENT` now switches the sensor back on
   when it finishes so the next spool is seen. Set `variable_length: 0` on
   `_FILAMENT_INSERTED` to turn it off.
+- **Less hotend overshoot on heat-up.** New `pid_integral_band` option on a
+  PID heater: the integral only builds within that many degrees of the
+  target while the temperature is still closing on it, so it no longer winds
+  up on the way in. On the K2 hotend (`pid_integral_band: 5`) a 135 to 270 C
+  heat peaked at 272 C instead of 277 C and held within 1 C a couple of
+  seconds sooner; `_HEAT_FAST` releases about 6 s later as it creeps up the
+  last few degrees. If the heater stalls short of the target it integrates
+  as stock, so a cold boot still gets there. Unset, nothing changes (the bed
+  and the K2 Plus hotend leave it off). `PID_PROFILE` profiles keep the
+  heater's band.
 
 ## v0.4.25-alpha.1 (2026-11-09)
 
