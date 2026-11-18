@@ -25,6 +25,24 @@
   as stock, so a cold boot still gets there. Unset, nothing changes (the bed
   and the K2 Plus hotend leave it off). `PID_PROFILE` profiles keep the
   heater's band.
+- **The loaded filament's own settings now win over the slicer's.** The
+  slot's filament record (`CFS_SLOTS`, the touchscreen filament page,
+  `CFS_SLOT_SET SLOT= BED= NOZZLE= NOZZLE_FIRST= FAN_MAX=`) sets the bed and
+  nozzle temperatures and caps the part fan, whatever the file was sliced
+  with. `START_PRINT` reports both values ("bed 105C (file 90)"). During the
+  print the file's `M140`/`M190` and `M104`/`M109` get the record's values
+  and its part fan stops at `fan_max`; heater-off, standby and Z-tap
+  temperatures pass through. After a mid-print tool change the nozzle is
+  left to the file, since each filament's heat is then the slicer's. A 0 in
+  the record keeps the file's value. The brim, walls and infill are in the
+  sliced shape and still come from the slicer.
+  `_FILAMENT_PROFILE variable_enabled: 0` prints every file exactly as sliced.
+- **Chamber warm-up for warping materials (K2).** For ASA, ABS and PC
+  (`_FILAMENT_PROFILE variable_chamber_soak`, exact type match), `START_PRINT`
+  waits before the Z tap, with the bed hot and every fan off, until the
+  chamber reaches 50 C or `soak_max` (15 min) runs out, and reports what it
+  reached. The K2 has no chamber heater, so keep the lid shut. Off on the
+  K2 Plus, which heats its chamber itself.
 
 ## v0.4.25-alpha.1 (2026-11-09)
 
