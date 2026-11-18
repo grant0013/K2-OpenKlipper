@@ -33,6 +33,7 @@ class ProbeTest(unittest.TestCase):
 
     def test_z_tilt_travel(self):
         self.assertIn("horizontal_move_z: 3", section("z_tilt"))
+        self.assertIn("retry_tolerance: 0.03", section("z_tilt"))
 
 
 class StartPrintTest(unittest.TestCase):
