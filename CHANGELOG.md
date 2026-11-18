@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- **Loads, unloads, nozzle cleaning and print start no longer pause at
+  temperature.** `M109` waits for the hotend PID to settle within 1 C after
+  its ~5 C overshoot, which held the nozzle at temperature for 25-36 s before
+  anything moved (an ASA load reached 270 C, then waited 36 s). These macros
+  now use `_HEAT_FAST`, which carries on once the nozzle is within 3 C
+  (`variable_margin`). `M109` stays for the Z tap temperature and the PA and
+  flow calibrations, where a settled nozzle matters.
+
 ## v0.4.25-alpha.1 (2026-11-09)
 
 Fixes from a code review of v0.4.24-alpha.1. RELEASE-NOTES-v0.4.25-alpha.1.md
