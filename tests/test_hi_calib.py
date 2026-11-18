@@ -36,6 +36,35 @@ class HiConfigTest(unittest.TestCase):
         self.assertIn("printer_name: Hi OpenKlipper", calib)
 
 
+class CrealitySweepTest(unittest.TestCase):
+    """HI_PA_CAL feeds from the CFS slot, as our PA test does (18 Nov 2026:
+    from an idle box the strand left the nozzle sensor 30 s in)."""
+
+    def test_feeds_from_the_slot_around_the_sweep(self):
+        cal = section("gcode_macro HI_PA_CAL")
+        arm = cal.index("CFS_FEED_START SLOT={slot} CONFIRM=1")
+        self.assertLess(arm, cal.index("HI_PURGE HEATER_OFF=0"))
+        self.assertLess(arm, cal.index("PA_LOG_START"))
+        stop = cal.index("CFS_FEED_STOP")
+        self.assertLess(cal.index("PA_LOG_STOP"), stop)
+        self.assertLess(stop, cal.index("_HI_PA_CAL_RESULT"))
+        self.assertIn("CFS_PRELOAD ENABLE=1", cal[stop:])
+
+    def test_needs_filament_and_takes_the_slots_values(self):
+        cal = section("gcode_macro HI_PA_CAL")
+        self.assertIn("HI_PA_CAL needs filament loaded", cal)
+        self.assertIn("rec.nozzle_temp or 220", cal)
+        self.assertIn('"PETG" if rtype[:4] == "PETG"', cal)
+
+    def test_a_strand_lost_mid_sweep_throws_the_result_away(self):
+        res = section("gcode_macro _HI_PA_CAL_RESULT")
+        self.assertLess(res.index("filament_detected"),
+                        res.index("HI_PA_COMPUTE"))
+        self.assertIn("result thrown away", res)
+        self.assertNotIn("HI_PA_COMPUTE",
+                         section("gcode_macro HI_PA_CAL"))
+
+
 class FakeConfig:
     def __init__(self, values):
         self.values = values
