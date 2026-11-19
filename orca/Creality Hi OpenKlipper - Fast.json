@@ -1,0 +1,50 @@
+{
+    "type": "machine",
+    "from": "User",
+    "inherits": "Creality Hi 0.4 nozzle",
+    "name": "Creality Hi OpenKlipper - Fast",
+    "printer_settings_id": "Creality Hi OpenKlipper - Fast",
+    "version": "2.3.2.88",
+    "machine_start_gcode": "M140 S0\nM104 S0\n; Everything else is in the printer's START_PRINT macro (OpenKlipper)\nSTART_PRINT EXTRUDER_TEMP=[nozzle_temperature_initial_layer] BED_TEMP=[bed_temperature_initial_layer_single] MATERIAL={filament_type[initial_extruder]} TOTAL_LAYER=[total_layer_count] VOLUMETRIC={filament_max_volumetric_speed[initial_extruder]} TOOL=[initial_no_support_extruder] TOWER_X={wipe_tower_x[0]} TOWER_Y={wipe_tower_y[0]} TOWER_W={if enable_prime_tower}[prime_tower_width]{else}0{endif}",
+    "machine_end_gcode": "END_PRINT",
+    "layer_change_gcode": ";AFTER_LAYER_CHANGE\n;[layer_z]\nSET_PRINT_STATS_INFO CURRENT_LAYER={layer_num + 1}",
+    "time_lapse_gcode": "",
+    "change_filament_gcode": "",
+    "host_type": "moonraker",
+    "printer_agent": "moonraker",
+    "print_host": "192.168.3.77:7126",
+    "print_host_webui": "http://192.168.3.77/",
+    "emit_machine_limits_to_gcode": "0",
+    "machine_max_speed_x": [
+        "300",
+        "300"
+    ],
+    "machine_max_speed_y": [
+        "300",
+        "300"
+    ],
+    "machine_max_acceleration_x": [
+        "12000",
+        "12000"
+    ],
+    "machine_max_acceleration_y": [
+        "12000",
+        "12000"
+    ],
+    "machine_max_acceleration_extruding": [
+        "12000",
+        "12000"
+    ],
+    "machine_max_acceleration_travel": [
+        "12000",
+        "12000"
+    ],
+    "machine_max_jerk_x": [
+        "12",
+        "12"
+    ],
+    "machine_max_jerk_y": [
+        "12",
+        "12"
+    ]
+}

@@ -1,0 +1,27 @@
+{
+    "type": "filament",
+    "from": "User",
+    "inherits": "CR-PLA @Hi-all",
+    "name": "PLA Fast @Creality Hi OpenKlipper",
+    "filament_settings_id": [
+        "PLA Fast @Creality Hi OpenKlipper"
+    ],
+    "version": "2.3.2.88",
+    "compatible_printers": [
+        "Creality Hi OpenKlipper - Fast",
+        "Creality Hi OpenKlipper",
+        "Creality Hi OpenKlipper - Creality accel"
+    ],
+    "filament_max_volumetric_speed": [
+        "21"
+    ],
+    "slow_down_layer_time": [
+        "6"
+    ],
+    "nozzle_temperature": [
+        "225"
+    ],
+    "nozzle_temperature_initial_layer": [
+        "225"
+    ]
+}
