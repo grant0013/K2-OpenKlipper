@@ -5,7 +5,7 @@
     "name": "Creality Hi OpenKlipper",
     "printer_settings_id": "Creality Hi OpenKlipper",
     "version": "2.3.2.88",
-    "machine_start_gcode": "M140 S0\nM104 S0\n; Everything else is in the printer's START_PRINT macro (OpenKlipper)\nSTART_PRINT EXTRUDER_TEMP=[nozzle_temperature_initial_layer] BED_TEMP=[bed_temperature_initial_layer_single] MATERIAL={filament_type[initial_extruder]} TOTAL_LAYER=[total_layer_count] VOLUMETRIC={filament_max_volumetric_speed[initial_extruder]} TOOL=[initial_no_support_extruder]",
+    "machine_start_gcode": "M140 S0\nM104 S0\n; Everything else is in the printer's START_PRINT macro (OpenKlipper)\nSTART_PRINT EXTRUDER_TEMP=[nozzle_temperature_initial_layer] BED_TEMP=[bed_temperature_initial_layer_single] MATERIAL={filament_type[initial_extruder]} TOTAL_LAYER=[total_layer_count] VOLUMETRIC={filament_max_volumetric_speed[initial_extruder]} TOOL=[initial_no_support_extruder] TOWER_X={wipe_tower_x[0]} TOWER_Y={wipe_tower_y[0]} TOWER_W={if enable_prime_tower}[prime_tower_width]{else}0{endif}",
     "machine_end_gcode": "END_PRINT",
     "layer_change_gcode": ";AFTER_LAYER_CHANGE\n;[layer_z]\nSET_PRINT_STATS_INFO CURRENT_LAYER={layer_num + 1}",
     "time_lapse_gcode": "",
