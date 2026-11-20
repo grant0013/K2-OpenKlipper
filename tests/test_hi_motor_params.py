@@ -315,3 +315,85 @@ class WakeWriteTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SubConfig:
+    """[k2_motor_bus] plus the [stepper_*] sections it looks at."""
+
+    def __init__(self, steppers):
+        self.steppers = steppers
+
+    def has_section(self, name):
+        return name in self.steppers
+
+    def getsection(self, name):
+        micro = self.steppers[name]
+
+        class Sec:
+            def getint(self, option, default=None, note_valid=True):
+                assert option == 'microsteps'
+                return micro if micro is not None else default
+        return Sec()
+
+    def error(self, msg):
+        return ValueError(msg)
+
+
+class SubdivisionTest(unittest.TestCase):
+    """0xc8 must equal the stepper's microsteps, or the axis moves 2x/0.5x
+    the commanded distance: the wake marks that motor not ready."""
+
+    def bus(self, writes=None):
+        b = make_bus({'x': FakeMotor(HI_X), 'y': FakeMotor(HI_Y)}, writes)
+        return b
+
+    def test_expected_from_stepper_sections(self):
+        b = self.bus()
+        exp = b._parse_subdivision(SubConfig({'stepper_x': 16,
+                                              'stepper_y': 32}))
+        self.assertEqual(exp, {'x': 16, 'y': 32})
+
+    def test_missing_stepper_section_is_not_checked(self):
+        b = self.bus()
+        self.assertEqual(b._parse_subdivision(SubConfig({'stepper_x': 16})),
+                         {'x': 16})
+
+    def test_write_that_disagrees_with_microsteps_refused_at_load(self):
+        b = self.bus({'y': [(0xc8, 16)]})
+        with self.assertRaises(ValueError):
+            b._parse_subdivision(SubConfig({'stepper_x': 16,
+                                            'stepper_y': 32}))
+
+    def test_match_is_ready(self):
+        b = self.bus()
+        b.expected_subdivision = {'y': 16}
+        self.assertTrue(b._check_subdivision('y', {0xc8: 16}))
+        self.assertEqual(b.param_warnings, [])
+
+    def test_mismatch_not_ready_and_says_why(self):
+        b = self.bus()
+        b.expected_subdivision = {'y': 32}
+        self.assertFalse(b._check_subdivision('y', {0xc8: 16}))
+        self.assertIn("NOT ready", b.param_warnings[0])
+        self.assertIn("2x", b.param_warnings[0])
+
+    def test_no_reading_not_ready(self):
+        b = self.bus()
+        b.expected_subdivision = {'y': 32}
+        self.assertFalse(b._check_subdivision('y', {0xc8: None}))
+        self.assertFalse(b._check_subdivision('y', {}))
+
+    def test_written_value_is_checked_after_write(self):
+        b = self.bus({'y': [(0xc8, 32)]})
+        b.expected_subdivision = {'x': 16, 'y': 32}
+        values = b._configure_motor('y', 0x82)
+        self.assertEqual(values[0xc8], 32)
+        self.assertTrue(b._check_subdivision('y', values))
+
+    def test_dropped_write_fails_the_check(self):
+        b = make_bus({'x': FakeMotor(HI_X),
+                      'y': FakeMotor(HI_Y, ignore=(0xc8,))},
+                     {'y': [(0xc8, 32)]})
+        b.expected_subdivision = {'y': 32}
+        values = b._configure_motor('y', 0x82)
+        self.assertFalse(b._check_subdivision('y', values))

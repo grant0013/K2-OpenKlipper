@@ -112,6 +112,15 @@
 #                              (FAL), and any ID outside the 52 stock
 #                              motor_init sets. Opcode 07 (flash) is never
 #                              sent.
+#   Subdivision check (always): every wake reads 0xc8 (step subdivision)
+#                              from each bus motor that has a
+#                              [stepper_<name>] and compares it with that
+#                              stepper's microsteps. A mismatch (or no
+#                              reading) fails that motor's wake, so
+#                              motors_ready stays False and G28 refuses:
+#                              otherwise the axis moves 2x or 0.5x the
+#                              commanded distance (a motor that lost a RAM
+#                              0xc8 write at power-off comes back at 16).
 #
 # Gcode:
 #   MOTOR_STALL_MODE DATA=<1|2>     - sent to both 0x81 and 0x82
@@ -186,6 +195,8 @@ CFS_QUIET_TIME = 5.
 # Calibration parameters read before and after MOTOR_CALIBRATE: electrical
 # offset, phase order, offset error
 CALIBRATION_READ_IDS = (0x09, 0x0a, 0x19)
+# step_controller_param_subdivision: steps per full step the motor expects
+SUBDIVISION_ID = 0xc8
 # MOTOR_CALIBRATE CONFIRM=1 must follow the first call within this time
 CALIBRATION_CONFIRM_WINDOW = 300.
 TEMP_HYSTERESIS = 5.
@@ -273,6 +284,8 @@ class K2MotorBus:
         self._closed = False
         # {motor: [(param id, value)]} written at wake when they differ
         self.param_writes = self._parse_param_writes(config)
+        # {motor: Klipper microsteps}: the motor's 0xc8 must match
+        self.expected_subdivision = self._parse_subdivision(config)
         # {motor: {'0x56': {...}}} from the last wake, for get_status
         self.param_results = {}
         self.param_warnings = []
@@ -373,6 +386,44 @@ class K2MotorBus:
             if items:
                 writes[name] = items
         return writes
+
+    def _parse_subdivision(self, config):
+        expected = {}
+        for name, addr in self.bus_motors:
+            section = 'stepper_' + name
+            if not config.has_section(section):
+                continue
+            micro = config.getsection(section).getint('microsteps', None,
+                                                      note_valid=False)
+            if micro is None:
+                continue
+            for pid, value in self.param_writes.get(name, ()):
+                if pid == SUBDIVISION_ID and int(value) != micro:
+                    raise config.error(
+                        "[k2_motor_bus] write_params_%s 0x%02x=%d does not "
+                        "match [%s] microsteps: %d" % (
+                            name, pid, int(value), section, micro))
+            expected[name] = micro
+        return expected
+
+    def _check_subdivision(self, name, values):
+        """True when motor name's 0xc8 matches its stepper microsteps (or
+        there is nothing to compare with)."""
+        micro = self.expected_subdivision.get(name)
+        if micro is None:
+            return True
+        got = values.get(SUBDIVISION_ID)
+        if got is not None and int(got) == micro:
+            return True
+        msg = ("motor %s step subdivision (0xc8) reads %s but [stepper_%s] "
+               "microsteps is %d: motor NOT ready (it would move %s the "
+               "commanded distance)" % (
+                   name.upper(), proto.format_param(SUBDIVISION_ID, got),
+                   name, micro,
+                   "the wrong" if got is None or not got
+                   else "%gx" % (float(micro) / float(got))))
+        self._param_warn(msg)
+        return False
 
     @staticmethod
     def _crc8(data):
@@ -820,7 +871,9 @@ class K2MotorBus:
                 before = None
             for name, addr in self.bus_motors:
                 if self.motors[name]:
-                    self._configure_motor(name, addr)
+                    values = self._configure_motor(name, addr)
+                    if not self._check_subdivision(name, values):
+                        self.motors[name] = False
             if self.e_send is not None:
                 ebus = lambda addr, payload: self.e_xfer(addr, payload)[1]
                 for addr in self.extruder_addrs:
