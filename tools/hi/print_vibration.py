@@ -2,6 +2,7 @@
 """Vibration during a print, by speed: find the speeds that shake the Hi.
 
   print_vibration.py log    [--socket SOCK] [--chips y] [--out FILE.csv]
+                            [--any-state]  (bench tests: log when not printing)
   print_vibration.py report FILE.csv [--png FILE.png]
 
 log: connects to Klipper's API socket and streams two things at once: the
@@ -230,7 +231,8 @@ def cmd_log(args):
                 t0, t1 = next_t, next_t + args.window
                 next_t = t1
                 mot = window_motion(moves, t0, t1)
-                if mot is None or state != "printing":
+                if mot is None or (state != "printing"
+                                   and not args.any_state):
                     continue
                 row = [round(t0, 3), layer, round(mot[0], 2)] + \
                     [round(v, 2) for v in mot[1]] + [round(mot[2], 2)]
@@ -394,6 +396,8 @@ def main():
     lg.add_argument("--chips", default="y")
     lg.add_argument("--i-know-x-is-heavy", action="store_true")
     lg.add_argument("--window", type=float, default=.25)
+    lg.add_argument("--any-state", action="store_true",
+                    help="log moves outside a print too (bench sweeps)")
     lg.add_argument("--until-done", action="store_true",
                     help="stop when the print running now ends")
     lg.add_argument("--out", default="print_vibration_%s.csv"
