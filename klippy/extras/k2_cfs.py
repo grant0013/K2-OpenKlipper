@@ -118,7 +118,8 @@ STATUS_INFO = {
            "from the hub into the buffer (Creality key846)."),
     0x52: (None, 'BUFFER_REFILL_NO_MOTION',
            "The hub tried to refill the buffer, but the filament moved "
-           "less than 5 mm. Check for a jam or tangle (Creality key847)."),
+           "less than 5 mm. Check for a jam, a tangle or a spool that drags "
+           "(cardboard spools rub in the CFS) (Creality key847)."),
 }
 STATUS_BOX_SLOW = 0x51
 STATUS_BOX_TANGLE = 0x52
@@ -131,8 +132,10 @@ BOX_ALARMS = {
         "check that the spool turns freely and the PTFE from the CFS to the"
         " toolhead is not pinched or kinked"),
     STATUS_BOX_TANGLE: (
-        847, "the filament looks tangled on the spool",
-        "untangle the spool so it unwinds freely"),
+        847, "the filament is not pulling off the spool (tangled, or the"
+        " spool drags: cardboard spools rub in the CFS)",
+        "untangle it, or fit a spool adapter ring to a cardboard spool (or"
+        " print it from the spool holder) so it unwinds freely"),
 }
 # Cross-section of 1.75 mm filament (mm^2), when the extruder has none
 FILAMENT_AREA = math.pi * .875 ** 2
