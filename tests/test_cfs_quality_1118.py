@@ -554,6 +554,14 @@ class BoxAlarmTest(unittest.TestCase):
                 cfs._check_box_alarm({'status': 0x52})
             self.assertEqual(pr.paused, 0)
 
+    def test_no_armed_slot_does_nothing(self):
+        # A stale alarm while START_PRINT swaps slots (feed disarmed)
+        cfs, pr = self.cfs()
+        cfs.status['feed_slot'] = None
+        for unused in range(3):
+            cfs._check_box_alarm({'status': 0x52})
+        self.assertEqual(pr.paused, 0)
+
     def test_k2_default_is_off(self):
         self.assertFalse(cfs_mod.K2CFS.box_alarm_pause)
 

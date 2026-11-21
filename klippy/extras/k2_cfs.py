@@ -1129,9 +1129,14 @@ class K2CFS:
         # 0x52 the filament is tangled (key847). The stock wrapper pauses
         # the print on both; one reply could be a moment's slip, so act on
         # the same alarm box_alarm_polls polls running.
+        # Only while the feed is armed for a slot: the box keeps reporting
+        # an old alarm after a cancel, and START_PRINT's own unload/load
+        # then paused the next job before layer 1 (8 alarms with no slot,
+        # 0544, 21 Nov 2026).
         code = m.get('status') if isinstance(m, dict) else None
         if (not self.box_alarm_pause or code not in BOX_ALARMS
-                or not self._printing()):
+                or not self._printing()
+                or not self.status.get('feed_slot')):
             self.box_alarm_seen = None
             return
         seen = self.box_alarm_seen
