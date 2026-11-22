@@ -1,5 +1,5 @@
 """Fixes from issue #4: a mesh retry at probing temperature, go2rtc's web UI
-behind nginx, the touchscreen's light icon and the Moonraker webcam patch."""
+behind nginx and the Moonraker webcam patch."""
 import importlib.util
 import pathlib
 import re
@@ -9,11 +9,6 @@ import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).parents[1]
-spec = importlib.util.spec_from_file_location(
-    "harkscreen", ROOT / "harkscreen" / "harkscreen.py")
-hs = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(hs)
-
 WEBCAM = '''class WebCam:
     def as_dict(self):
         return {k: v for k, v in self.__dict__.items() if k[0] != "_"}
@@ -74,18 +69,6 @@ class CamRoute(unittest.TestCase):
         for bad in ("/cam", "/cam/", "/cam/editor.html", "/cam/api/config",
                     "/cam/api/streams", "/cam/api/exit", "/cam/api/log"):
             self.assertIsNone(re.match(routes[0], bad), bad)
-
-
-class LightIcon(unittest.TestCase):
-    def test_on_and_off_differ(self):
-        screen = hs.Screen.__new__(hs.Screen)
-        shots = []
-        for name in ("light", "light_on"):
-            im = hs.Image.new("RGB", (80, 80))
-            screen.icon(hs.ImageDraw.Draw(im), name, 40, 40, 34,
-                        (255, 255, 255))
-            shots.append(im.tobytes())
-        self.assertNotEqual(shots[0], shots[1])
 
 
 class WebcamPatch(unittest.TestCase):

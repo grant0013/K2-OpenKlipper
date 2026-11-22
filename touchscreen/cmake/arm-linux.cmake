@@ -1,0 +1,6 @@
+set(CMAKE_SYSTEM_NAME Linux)
+set(CMAKE_SYSTEM_PROCESSOR arm)
+set(CMAKE_C_COMPILER arm-linux-gnueabihf-gcc)
+set(CMAKE_C_FLAGS_INIT "-march=armv7-a -mfpu=neon -mfloat-abi=hard")
+set(SCREEN_X11 OFF CACHE BOOL "" FORCE)
+set(SCREEN_STATIC ON CACHE BOOL "" FORCE)

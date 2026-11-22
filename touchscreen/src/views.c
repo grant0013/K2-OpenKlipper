@@ -1,0 +1,2371 @@
+#define _POSIX_C_SOURCE 200809L
+#include "screen.h"
+#include <math.h>
+#include <ctype.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+static bool calibrate_before;
+static bool has(const char *path) {
+    return J(path) != NULL && !cJSON_IsNull(J(path));
+}
+static lv_color_t colour(const char *hex) {
+    if (*hex == '#')
+        hex++;
+    return lv_color_hex(strtoul(hex, NULL, 16));
+}
+static void right(lv_obj_t *o) {
+    lv_obj_set_style_text_align(o, LV_TEXT_ALIGN_RIGHT, 0);
+}
+static void centered(lv_obj_t *o) {
+    lv_obj_set_style_text_align(o, LV_TEXT_ALIGN_CENTER, 0);
+}
+static void simple(const char *action) {
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddStringToObject(r, "action", action);
+    ui_send(r);
+}
+static cJSON *request(const char *action) {
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddStringToObject(r, "action", action);
+    return r;
+}
+static char *encode(cJSON *r) {
+    char *s = cJSON_PrintUnformatted(r);
+    cJSON_Delete(r);
+    return s;
+}
+static void confirmed(const char *message, cJSON *r) {
+    cJSON_AddBoolToObject(r, "confirm", true);
+    char *s = encode(r);
+    ui_confirm(message, s);
+    free(s);
+}
+static void image(lv_obj_t *parent, const char *path, int x, int y) {
+    if (!path || !*path)
+        return;
+    char source[1400];
+    snprintf(source, sizeof(source), "A:%s", path);
+    lv_obj_t *o = lv_img_create(parent);
+    lv_img_set_src(o, source);
+    lv_obj_set_pos(o, x, y);
+}
+/* Fit artwork without cropping or stretching; the original is decoded once by LVGL. */
+static void home_image(const char *path, int top, int height) {
+    if (!path || !*path)
+        return;
+    char source[1400];
+    snprintf(source, sizeof(source), "A:%s", path);
+    lv_img_header_t info;
+    if (lv_img_decoder_get_info(source, &info) != LV_RES_OK || !info.w || !info.h)
+        return;
+    int zoom = height * 256 / info.h;
+    if (zoom > 522 * 256 / info.w)
+        zoom = 522 * 256 / info.w;
+    lv_obj_t *preview = lv_img_create(app.content);
+    lv_img_set_src(preview, source);
+    lv_img_set_pivot(preview, 0, 0);
+    lv_img_set_zoom(preview, zoom);
+    lv_obj_set_pos(preview, (522 - info.w * zoom / 256) / 2,
+                   top + (height - info.h * zoom / 256) / 2);
+}
+cJSON *slot_record(const char *slot) {
+    cJSON *rec;
+    cJSON_ArrayForEach(rec, J("slots")) if (!strcmp(jstr(rec, "slot", ""), slot)) return rec;
+    return NULL;
+}
+const char *slot_label(const char *slot) {
+    if (!strcmp(slot, "E"))
+        return "Spool holder";
+    static char label[48];
+    if (strlen(slot) > 1)
+        snprintf(label, sizeof(label), "CFS %.*s · %c", (int)strlen(slot) - 1, slot,
+                 slot[strlen(slot) - 1]);
+    else
+        snprintf(label, sizeof(label), "1%s", slot);
+    return label;
+}
+static bool fitted(void) {
+    return jbool(app.data, "status.k2_cfs.fitted", false);
+}
+static void spool_widget(lv_obj_t *parent, int x, int y, int size, const char *hex) {
+    lv_color_t ring = colour(hex);
+    if (ring.ch.red < 25 && ring.ch.green < 25 && ring.ch.blue < 25)
+        ring = colour("2d3238");
+    lv_obj_t *outer = box(parent, x, y, size, size, false);
+    lv_obj_set_style_bg_opa(outer, 0, 0);
+    lv_obj_clear_flag(outer, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_radius(outer, size / 2, 0);
+    lv_obj_set_style_border_width(outer, 5, 0);
+    lv_obj_set_style_border_color(outer, ring, 0);
+    int inner_size = size / 2, inset = (size - inner_size) / 2 - 5;
+    lv_obj_t *inner = box(outer, inset, inset, inner_size, inner_size, false);
+    lv_obj_set_style_bg_opa(inner, 0, 0);
+    lv_obj_clear_flag(inner, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_radius(inner, inner_size / 2, 0);
+    lv_obj_set_style_border_width(inner, 2, 0);
+    lv_obj_set_style_border_color(inner, ring, 0);
+}
+static bool known_slot(cJSON *rec) {
+    const char *slot = jstr(rec, "slot", "");
+    const char *hex = jstr(rec, "color", "");
+    if (*hex == '#')
+        hex++;
+    if (!jbool(rec, "loaded", false) || !*jstr(rec, "type", "") || strlen(hex) != 6)
+        return false;
+    for (int i = 0; i < 6; i++)
+        if (!isxdigit((unsigned char)hex[i]))
+            return false;
+    if (!strcmp(slot, "E"))
+        return B("status.filament_switch_sensor filament_sensor.filament_detected") &&
+               !*S("status.k2_cfs.active_slot");
+    return fitted() && B("status.k2_cfs.online");
+}
+void view_home(void) {
+    bool printing = app.printing || app.paused || !strcmp(S("status.print_stats.state"), "error");
+    const char *filename = S("status.print_stats.filename");
+    const char *base = strrchr(filename, '/');
+    if (printing) {
+        text(app.content, base ? base + 1 : filename, 0, 18, 522, &font_ui_17, true);
+        box(app.content, 0, 57, 522, 164, false);
+        home_image(S("platform.thumbnail"), 57, 164);
+        lv_obj_t *summary = button(app.content, "", 0, 227, 522, 66, "home_history", false);
+        lv_obj_set_style_bg_opa(summary, 0, 0);
+        lv_obj_set_style_border_width(summary, 0, 0);
+        app.time_label = text(summary, "", 0, 10, 381, &font_ui_20, false);
+        app.status_label = text(summary, "", 342, 10, 180, &font_ui_20, false);
+        right(app.status_label);
+        app.layer_label = text(summary, "", 0, 43, 381, &font_ui_14, true);
+        icon(summary, "history", 395, 48, 16, colour("a4aebb"));
+        text(summary, "Status history", 419, 43, 86, &font_ui_14, true);
+        icon(summary, "chevron-right", 506, 48, 16, colour("a4aebb"));
+        app.status_dot = box(summary, 440, 18, 6, 6, false);
+        lv_obj_set_style_radius(app.status_dot, 3, 0);
+        lv_obj_set_style_border_width(app.status_dot, 0, 0);
+        lv_obj_set_style_bg_color(app.status_dot, app.accent, 0);
+        lv_label_set_long_mode(app.status_label, LV_LABEL_LONG_DOT);
+        lv_obj_set_height(app.status_label, 28);
+        app.percent = text(app.content, "", 0, 332, 46, &font_ui_20, false);
+        app.progress = lv_bar_create(app.content);
+        lv_obj_set_pos(app.progress, 58, 342);
+        lv_obj_set_size(app.progress, 278, 7);
+        lv_obj_set_style_bg_color(app.progress, colour("29313d"), LV_PART_MAIN);
+        lv_obj_set_style_bg_color(app.progress, app.accent, LV_PART_INDICATOR);
+        lv_obj_set_style_bg_opa(app.progress, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(app.progress, LV_OPA_COVER, LV_PART_INDICATOR);
+        lv_obj_set_style_radius(app.progress, 4, LV_PART_MAIN);
+        lv_obj_set_style_radius(app.progress, 4, LV_PART_INDICATOR);
+        button(app.content, app.paused ? "icon:play" : "icon:pause", 348, 307, 50, 70,
+               app.paused ? "{\"action\":\"resume\"}" : "{\"action\":\"pause\"}", true);
+        button(app.content, "icon:skip-forward", 410, 307, 50, 70, "route:objects", false);
+        button(app.content, "icon:square", 472, 307, 50, 70, "cancel_print", false);
+    } else {
+        const char *art = S("platform.printer_image");
+        if (*art) {
+            home_image(art, 19, 274);
+        } else {
+            box(app.content, 155, 19, 212, 274, false);
+            icon(app.content, "printer-3d", 244, 139, 34, colour("a4aebb"));
+        }
+        button_with_icon(app.content, "folder-open", "Print a file", 0, 307, 522, 70, "open_files",
+                         true);
+    }
+    int count = cJSON_GetArraySize(J("heaters"));
+    if (count > 3)
+        count = 3;
+    lv_obj_t *equipment = box(app.content, 540, 19, 138, 274, false);
+    lv_obj_set_style_border_width(equipment, 0, 0);
+    lv_obj_set_style_radius(equipment, 14, 0);
+    lv_obj_set_style_clip_corner(equipment, true, 0);
+    int h = count ? 274 / count : 91;
+    for (int i = 0; i < count; i++) {
+        cJSON *heater = cJSON_GetArrayItem(J("heaters"), i);
+        char act[100];
+        snprintf(act, sizeof(act), "temperature:%s", jstr(heater, "key", ""));
+        int y = 19 + i * h, height = i == count - 1 ? 274 - i * h : h;
+        lv_obj_t *tile = button(equipment, "", 0, y - 19, 138, height, act, false);
+        lv_obj_set_style_radius(tile, 0, 0);
+        lv_obj_set_style_border_width(tile, i ? 1 : 0, 0);
+        lv_obj_set_style_border_side(tile, LV_BORDER_SIDE_TOP, 0);
+        icon(tile, i == 0 ? "nozzle" : i == 1 ? "bed" : "chamber", 12, 15, 24, colour("a4aebb"));
+        text(tile, jstr(heater, "label", ""), 44, 17, 82, &font_ui_14, true);
+        app.current[i] = text(tile, "", 12, 45, 58, &font_ui_24, false);
+        right(app.current[i]);
+        app.target[i] = text(tile, "", 74, 53, 52, &font_ui_14, true);
+    }
+    lv_obj_t *light = button(app.content, "", 540, 307, 64, 70, "{\"action\":\"light\"}",
+                             B("status.output_pin chamber_led.value"));
+    const char *light_path =
+        S(B("status.output_pin chamber_led.value") ? "platform.icons.light_on"
+                                                   : "platform.icons.light_off");
+    if (*light_path)
+        image(light, light_path, 15, 15);
+    else
+        icon(light, B("status.output_pin chamber_led.value") ? "lightbulb" : "lightbulb-off", 20,
+             23, 24, colour("a4aebb"));
+    lv_obj_t *fans = button(app.content, "", 614, 307, 64, 70, "home_fans", false);
+    if (*S("platform.icons.home_fan"))
+        image(fans, S("platform.icons.home_fan"), 17, 20);
+    else
+        icon(fans, "fan", 20, 23, 24, colour("a4aebb"));
+    if (fitted()) {
+        lv_obj_t *strip = button(app.content, "", 0, 391, 678, 70, "home_filament_strip", false);
+        const char *active = S("status.k2_cfs.active_slot");
+        cJSON *rec = slot_record(*active ? active : "E");
+        char label[150];
+        bool external =
+            !*active && B("status.filament_switch_sensor filament_sensor.filament_detected");
+        const char *name = *active    ? slot_label(active)
+                           : external ? "Spool holder"
+                                      : "No filament loaded";
+        const char *material_type = (*active || external) ? jstr(rec, "type", "") : "";
+        snprintf(label, sizeof(label), "%s%s%s", name, *material_type ? " · " : "", material_type);
+        icon(strip, "cfs", 0, 0, 34, colour("a4aebb"));
+        lv_obj_align(lv_obj_get_child(strip, -1), LV_ALIGN_LEFT_MID, 16, 0);
+        lv_obj_t *dot = box(strip, 0, 0, 10, 10, false);
+        lv_obj_align(dot, LV_ALIGN_LEFT_MID, 64, 0);
+        lv_obj_clear_flag(dot, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_radius(dot, 5, 0);
+        lv_obj_set_style_border_width(dot, 0, 0);
+        const char *material_colour = (*active || external) ? jstr(rec, "color", "") : "";
+        lv_obj_set_style_bg_color(dot, colour(*material_colour ? material_colour : "7b8594"), 0);
+        lv_obj_t *material = text(strip, label, 0, 0, 300, &font_ui_18, false);
+        lv_obj_align(material, LV_ALIGN_LEFT_MID, 86, 0);
+
+        /* One centre line for artwork, text and disclosure, independent of
+         * font metrics. Sensor groups are visually separate from the material. */
+        lv_obj_t *environment = lv_obj_create(strip);
+        lv_obj_remove_style_all(environment);
+        lv_obj_set_size(environment, 170, 34);
+        lv_obj_clear_flag(environment, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_align(environment, LV_ALIGN_RIGHT_MID, -40, 0);
+        char reading[40];
+        icon(environment, "thermometer", 0, 0, 20, colour("a4aebb"));
+        lv_obj_align(lv_obj_get_child(environment, -1), LV_ALIGN_LEFT_MID, 0, 0);
+        snprintf(reading, sizeof(reading), "%.0f°C", N("status.k2_cfs.temperature"));
+        lv_obj_t *temperature = text(environment, reading, 0, 0, 44, &font_ui_16, true);
+        lv_obj_align(temperature, LV_ALIGN_LEFT_MID, 26, 0);
+        icon(environment, "droplets", 0, 0, 20, colour("a4aebb"));
+        lv_obj_align(lv_obj_get_child(environment, -1), LV_ALIGN_LEFT_MID, 76, 0);
+        snprintf(reading, sizeof(reading), "%.0f%% RH", N("status.k2_cfs.humidity"));
+        lv_obj_t *humidity = text(environment, reading, 0, 0, 68, &font_ui_16, true);
+        lv_obj_align(humidity, LV_ALIGN_LEFT_MID, 102, 0);
+        icon(strip, "chevron-right", 0, 0, 20, colour("a4aebb"));
+        lv_obj_align(lv_obj_get_child(strip, -1), LV_ALIGN_RIGHT_MID, -12, 0);
+    }
+}
+void views_refresh(void) {
+    char value[180];
+    if (app.extrusion_temp) {
+        snprintf(value, sizeof(value), "E %.0f°", N("status.extruder.temperature"));
+        lv_label_set_text(app.extrusion_temp, value);
+    }
+    for (int i = 0; i < 3; i++) {
+        cJSON *heater = cJSON_GetArrayItem(J("heaters"), i);
+        double target = jnum(heater, "target", 0);
+        if (app.current[i]) {
+            if (!strcmp(app.route, "heat"))
+                snprintf(value, sizeof(value), target ? "%.0f° / %.0f°" : "%.0f°",
+                         jnum(heater, "current", 0), target);
+            else
+                snprintf(value, sizeof(value), "%.0f°", jnum(heater, "current", 0));
+            lv_label_set_text(app.current[i], value);
+        }
+        if (app.target[i]) {
+            if (!strcmp(app.route, "heat")) {
+                if (target)
+                    snprintf(value, sizeof(value), "Target %.0f°C", target);
+                else
+                    snprintf(value, sizeof(value), "%s",
+                             !strcmp(jstr(heater, "key", ""), "chamber") ? "No target set"
+                                                                         : "Heater off");
+            } else
+                snprintf(value, sizeof(value), target ? "/ %.0f°" : "", target);
+            lv_label_set_text(app.target[i], value);
+        }
+        if (app.positions[i]) {
+            cJSON *p = cJSON_GetArrayItem(J("status.gcode_move.gcode_position"), i);
+            snprintf(value, sizeof(value), "%.2f", cJSON_IsNumber(p) ? p->valuedouble : 0);
+            lv_label_set_text(app.positions[i],
+                              strchr(S("status.toolhead.homed_axes"), "xyz"[i]) ? value : "—");
+        }
+    }
+    if (app.status_label) {
+        const char *state = app.paused     ? "Paused"
+                            : app.printing ? (*S("print_stage") ? S("print_stage") : "Printing")
+                                           : "Stopped";
+        lv_label_set_text(app.status_label, state);
+        lv_point_t metrics;
+        lv_txt_get_size(&metrics, state, &font_ui_20, 0, 0, 180, LV_TEXT_FLAG_NONE);
+        if (app.status_dot)
+            lv_obj_set_x(app.status_dot, 522 - (metrics.x > 180 ? 180 : metrics.x) - 14);
+    }
+    if (app.time_label) {
+        double estimated = N("platform.estimated_time"),
+               elapsed = N("status.print_stats.print_duration");
+        if (estimated > 0)
+            snprintf(value, sizeof(value), "%.0f min remaining",
+                     fmax(0, (estimated - elapsed) / 60));
+        else
+            snprintf(value, sizeof(value), "Time remaining unavailable");
+        lv_label_set_text(app.time_label, value);
+    }
+    if (app.layer_label) {
+        snprintf(value, sizeof(value), "Layer %.0f of %.0f",
+                 N("status.print_stats.info.current_layer"),
+                 N("status.print_stats.info.total_layer"));
+        lv_label_set_text(app.layer_label, value);
+    }
+    if (app.progress) {
+        double p = N("status.virtual_sdcard.progress") * 100;
+        lv_bar_set_value(app.progress, (int)p, LV_ANIM_OFF);
+        snprintf(value, sizeof(value), "%.0f%%", p);
+        lv_label_set_text(app.percent, value);
+    }
+}
+static void move_icon(lv_obj_t *control, const char *name, const char *label) {
+    icon(control, name, 18, label ? 6 : 20, 36, colour("f0f3f7"));
+    if (label)
+        centered(text(control, label, 0, 48, 72, &font_ui_14, false));
+}
+static bool motors_locked(void) {
+    cJSON *stepper;
+    cJSON_ArrayForEach(stepper, J("status.stepper_enable.steppers")) {
+        const char *name = stepper->string;
+        if (name && !strncmp(name, "stepper_", 8) && strchr("xyz", name[8]) && name[8] &&
+            cJSON_IsTrue(stepper))
+            return true;
+    }
+    return false;
+}
+static bool axis_homed(char axis) {
+    const char *homed = S("status.toolhead.homed_axes");
+    return axis == 'z' ? strchr(homed, 'z') != NULL : strchr(homed, 'x') && strchr(homed, 'y');
+}
+static void move_view(void) {
+    ui_tabs(false, "move");
+    if (ui_unavailable("Movement", "moving the axes"))
+        return;
+    const char *icons[] = {"arrow-up", "arrow-left", "house", "arrow-right", "arrow-down"};
+    int xs[] = {80, 0, 80, 160, 80}, ys[] = {108, 192, 192, 192, 276};
+    const char *actions[] = {"jog:Y:1", "jog:X:-1", "{\"action\":\"home\",\"axis\":\"XY\"}",
+                             "jog:X:1", "jog:Y:-1"};
+    for (int i = 0; i < 5; i++) {
+        bool enabled = i == 2 || axis_homed('x');
+        lv_obj_t *control =
+            button(app.content, "", xs[i], ys[i], 72, 76, enabled ? actions[i] : NULL, false);
+        move_icon(control, icons[i], i == 2 ? "XY" : NULL);
+    }
+    for (int i = 0; i < 3; i++) {
+        const char *names[] = {"arrow-up", "house", "arrow-down"};
+        const char *actions[] = {"jog:Z:1", "{\"action\":\"home\",\"axis\":\"Z\"}", "jog:Z:-1"};
+        bool enabled = i == 1 || axis_homed('z');
+        lv_obj_t *control =
+            button(app.content, "", 252, 108 + i * 84, 72, 76, enabled ? actions[i] : NULL, false);
+        move_icon(control, names[i], i == 1 ? "Z" : NULL);
+    }
+    if (has("settings.extruder")) {
+        bool hot = B("status.extruder.can_extrude") &&
+                   N("status.extruder.temperature") >=
+                       jnum(app.data, "settings.extruder.min_extrude_temp", 170);
+        double max_distance = jnum(app.data, "settings.extruder.max_extrude_only_distance", 50);
+        bool enabled = hot && app.step <= max_distance;
+        lv_obj_t *retract =
+            button(app.content, "", 344, 108, 72, 76, enabled ? "extrude:-1" : NULL, false);
+        move_icon(retract, "arrow-up", NULL);
+        lv_obj_t *nozzle = button(app.content, "", 344, 192, 72, 76, "temperature:extruder", false);
+        icon(nozzle, "extruder", 18, 6, 36, colour("f0f3f7"));
+        app.extrusion_temp = text(nozzle, "", 0, 48, 72, &font_ui_14, false);
+        centered(app.extrusion_temp);
+        lv_obj_t *extrude =
+            button(app.content, "", 344, 276, 72, 76, enabled ? "extrude:1" : NULL, false);
+        move_icon(extrude, "arrow-down", NULL);
+    }
+    centered(text(app.content, "mm", 0, 368, 416, &font_ui_14, true));
+    double steps[] = {.1, 1, 10, 50, 100};
+    for (int i = 0; i < 5; i++) {
+        char caption[20], action[40];
+        snprintf(caption, sizeof(caption), "%g", steps[i]);
+        snprintf(action, sizeof(action), "step:%g", steps[i]);
+        button(app.content, caption, i * 85, 398, 76, 64, action, app.step == steps[i]);
+    }
+    for (int i = 0; i < 3; i++) {
+        char action[30], axis[2] = {"XYZ"[i], 0};
+        snprintf(action, sizeof(action), "position:%c", "XYZ"[i]);
+        lv_obj_t *field = button(app.content, "", 452, 108 + i * 84, 222, 76,
+                                 axis_homed("xyz"[i]) ? action : NULL, false);
+        text(field, axis, 12, 24, 24, &font_ui_20, true);
+        app.positions[i] = text(field, "—", 40, 23, 146, &font_ui_24, false);
+        centered(app.positions[i]);
+        icon(field, "pencil", 194, 30, 16, colour("a4aebb"));
+    }
+    bool enabled = motors_locked();
+    lv_obj_t *motor = button_fixed(app.content, "", 452, 398, 222, 64, "motor_toggle", false);
+    icon(motor, enabled ? "lock-keyhole" : "lock-keyhole-open", 18, 20, 24, colour("f0f3f7"));
+    centered(
+        text(motor, enabled ? "Unlock motors" : "Lock motors", 50, 21, 162, &font_ui_18, false));
+}
+static void heat_view(void) {
+    ui_tabs(false, "heat");
+    int n = cJSON_GetArraySize(J("heaters"));
+    if (!n) {
+        center_message("Heaters unavailable", "Waiting for configured heater capabilities.", NULL,
+                       NULL);
+        return;
+    }
+    int width = (673 - (n - 1) * 12) / n;
+    for (int i = 0; i < n; i++) {
+        cJSON *h = cJSON_GetArrayItem(J("heaters"), i);
+        char action[100];
+        snprintf(action, sizeof(action), "temperature:%s", jstr(h, "key", ""));
+        lv_obj_t *b = button(app.content, "", i * (width + 12), 100, width, 274, action, false);
+        const char *label = jstr(h, "label", "");
+        lv_point_t metrics;
+        lv_txt_get_size(&metrics, label, &font_ui_18, 0, 0, 1000, LV_TEXT_FLAG_NONE);
+        int start = (lv_obj_get_width(b) - metrics.x - 34) / 2;
+        icon(b, i == 0 ? "nozzle" : i == 1 ? "bed" : "chamber", start, 73, 24, colour("a4aebb"));
+        text(b, label, start + 34, 76, metrics.x + 2, &font_ui_18, false);
+        char value[80], mode[100];
+        double target = jnum(h, "target", 0);
+        snprintf(value, sizeof(value), target ? "%.0f° / %.0f°" : "%.0f°", jnum(h, "current", 0),
+                 target);
+        app.current[i] = text(b, value, 6, 126, lv_obj_get_width(b) - 12, &font_ui_30, false);
+        centered(app.current[i]);
+        if (target)
+            snprintf(mode, sizeof(mode), "Target %.0f°C", target);
+        else
+            snprintf(mode, sizeof(mode), "%s",
+                     !strcmp(jstr(h, "key", ""), "chamber") ? "No target set" : "Heater off");
+        app.target[i] = text(b, mode, 6, 190, lv_obj_get_width(b) - 12, &font_ui_14, true);
+        centered(app.target[i]);
+    }
+    if (!app.printing && !app.paused)
+        button(app.content, "Turn heaters off", 258, 386, 157, 48, "{\"action\":\"heaters_off\"}",
+               false);
+}
+typedef struct {
+    char *name;
+    lv_obj_t *output;
+} FanControl;
+static void slider_event(lv_event_t *e) {
+    lv_obj_t *slider = lv_event_get_target(e);
+    FanControl *control = lv_event_get_user_data(e);
+    if (lv_event_get_code(e) == LV_EVENT_DELETE) {
+        free(control->name);
+        free(control);
+        return;
+    }
+    if (lv_event_get_code(e) == LV_EVENT_VALUE_CHANGED) {
+        lv_obj_t *label = control->output;
+        if (label) {
+            char value[20];
+            snprintf(value, sizeof(value), "%d%%", lv_slider_get_value(slider));
+            lv_label_set_text(label, value);
+        }
+    }
+    if (lv_event_get_code(e) == LV_EVENT_RELEASED) {
+        cJSON *r = request("fan");
+        cJSON_AddStringToObject(r, "fan", control->name);
+        cJSON_AddNumberToObject(r, "value", lv_slider_get_value(slider));
+        ui_send(r);
+    }
+}
+static void fans_view(void) {
+    ui_tabs(false, "fans");
+    const char *labels[] = {"Part cooling", "Side fan", "Chamber exhaust"};
+    const char *objects[] = {"fan", "fan_generic auxiliary_fan", "fan_generic exhaust_fan"};
+    const char *ids[] = {"part", "side", "exhaust"};
+    int rowno = 0;
+    for (int i = 0; i < 3; i++) {
+        cJSON *settings = J("settings");
+        if (!cJSON_GetObjectItemCaseSensitive(settings, objects[i]))
+            continue;
+        int y = 110 + rowno++ * 92;
+        text(app.content, labels[i], 0, y, 480, &font_ui_18, false);
+        char path[150], value[30];
+        snprintf(path, sizeof(path), "status.%s.speed", objects[i]);
+        int speed = (int)round(N(path) * 100);
+        snprintf(value, sizeof(value), "%d%%", speed);
+        lv_obj_t *output = text(app.content, value, 550, y, 124, &font_ui_16, false);
+        right(output);
+        lv_obj_t *slider = lv_slider_create(app.content);
+        lv_obj_set_pos(slider, 22, y + 36);
+        lv_obj_set_size(slider, 629, 8);
+        char availability_action[64];
+        snprintf(availability_action, sizeof(availability_action), "fan:%s", ids[i]);
+        if (*ui_control_reason(availability_action)) {
+            lv_obj_add_state(slider, LV_STATE_DISABLED);
+            lv_obj_set_style_opa(slider, 100, 0);
+        }
+        lv_slider_set_range(slider, 0, 100);
+        lv_slider_set_value(slider, speed, LV_ANIM_OFF);
+        lv_obj_set_style_bg_color(slider, colour("343e4b"), LV_PART_MAIN);
+        lv_obj_set_style_bg_color(slider, app.accent, LV_PART_INDICATOR);
+        lv_obj_set_style_bg_color(slider, colour("f0f3f7"), LV_PART_KNOB);
+        lv_obj_set_style_bg_opa(slider, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(slider, LV_OPA_COVER, LV_PART_INDICATOR);
+        lv_obj_set_style_bg_opa(slider, LV_OPA_COVER, LV_PART_KNOB);
+        lv_obj_set_style_radius(slider, 4, LV_PART_MAIN);
+        lv_obj_set_style_radius(slider, 4, LV_PART_INDICATOR);
+        lv_obj_set_style_radius(slider, LV_RADIUS_CIRCLE, LV_PART_KNOB);
+        lv_obj_set_style_pad_all(slider, 12, LV_PART_KNOB);
+        lv_obj_set_ext_click_area(slider, 22);
+        lv_obj_add_flag(slider, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_clear_flag(slider, LV_OBJ_FLAG_ADV_HITTEST);
+        FanControl *control = calloc(1, sizeof(*control));
+        control->name = strdup(ids[i]);
+        control->output = output;
+        lv_obj_add_event_cb(slider, slider_event, LV_EVENT_ALL, control);
+    }
+    if (has("settings.heater_fan hotend_fan")) {
+        int y = 110 + rowno * 92;
+        char speed[30];
+        snprintf(speed, sizeof(speed), "%.0f%%", N("status.heater_fan hotend_fan.speed") * 100);
+        text(app.content, "Hotend cooling", 0, y, 400, &font_ui_17, false);
+        right(text(app.content, speed, 550, y, 124, &font_ui_16, false));
+    }
+}
+static void filament_view(void) {
+    ui_tabs(false, "filament");
+    if (ui_unavailable("Filament controls", "loading, retracting or editing filament"))
+        return;
+    if (fitted() && !B("status.k2_cfs.online")) {
+        center_message("CFS connection lost",
+                       "Check the CFS cable and power before changing filament.", "Back to print",
+                       "route:home");
+        return;
+    }
+    if (!fitted()) {
+        cJSON *record = slot_record("E");
+        lv_obj_t *tile = button(app.content, "", 0, 110, 673, 247, "slot:E", false);
+        const char *name = jstr(record, "name", "Spool holder");
+        lv_point_t metrics;
+        lv_txt_get_size(&metrics, name, &font_ui_24, 0, 0, 250, LV_TEXT_FLAG_NONE);
+        int group_width = 62 + 28 + metrics.x + 28 + 16;
+        int start = (lv_obj_get_width(tile) - group_width) / 2;
+        spool_widget(tile, start, 92, 62, jstr(record, "color", "828b98"));
+        text(tile, name, start + 90, 93, metrics.x + 2, &font_ui_24, false);
+        centered(text(tile, "Spool holder", start + 90, 135, metrics.x + 2, &font_ui_14, true));
+        icon(tile, "chevron-right", start + group_width - 16, 115, 16, colour("a4aebb"));
+        lv_obj_t *line = box(app.content, 0, 388, 678, 1, false);
+        lv_obj_set_style_radius(line, 0, 0);
+        lv_obj_set_style_bg_color(line, colour("343e4b"), 0);
+        button_fixed(app.content, "Edit", 82, 398, 110, 68, "edit_slot", false);
+        button_fixed(app.content, "Load", 204, 398, 190, 68, "load", false);
+        button_fixed(app.content, "Unload", 406, 398, 190, 68, "unload", false);
+        return;
+    }
+    int boxes = 0;
+    char groups[16][16] = {{0}};
+    cJSON *r;
+    cJSON_ArrayForEach(r, J("slots")) {
+        const char *slot = jstr(r, "slot", "");
+        size_t n = strlen(slot);
+        if (!n || !strcmp(slot, "E"))
+            continue;
+        char group[16];
+        if (n == 1)
+            snprintf(group, sizeof(group), "1");
+        else
+            snprintf(group, sizeof(group), "%.*s", (int)n - 1, slot);
+        bool seen = false;
+        for (int i = 0; i < boxes; i++)
+            if (!strcmp(groups[i], group))
+                seen = true;
+        if (!seen && boxes < 16)
+            snprintf(groups[boxes++], 16, "%s", group);
+    }
+    int top = boxes > 1 ? 105 : 117;
+    bool selected_unit = false;
+    for (int i = 0; i < boxes; i++)
+        if (!strcmp(app.cfs_unit, groups[i]))
+            selected_unit = true;
+    if (!selected_unit && boxes)
+        snprintf(app.cfs_unit, sizeof(app.cfs_unit), "%s", groups[0]);
+    if (boxes > 1) {
+        char label[50];
+        snprintf(label, sizeof(label), "CFS %s  ▾", app.cfs_unit);
+        button(app.content, label, 0, 316, 114, 56, "units", false);
+    }
+
+    cJSON *records[16];
+    int count = 0;
+    if (fitted())
+        cJSON_ArrayForEach(r, J("slots")) {
+            const char *slot = jstr(r, "slot", "");
+            size_t n = strlen(slot);
+            if (!n || !strcmp(slot, "E"))
+                continue;
+            if (boxes > 1 &&
+                ((n == 1 && strcmp(app.cfs_unit, "1")) ||
+                 (n > 1 && (strlen(app.cfs_unit) != n - 1 || strncmp(slot, app.cfs_unit, n - 1)))))
+                continue;
+            if (count < 15)
+                records[count++] = r;
+        }
+    int cfs_count = count;
+    records[count++] = slot_record("E");
+    int width = cfs_count ? (673 - 28 - 10 * (count - 1)) / count : 150;
+    int start = cfs_count ? 0 : (674 - width) / 2;
+    for (int i = 0; i < count; i++) {
+        r = records[i];
+        const char *slot = i == cfs_count ? "E" : jstr(r, "slot", "");
+        int x = start + i * (width + 10) + (i == cfs_count && cfs_count ? 28 : 0);
+        char action[50];
+        snprintf(action, sizeof(action), "slot:%s", slot);
+        lv_obj_t *tile =
+            button(app.content, "", x, top, width, 202, action, !strcmp(slot, app.selected_slot));
+        char display_slot[64];
+        snprintf(display_slot, sizeof(display_slot), "%s",
+                 !strcmp(slot, "E") ? "Spool holder" : slot_label(slot));
+        centered(text(tile, display_slot, 4, 15, width - 8, &font_ui_17, false));
+        bool present = !strcmp(slot, "E") || jbool(r, "loaded", false);
+        const char *hex = present ? jstr(r, "color", "828b98") : "343e4b";
+        lv_color_t ring = colour(hex);
+        if (ring.ch.red < 25 && ring.ch.green < 25 && ring.ch.blue < 25)
+            ring = colour("2d3238");
+        lv_obj_t *spool = box(tile, (width - 58) / 2, 53, 58, 58, false);
+        lv_obj_set_style_bg_opa(spool, 0, 0);
+        lv_obj_clear_flag(spool, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_radius(spool, 29, 0);
+        lv_obj_set_style_border_width(spool, 5, 0);
+        lv_obj_set_style_border_color(spool, ring, 0);
+        lv_obj_t *hub = box(spool, 9, 9, 28, 28, false);
+        lv_obj_clear_flag(hub, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_radius(hub, 14, 0);
+        lv_obj_set_style_bg_opa(hub, 0, 0);
+        lv_obj_set_style_border_width(hub, 2, 0);
+        lv_obj_set_style_border_color(hub, ring, 0);
+        const char *kind = present ? jstr(r, "type", "") : "";
+        centered(text(tile,
+                      *kind                ? kind
+                      : !strcmp(slot, "E") ? "Spool"
+                      : present            ? "Unknown"
+                                           : "Empty",
+                      4, 126, width - 8, &font_ui_16, false));
+    }
+
+    if (fitted()) {
+        char temp[40], humidity[40];
+        snprintf(temp, sizeof(temp), "%.0f°C", N("status.k2_cfs.temperature"));
+        snprintf(humidity, sizeof(humidity), "%.0f%% RH", N("status.k2_cfs.humidity"));
+        lv_obj_t *environment = box(app.content, 0, 330, 1, 46, false);
+        lv_obj_clear_flag(environment, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_bg_opa(environment, LV_OPA_50, 0);
+        lv_obj_set_style_pad_left(environment, 24, 0);
+        lv_obj_set_style_pad_right(environment, 24, 0);
+        lv_obj_set_style_border_width(environment, 0, 0);
+        lv_obj_set_width(environment, LV_SIZE_CONTENT);
+        lv_obj_set_flex_flow(environment, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(environment, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+                              LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_column(environment, 10, 0);
+        icon(environment, "thermometer", 0, 0, 24, colour("a4aebb"));
+        lv_obj_t *temperature = text(environment, temp, 0, 0, 1, &font_ui_20, false);
+        lv_obj_set_width(temperature, LV_SIZE_CONTENT);
+        lv_obj_set_style_pad_right(temperature, 18, 0);
+        icon(environment, "droplets", 0, 0, 24, colour("a4aebb"));
+        lv_obj_t *relative_humidity = text(environment, humidity, 0, 0, 1, &font_ui_20, false);
+        lv_obj_set_width(relative_humidity, LV_SIZE_CONTENT);
+        lv_obj_update_layout(environment);
+        lv_obj_align(environment, LV_ALIGN_TOP_MID, 0, 330);
+    }
+    lv_obj_t *separator = box(app.content, 0, 388, 678, 1, false);
+    lv_obj_set_style_radius(separator, 0, 0);
+    lv_obj_set_style_bg_color(separator, colour("343e4b"), 0);
+    button_fixed(app.content, "Edit", 44, 398, 110, 68, "edit_slot", false);
+    cJSON *selected = slot_record(app.selected_slot);
+    bool can_load = !strcmp(app.selected_slot, "E") || jbool(selected, "loaded", false);
+    button_fixed(app.content, "Load", 166, 398, 190, 68, can_load ? "load" : NULL, false);
+    button_fixed(app.content, "Unload", 368, 398, 190, 68, "unload", false);
+    if (fitted())
+        button_fixed(app.content, "icon:sliders-horizontal", 570, 398, 64, 68, "route:refill",
+                     false);
+}
+static void edit_view(void) {
+    if (ui_unavailable("Filament editing", "editing filament"))
+        return;
+    if (!app.draft)
+        app.draft = cJSON_Duplicate(slot_record(app.selected_slot), true);
+    if (!app.draft)
+        app.draft = cJSON_CreateObject();
+    const char *labels[] = {"Material", "Color", "Nozzle temp"};
+    const char *actions[] = {"route:materials", "route:colors", "draft_temperature"};
+    char temperature[50];
+    snprintf(temperature, sizeof(temperature), "%.0f°C", jnum(app.draft, "nozzle_temp", 0));
+    const char *values[] = {jstr(app.draft, "name", "Choose material"),
+                            jstr(app.draft, "color", "Choose colour"), temperature};
+    for (int i = 0; i < 3; i++) {
+        lv_obj_t *field = button(app.content, "", 37, 104 + i * 90, 600, 76, actions[i], false);
+        text(field, labels[i], 20, 26, 210, &font_ui_18, true);
+        if (i == 1) {
+            lv_obj_t *swatch = box(field, 506, 19, 36, 36, false);
+            lv_obj_clear_flag(swatch, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_set_style_radius(swatch, 18, 0);
+            lv_obj_set_style_bg_color(swatch, colour(jstr(app.draft, "color", "828b98")), 0);
+            lv_obj_set_style_border_color(swatch, colour("a4aebb"), 0);
+        } else
+            right(text(field, values[i], 230, 25, 320, &font_ui_20, false));
+        icon(field, i == 2 ? "pencil" : "chevron-right", 560, 30, 16, colour("a4aebb"));
+    }
+    footer("Cancel", "cancel_edit", "Save", "save_slot");
+}
+static void materials_view(void) {
+    const char *filters[] = {"All", "PLA", "PETG", "ABS", "TPU", "Other"};
+    for (int i = 0; i < 6; i++) {
+        char action[80];
+        snprintf(action, sizeof(action), "filter:%s", filters[i]);
+        button(app.content, filters[i], i * 113, 77, 105, 60, action,
+               !strcmp(filters[i], app.filter));
+    }
+    lv_obj_t *list = scroll_area(143, 386);
+    int y = 0;
+    cJSON *m;
+    cJSON_ArrayForEach(m, J("materials")) {
+        const char *type = jstr(m, "type", "");
+        if (strcmp(app.filter, "All") && strcmp(app.filter, type) &&
+            !(!strcmp(app.filter, "Other") && strcmp(type, "PLA") && strcmp(type, "PETG") &&
+              strcmp(type, "ABS") && strcmp(type, "TPU")))
+            continue;
+        char action[80];
+        snprintf(action, sizeof(action), "material:%d", cJSON_GetArraySize(J("materials")));
+        char *payload = encode(cJSON_Duplicate(m, true));
+        size_t len = strlen(payload) + 16;
+        char *a = malloc(len);
+        snprintf(a, len, "material:%s", payload);
+        row(list, y, jstr(m, "name", ""), "›", type, a);
+        free(payload);
+        free(a);
+        y += 82;
+    }
+    if (!y)
+        text(list, "No matching materials", 20, 50, 600, &font_ui_20, true);
+    footer(NULL, NULL, "Back", "route:edit");
+}
+static void colors_view(void) {
+    const char *colors[] = {"20252d", "e9e9e5", "828b98", "e34c55", "e69039", "edce52",
+                            "4f9f73", "28adbc", "3d8bfd", "5035ce", "d472a4", "ab7859"};
+    for (int i = 0; i < 12; i++) {
+        char action[50];
+        snprintf(action, sizeof(action), "color:%s", colors[i]);
+        lv_obj_t *b =
+            button(app.content, "", 5 + (i % 6) * 112.5, 90 + (i / 6) * 82, 101, 72, action, false);
+        lv_obj_set_style_bg_color(b, colour(colors[i]), 0);
+    }
+    text(app.content, "Hex colour", 0, 258, 673, &font_ui_14, true);
+    button(app.content, jstr(app.draft, "color", ""), 0, 286, 673, 64, "color_hex", false);
+    footer(NULL, NULL, "Done", "route:edit");
+}
+static void tune_view(void) {
+    ui_tabs(false, "tune");
+    if (!app.printing && !app.paused) {
+        center_message("No print in progress", "Live adjustments become available during a print.",
+                       "Choose a file", "open_files");
+        return;
+    }
+    const char *labels[] = {"Print speed", "Flow ratio"}, *keys[] = {"speed", "flow"},
+               *paths[] = {"status.gcode_move.speed_factor", "status.gcode_move.extrude_factor"};
+    for (int i = 0; i < 2; i++) {
+        int y = 110 + i * 108;
+        double value = jnum(app.data, paths[i], 1) * 100;
+        double increment = i == 0 ? 10 : 1;
+        text(app.content, labels[i], 0, y + 11, 260, &font_ui_18, false);
+        char action[120], caption[50];
+        snprintf(action, sizeof(action), "tune:%s:%g", keys[i], value - increment);
+        button(app.content, "−", 310, y, 56, 56, action, false);
+        snprintf(action, sizeof(action), "tune_input:%s", keys[i]);
+        snprintf(caption, sizeof(caption), "%.0f%%", value);
+        lv_obj_t *input = button(app.content, caption, 378, y, 170, 56, action, false);
+        lv_obj_set_style_bg_opa(input, 0, 0);
+        lv_obj_set_style_border_width(input, 0, 0);
+        snprintf(action, sizeof(action), "tune:%s:%g", keys[i], value + increment);
+        button(app.content, "+", 560, y, 56, 56, action, false);
+    }
+    text(app.content, "Z offset", 0, 348, 260, &font_ui_18, false);
+    text(app.content, "Current print only", 0, 374, 260, &font_ui_12, true);
+    button(app.content, "−0.01", 310, 334, 92, 56, "tune:z:-0.01", false);
+    char z[80];
+    snprintf(z, sizeof(z), "%.3f", N("status.gcode_move.homing_origin.2"));
+    centered(text(app.content, z, 491, 343, 96, &font_ui_24, false));
+    centered(text(app.content, "mm", 491, 375, 96, &font_ui_12, true));
+    button(app.content, "+0.01", 548, 334, 92, 56, "tune:z:0.01", false);
+}
+static void calibration_view(void) {
+    ui_tabs(false, "calibration");
+    if (ui_unavailable("Calibration", "running calibration"))
+        return;
+    const char *labels[] = {"Home all",          "Z tilt",       "Full bed mesh",
+                            "Input shaping",     "Belt tension", "Cutter calibration",
+                            "Save configuration"};
+    const char *keys[] = {"home", "tilt", "mesh", "shaper", "belt", "cutter", "save"};
+    const char *caps[] = {NULL,
+                          "settings.z_tilt",
+                          "settings.bed_mesh",
+                          "settings.resonance_tester",
+                          "settings.k2_belt_tension",
+                          "settings.k2_cfs",
+                          NULL};
+    int visible = 0;
+    for (int i = 0; i < 7; i++) {
+        if (caps[i] && !has(caps[i]))
+            continue;
+        char action[80];
+        snprintf(action, sizeof(action), "calibrate:%s", keys[i]);
+        button(app.content, labels[i], (visible % 2) * 342, 100 + (visible / 2) * 92, 330, 84,
+               action, false);
+        visible++;
+    }
+}
+static void files_view(void) {
+    button(app.content, "icon:refresh-cw", 629, 19, 44, 44, "refresh_files", false);
+    const char *refresh = *S("files_refresh.error") ? "Refresh failed — tap refresh to retry"
+                          : B("files_refresh.busy") ? "Refreshing…"
+                                                    : "";
+    lv_obj_t *status = text(app.content, refresh, 100, 32, 500, &font_ui_14, true);
+    lv_obj_set_height(status, 22);
+    lv_label_set_long_mode(status, LV_LABEL_LONG_DOT);
+    lv_obj_t *list = scroll_area(77, 462);
+    cJSON *f;
+    int y = 0;
+    cJSON_ArrayForEach(f, J("files")) {
+        const char *path = jstr(f, "path", "");
+        char *payload = request_json("file", "path", path);
+        size_t n = strlen(payload) + 16;
+        char *a = malloc(n);
+        snprintf(a, n, "file_open:%s", payload);
+        lv_obj_t *b = button(list, "", 0, y, 673, 78, a, false);
+        lv_obj_set_style_bg_opa(b, 0, 0);
+        lv_obj_set_style_border_side(b, LV_BORDER_SIDE_BOTTOM, 0);
+        lv_obj_set_style_radius(b, 0, 0);
+        cJSON *thumb = cJSON_GetObjectItemCaseSensitive(J("platform.file_thumbnails"), path);
+        const char *thumbnail = cJSON_IsString(thumb) ? thumb->valuestring : "";
+        if (*thumbnail)
+            image(b, thumbnail, 8, 10);
+        else
+            icon(b, "folder-open", 24, 26, 24, colour("a4aebb"));
+        const char *name = strrchr(path, '/');
+        lv_obj_t *filename = text(b, name ? name + 1 : path, 80, 14, 490, &font_ui_18, false);
+        lv_label_set_long_mode(filename, LV_LABEL_LONG_DOT);
+        lv_obj_set_height(filename, 26);
+        time_t stamp = (time_t)jnum(f, "modified", 0);
+        struct tm tm;
+        localtime_r(&stamp, &tm);
+        char modified[80];
+        strftime(modified, sizeof(modified), "%d %b %Y · %H:%M", &tm);
+        text(b, modified, 80, 44, 490, &font_ui_13, true);
+        snprintf(a, n, "file_delete:%s", payload);
+        button_fixed(list, "icon:trash-2", 600, y + 7, 64, 64, a, false);
+        free(a);
+        free(payload);
+        y += 82;
+    }
+    if (!y) {
+        const char *empty = *S("files_refresh.error") ? S("files_refresh.error")
+                            : B("files_refresh.busy") ? "Reading files…"
+                                                      : "No print files";
+        text(list, empty, 14, 40, 620, &font_ui_20, true);
+    }
+}
+static void file_view(void) {
+    if (ui_unavailable("Starting a print", "starting another print"))
+        return;
+    const char *path = S("file");
+    if (!*path) {
+        center_message("Select a file", "Choose a sliced G-code file.", "Files", "open_files");
+        return;
+    }
+    snprintf(app.file, sizeof(app.file), "%s", path);
+    box(app.content, 0, 82, 210, 210, false);
+    image(app.content, S("platform.file_thumbnail"), 0, 82);
+    text(app.content, strrchr(path, '/') ? strrchr(path, '/') + 1 : path, 234, 90, 440, &font_ui_24,
+         false);
+    char value[80];
+    text(app.content, "Estimated time", 234, 169, 240, &font_ui_18, true);
+    snprintf(value, sizeof(value), "%.0f min", N("metadata.estimated_time") / 60);
+    right(text(app.content, value, 490, 169, 184, &font_ui_18, false));
+    text(app.content, "Filament", 234, 212, 240, &font_ui_18, true);
+    snprintf(value, sizeof(value), "%.1f g", N("metadata.filament_weight_total"));
+    right(text(app.content, value, 490, 212, 184, &font_ui_18, false));
+    text(app.content, "Layers", 234, 255, 240, &font_ui_18, true);
+    snprintf(value, sizeof(value), "%.0f", N("metadata.layer_count"));
+    right(text(app.content, value, 490, 255, 184, &font_ui_18, false));
+    if (has("settings.gcode_macro START_PRINT.variable_screen_full_mesh")) {
+        lv_obj_t *toggle = button(app.content, "", 234, 299, 439, 56, "calibrate_before", false);
+        lv_obj_set_style_bg_opa(toggle, 0, 0);
+        lv_obj_set_style_border_width(toggle, 0, 0);
+        lv_obj_t *check = box(toggle, 8, 12, 32, 32, calibrate_before);
+        lv_obj_clear_flag(check, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_radius(check, 6, 0);
+        if (calibrate_before)
+            centered(text(check, "✓", 0, 5, 30, &font_ui_18, false));
+        text(toggle, "Calibrate before printing", 52, 17, 375, &font_ui_18, false);
+    }
+    footer("Back", "back", "Start printing", "review_mapping");
+}
+static void colour_swatch(lv_obj_t *parent, int x, int y, const char *hex, int size) {
+    lv_obj_t *swatch = box(parent, x, y, size, size, false);
+    lv_obj_clear_flag(swatch, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_radius(swatch, size / 2, 0);
+    lv_obj_set_style_bg_color(swatch, colour(hex && *hex ? hex : "343e4b"), 0);
+    lv_obj_set_style_border_color(swatch, colour("a4aebb"), 0);
+}
+static void source_label(char *buffer, size_t size, const char *slot) {
+    if (!slot || !*slot)
+        snprintf(buffer, size, "Select filament");
+    else if (!strcmp(slot, "E"))
+        snprintf(buffer, size, "Spool holder");
+    else {
+        size_t length = strlen(slot);
+        snprintf(buffer, size, "CFS %.*s · %c", length > 1 ? (int)length - 1 : 1,
+                 length > 1 ? slot : "1", slot[length - 1]);
+    }
+}
+/* Same material rule as backend/model.py: case/ASCII whitespace only. */
+static bool material_matches(const char *required, const char *actual) {
+    for (;;) {
+        while (*required && strchr(" \t\r\n\f\v", *required))
+            required++;
+        while (*actual && strchr(" \t\r\n\f\v", *actual))
+            actual++;
+        if (!*required)
+            return !*actual;
+        if (toupper((unsigned char)*required++) != toupper((unsigned char)*actual))
+            return false;
+        if (*actual)
+            actual++;
+    }
+}
+static bool compatible_material(cJSON *filament, cJSON *record) {
+    const char *required = jstr(filament, "type", "");
+    const char *p = required;
+    while (*p && strchr(" \t\r\n\f\v", *p))
+        p++;
+    return !*p || material_matches(required, jstr(record, "type", ""));
+}
+static cJSON *mapping_filament(void) {
+    cJSON *filament;
+    cJSON_ArrayForEach(filament, J("metadata.filaments")) {
+        char key[20];
+        snprintf(key, sizeof(key), "%d", (int)jnum(filament, "tool", 0));
+        if (!strcmp(key, app.mapping_tool))
+            return filament;
+    }
+    return NULL;
+}
+static bool mapping_ready(void) {
+    cJSON *filament;
+    cJSON_ArrayForEach(filament, J("metadata.filaments")) {
+        char key[20];
+        snprintf(key, sizeof(key), "%d", (int)jnum(filament, "tool", 0));
+        const char *target = jstr(app.mapping, key, "");
+        if (!known_slot(slot_record(target)) ||
+            !compatible_material(filament, slot_record(target)) ||
+            (!strcmp(target, "E") && cJSON_GetArraySize(J("metadata.filaments")) > 1))
+            return false;
+    }
+    return cJSON_GetArraySize(J("metadata.filaments")) > 0 ||
+           known_slot(slot_record(jstr(app.mapping, "0", "")));
+}
+static void mapping_view(void) {
+    if (ui_unavailable("Filament selection", "starting another print"))
+        return;
+    lv_obj_t *list = scroll_area(88, 388);
+    cJSON *filament;
+    int y = 0;
+    int count = cJSON_GetArraySize(J("metadata.filaments"));
+    for (int i = 0; i < (count ? count : 1); i++) {
+        filament = cJSON_GetArrayItem(J("metadata.filaments"), i);
+        int tool = (int)jnum(filament, "tool", 0);
+        char key[20], caption[64], action[64];
+        snprintf(key, sizeof(key), "%d", tool);
+        snprintf(caption, sizeof(caption), "File filament %d", tool + 1);
+        snprintf(action, sizeof(action), "mapping_pick:%d", tool);
+        const char *target = jstr(app.mapping, key, "");
+        cJSON *record = slot_record(target);
+        bool known = known_slot(record);
+        bool mismatch = known && !compatible_material(filament, record);
+        lv_obj_t *card = box(list, 0, y, 674, 112, false);
+        lv_obj_clear_flag(card, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_bg_opa(card, 0, 0);
+        lv_obj_set_style_border_width(card, 0, 0);
+        lv_obj_t *required = box(card, 0, 6, 286, 96, false);
+        lv_obj_clear_flag(required, LV_OBJ_FLAG_CLICKABLE);
+        text(required, caption, 12, 3, 262, &font_ui_16, true);
+        colour_swatch(required, 16, 42, jstr(filament, "colour", jstr(filament, "color", "828b98")),
+                      32);
+        text(required, jstr(filament, "type", "Unknown material"), 60, 44, 214, &font_ui_20, false);
+        icon(card, "arrow-right", 300, 45, 24, colour("a4aebb"));
+        lv_obj_t *pick = button_fixed(card, "", 348, 6, 320, 96, action, false);
+        if (known) {
+            char source[80];
+            source_label(source, sizeof(source), target);
+            colour_swatch(pick, 14, 18, jstr(record, "color", "828b98"), 32);
+            text(pick, jstr(record, "type", "Unknown material"), 60, 17, 212, &font_ui_20, false);
+            text(pick, source, 60, mismatch ? 42 : 56, 230, &font_ui_14, true);
+            if (mismatch) {
+                lv_obj_set_style_border_color(pick, colour("e35d6a"), 0);
+                lv_obj_t *warning =
+                    text(pick, "Material mismatch", 60, 65, 230, &font_ui_14, false);
+                lv_obj_set_style_text_color(warning, colour("e35d6a"), 0);
+            }
+        } else
+            text(pick, "Select filament", 18, 34, 260, &font_ui_20, false);
+        icon(pick, "chevron-down", 284, 37, 20, colour("a4aebb"));
+        y += 120;
+    }
+    if (!y)
+        text(list, "No filament requirements found in this file.", 14, 40, 620, &font_ui_20, true);
+    footer("Back", "back", "Start print", mapping_ready() ? "start_print" : NULL);
+}
+static void mapping_pick(void) {
+    cJSON *filament = mapping_filament();
+    lv_obj_t *list = scroll_area(88, 462);
+    int y = 0;
+    cJSON *record;
+    cJSON_ArrayForEach(record, J("slots")) {
+        if (!known_slot(record))
+            continue;
+        const char *slot = jstr(record, "slot", "");
+        if (!strcmp(slot, "E") && cJSON_GetArraySize(J("metadata.filaments")) > 1)
+            continue;
+        char action[64], source[80];
+        snprintf(action, sizeof(action), "mapping_set:%s", slot);
+        source_label(source, sizeof(source), slot);
+        bool compatible = compatible_material(filament, record);
+        bool selected = compatible && !strcmp(jstr(app.mapping, app.mapping_tool, ""), slot);
+        lv_obj_t *item = button_fixed(list, "", 0, y, 673, 88, action, selected);
+        colour_swatch(item, 16, 24, jstr(record, "color", "828b98"), 40);
+        text(item, jstr(record, "type", "Unknown material"), 76, 17, 450, &font_ui_20, false);
+        text(item, source, 76, 54, 450, &font_ui_14, true);
+        if (!compatible) {
+            lv_obj_add_state(item, LV_STATE_DISABLED);
+            lv_obj_set_style_opa(item, 160, 0);
+        }
+        if (selected)
+            icon(item, "check", 624, 29, 28, app.accent);
+        y += 96;
+    }
+    if (!y)
+        text(list, "No available filaments with known material and color.", 18, 50, 620,
+             &font_ui_20, true);
+}
+
+static void settings_view(void) {
+    ui_tabs(true, "settings");
+    row(app.content, 100, "Display & appearance", "›", "Brightness and highlights",
+        "route:display");
+    row(app.content, 212, "Light & idle timers", "›", "Automatic switch-off", "route:timers");
+    if (fitted())
+        row(app.content, 324, "CFS preferences", "›", "Reading and automatic refill",
+            "route:refill");
+}
+static void choices(int y, const char *title, const char *key, const int *values,
+                    const char **labels, int count, int current) {
+    text(app.content, title, 2, y, 673, &font_ui_20, false);
+    int w = (674 - 10 * (count - 1)) / count;
+    for (int i = 0; i < count; i++) {
+        cJSON *r = request("preference");
+        cJSON_AddStringToObject(r, "key", key);
+        cJSON_AddNumberToObject(r, "value", values[i]);
+        char *a = encode(r);
+        button(app.content, labels[i], i * (w + 10), y + 32, w, 64, a, values[i] == current);
+        free(a);
+    }
+}
+static void display_view(void) {
+    int brightness[] = {25, 50, 75, 100};
+    const char *bl[] = {"25%", "50%", "75%", "100%"};
+    choices(78, "Brightness", "brightness", brightness, bl, 4,
+            (int)jnum(app.data, "prefs.brightness", 100));
+    text(app.content, "Highlights", 2, 198, 673, &font_ui_20, false);
+    const char *colors[] = {"#3d8bfd", "#d9434a", "#f39c12", "#27ae60", "#8e44ad", "#d9dfe8"};
+    for (int i = 0; i < 6; i++) {
+        cJSON *r = request("preference");
+        cJSON_AddStringToObject(r, "key", "accent");
+        cJSON_AddStringToObject(r, "value", colors[i]);
+        char *a = encode(r);
+        lv_obj_t *b = button_fixed(app.content, "", 6 + i * 112, 230, 101, 76, a,
+                                   !strcmp(S("prefs.accent"), colors[i]));
+        lv_obj_set_style_bg_color(b, colour(colors[i]), 0);
+        lv_obj_set_style_radius(b, 11, 0);
+        lv_obj_set_style_border_width(b, 2, 0);
+        if (!strcmp(S("prefs.accent"), colors[i])) {
+            lv_obj_set_style_outline_color(b, app.accent, 0);
+            lv_obj_set_style_outline_width(b, 3, 0);
+            lv_obj_set_style_outline_pad(b, 3, 0);
+        }
+        free(a);
+    }
+}
+static void timers_view(void) {
+    int light[] = {0, 300, 600, 1800}, idle[] = {900, 1800, 3600, 86400};
+    int sleep[] = {120, 300, 600, 0};
+    const char *sl[] = {"2 min", "5 min", "10 min", "Never"};
+    const char *ll[] = {"Never", "5 min", "10 min", "30 min"},
+               *il[] = {"15 min", "30 min", "1 hour", "24 hours"};
+    choices(78, "Screen off", "sleep_after", sleep, sl, 4,
+            (int)jnum(app.data, "prefs.sleep_after", 600));
+    choices(198, "Light off", "light_off", light, ll, 4,
+            (int)jnum(app.data, "prefs.light_off", 300));
+    choices(318, "Idle shutdown", "idle", idle, il, 4, (int)jnum(app.data, "prefs.idle", 1800));
+}
+
+static void refill_view(void) {
+    if (ui_unavailable("CFS preferences", "changing CFS preferences"))
+        return;
+    if (!fitted()) {
+        center_message("No CFS installed", "CFS preferences require a connected CFS.", NULL, NULL);
+        return;
+    }
+    const char *labels[] = {"Insertion detection", "Startup detection", "Auto refill"},
+               *keys[] = {"cfs_insertion_read", "cfs_startup_read", "cfs_auto_refill"},
+               *details[] = {"Read filament information when a spool is inserted.",
+                             "Read filament information when the printer starts.", ""};
+    for (int i = 0; i < 3; i++) {
+        char path[80];
+        snprintf(path, sizeof(path), "prefs.%s", keys[i]);
+        bool enabled = jbool(app.data, path, i != 1);
+        row(app.content, 90 + i * 82, labels[i], "", details[i], NULL);
+        cJSON *r = request("preference");
+        cJSON_AddStringToObject(r, "key", keys[i]);
+        cJSON_AddBoolToObject(r, "value", !enabled);
+        char *a = encode(r);
+        button_fixed(app.content, enabled ? "On" : "Off", 558, 99 + i * 82, 116, 60, a, enabled);
+        free(a);
+    }
+    row(app.content, 348, "Auto refill sequence", "›", "", "route:refill_sequence");
+}
+static void refill_sequence(void) {
+    lv_obj_t *list = scroll_area(88, 462);
+    cJSON *group;
+    int y = 0;
+    cJSON_ArrayForEach(group, J("refill")) {
+        char line[300] = "";
+        cJSON *slot;
+        cJSON_ArrayForEach(slot, group) {
+            if (*line)
+                strncat(line, " → ", sizeof(line) - strlen(line) - 1);
+            strncat(line, slot_label(slot->valuestring), sizeof(line) - strlen(line) - 1);
+        }
+        row(list, y, line, "", "Matching material and colour", NULL);
+        y += 82;
+    }
+    if (!y)
+        text(list,
+             "No matching loaded filaments. Refill becomes available when two or more loaded slots "
+             "have the same material and colour.",
+             20, 60, 620, &font_ui_20, true);
+}
+static void network_view(void) {
+    ui_tabs(true, "network");
+    const char *lan = S("platform.interfaces.ethernet.address");
+    row(app.content, 100, "Ethernet", "›", *lan ? lan : "Cable disconnected", "route:ethernet");
+    const char *wifi = S("wifi.ssid");
+    row(app.content, 212, "Wi-Fi", "›", *wifi ? wifi : "Not connected", "route:wifi");
+}
+static void ethernet_view(void) {
+    row(app.content, 90, "Connection",
+        *S("platform.interfaces.ethernet.address") ? "Connected" : "Cable disconnected", "", NULL);
+    if (*S("platform.interfaces.ethernet.address")) {
+        row(app.content, 168, "IP address", S("platform.interfaces.ethernet.address"), "", NULL);
+        row(app.content, 246, "Address assignment", "Automatic (DHCP)", "", NULL);
+    }
+}
+static void wifi_view(void) {
+    row(app.content, 90, "Network", *S("wifi.ssid") ? S("wifi.ssid") : "Not connected", "", NULL);
+    row(app.content, 168, "IP address", S("wifi.ip_address"), "", NULL);
+    row(app.content, 246, "Signal", S("wifi.rssi"), "", NULL);
+    footer(NULL, NULL, "Connect to Wi-Fi", "scan_wifi");
+}
+static void wifi_networks(void) {
+    lv_obj_t *list = scroll_area(88, 388);
+    cJSON *net;
+    int y = 0;
+    cJSON_ArrayForEach(net, J("wifi.networks")) {
+        cJSON *ssid = cJSON_GetArrayItem(net, 0), *signal = cJSON_GetArrayItem(net, 1),
+              *secure = cJSON_GetArrayItem(net, 2);
+        if (!cJSON_IsString(ssid))
+            continue;
+        char detail[100];
+        snprintf(detail, sizeof(detail), "%.0f dBm · %s", signal ? signal->valuedouble : 0,
+                 cJSON_IsTrue(secure) ? "Secured" : "Open network");
+        cJSON *r = cJSON_CreateObject();
+        cJSON_AddStringToObject(r, "ssid", ssid->valuestring);
+        cJSON_AddBoolToObject(r, "secured", cJSON_IsTrue(secure));
+        char *json = encode(r);
+        char *action = malloc(strlen(json) + 20);
+        sprintf(action, "wifi_select:%s", json);
+        row(list, y, ssid->valuestring, "›", detail, action);
+        free(action);
+        free(json);
+        y += 82;
+    }
+    if (!y)
+        text(list, B("wifi.busy") ? "Scanning available networks…" : "No networks found", 20, 60,
+             620, &font_ui_20, true);
+    footer(NULL, NULL, "Scan again", "scan_wifi");
+}
+static void timelapse_view(void) {
+    ui_tabs(true, "timelapse");
+    if (!has("platform.timelapse")) {
+        center_message("Time-lapse unavailable",
+                       "The Moonraker time-lapse component is not installed.", NULL, NULL);
+        return;
+    }
+    row(app.content, 100, "Time-lapse", B("platform.timelapse.enabled") ? "On" : "Off", "",
+        "toggle_timelapse");
+    row(app.content, 212, "Recordings & USB export", "›", "Saved time-lapse videos", "recordings");
+}
+static void recordings_view(void) {
+    lv_obj_t *list = scroll_area(88, 462);
+    cJSON *record;
+    int y = 0;
+    cJSON_ArrayForEach(record, J("platform.recordings")) {
+        const char *path = jstr(record, "path", "");
+        cJSON *r = request("export");
+        cJSON_AddStringToObject(r, "path", path);
+        char *a = encode(r);
+        lv_obj_t *item =
+            button_fixed(list, "", 0, y, 673, 78, B("platform.usb.mounted") ? a : NULL, false);
+        lv_obj_set_style_bg_opa(item, 0, 0);
+        lv_obj_set_style_border_side(item, LV_BORDER_SIDE_BOTTOM, 0);
+        lv_obj_set_style_radius(item, 0, 0);
+        if (!B("platform.usb.mounted")) {
+            lv_obj_clear_flag(item, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_clear_state(item, LV_STATE_DISABLED);
+            lv_obj_set_style_opa(item, 255, 0);
+        }
+        lv_obj_t *name = text(item, path, 16, 12, 552, &font_ui_18, false);
+        lv_obj_set_height(name, 26);
+        lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
+        text(item, B("platform.usb.mounted") ? "Export to USB" : "", 16, 44, 552, &font_ui_14,
+             true);
+        free(a);
+        r = request("delete_recording");
+        cJSON_AddStringToObject(r, "path", path);
+        char *payload = encode(r);
+        size_t size = strlen(payload) + 16;
+        a = malloc(size);
+        snprintf(a, size, "file_delete:%s", payload);
+        button_fixed(list, "icon:trash-2", 600, y + 7, 64, 64, a, false);
+        free(a);
+        free(payload);
+        y += 82;
+    }
+    if (!y)
+        text(list, "No recordings available", 20, 60, 620, &font_ui_20, true);
+}
+static void storage_view(void) {
+    ui_tabs(true, "storage");
+    if (ui_unavailable("Storage changes", "changing or formatting storage"))
+        return;
+    row(app.content, 100, "Printer storage", S("platform.free"), "", NULL);
+    row(app.content, 212, "USB drive", has("platform.usb") ? "›" : "Not connected",
+        S("platform.usb.model"), has("platform.usb") ? "route:usb" : NULL);
+}
+static void usb_view(void) {
+    if (ui_unavailable("USB storage changes", "ejecting or formatting USB"))
+        return;
+    if (!has("platform.usb") || cJSON_IsNull(J("platform.usb"))) {
+        center_message("USB drive not connected", "Connect a USB drive.", NULL, NULL);
+        return;
+    }
+    row(app.content, 90, "Drive", S("platform.usb.model"), "", NULL);
+    row(app.content, 168, "Available space", S("platform.usb_free"), "", NULL);
+    footer("Eject USB", "{\"action\":\"usb_eject\"}", "Format USB…", "usb_format");
+}
+static void system_view(void) {
+    ui_tabs(true, "system");
+    const char *labels[] = {"Machine information", "Software version", "Time zone", "Help & logs",
+                            "Restart"};
+    const char *routes[] = {"machine", "software", "timezone", "help", "restart"};
+    for (int i = 0; i < 5; i++) {
+        char action[80];
+        snprintf(action, sizeof(action), "route:%s", routes[i]);
+        button(app.content, labels[i], (i % 2) * 342, 100 + (i / 2) * 116, 330, 100, action, false);
+    }
+}
+static void machine_view(void) {
+    lv_obj_t *list = scroll_area(77, 462);
+    int y = 0;
+    char value[240];
+#define INFO(label, value)                                                                         \
+    do {                                                                                           \
+        row(list, y, label, value, "", NULL);                                                      \
+        y += 82;                                                                                   \
+    } while (0)
+    INFO("Model", S("model"));
+    INFO("Language", "English");
+    INFO("Serial number", *S("platform.serial") ? S("platform.serial") : "Unavailable");
+    INFO("Klipper", S("status.webhooks.state"));
+    if (has("status.k2_motor_bus"))
+        INFO("Closed-loop motors", B("status.k2_motor_bus.motors_ready") ? "Ready" : "Not ready");
+    INFO("Homed axes", *S("status.toolhead.homed_axes") ? S("status.toolhead.homed_axes") : "None");
+    if (fitted()) {
+        int slots = cJSON_GetArraySize(J("status.hark_cfs_slots.map_targets"));
+        snprintf(value, sizeof(value), "%d configured slots", slots > 0 ? slots - 1 : 0);
+        INFO("CFS driver", value);
+    }
+    const char *address =
+        *S("wifi.ip_address") ? S("wifi.ip_address") : S("platform.interfaces.ethernet.address");
+    INFO("Network address", address);
+    if (has("settings.input_shaper")) {
+        snprintf(value, sizeof(value), "%s %.1f Hz / %s %.1f Hz",
+                 S("settings.input_shaper.shaper_type_x"), N("settings.input_shaper.shaper_freq_x"),
+                 S("settings.input_shaper.shaper_type_y"),
+                 N("settings.input_shaper.shaper_freq_y"));
+        INFO("Input shaper X / Y", value);
+    }
+    if (has("settings.extruder.pid_kp")) {
+        snprintf(value, sizeof(value), "%.2f / %.2f / %.2f", N("settings.extruder.pid_kp"),
+                 N("settings.extruder.pid_ki"), N("settings.extruder.pid_kd"));
+        INFO("Nozzle PID", value);
+    }
+    if (has("settings.printer.max_z_velocity")) {
+        snprintf(value, sizeof(value), "%.1f mm/s · %.0f mm/s²",
+                 N("settings.printer.max_z_velocity"), N("settings.printer.max_z_accel"));
+        INFO("Z limits", value);
+    }
+    if (*S("platform.stock_firmware"))
+        INFO("Stock base firmware", S("platform.stock_firmware"));
+#undef INFO
+}
+static void timezone_view(void) {
+    const char *current = *S("prefs.timezone") ? S("prefs.timezone") : S("platform.timezone");
+    const char *name = *current ? current : "Not available", *detail = "";
+    cJSON *zone;
+    cJSON_ArrayForEach(zone, J("timezone_presets")) {
+        if (!strcmp(jstr(zone, "id", ""), current)) {
+            name = jstr(zone, "name", current);
+            detail = jstr(zone, "label", "");
+            break;
+        }
+    }
+    char current_summary[240];
+    snprintf(current_summary, sizeof(current_summary), *detail ? "%s · %s" : "%s", name, detail);
+    text(app.content, "Current:", 0, 82, 70, &font_ui_14, true);
+    lv_obj_t *summary = text(app.content, current_summary, 72, 78, 601, &font_ui_18, false);
+    lv_obj_set_height(summary, 28);
+    lv_label_set_long_mode(summary, LV_LABEL_LONG_DOT);
+    lv_obj_t *list = scroll_area(114, 470);
+    int y = 0, selected_y = -1;
+    cJSON_ArrayForEach(zone, J("timezone_presets")) {
+        const char *id = jstr(zone, "id", "");
+        bool selected = !strcmp(id, app.timezone_draft);
+        if (selected)
+            selected_y = y;
+        char action[160], description[200];
+        snprintf(action, sizeof(action), "timezone_pick:%s", id);
+        const char *cities = jstr(zone, "cities", "");
+        snprintf(description, sizeof(description), *cities ? "%s · %s" : "%s",
+                 jstr(zone, "label", ""), cities);
+        row(list, y, jstr(zone, "name", jstr(zone, "label", "")),
+            !selected && !strcmp(id, current) ? "Current" : "", description, action);
+        lv_obj_t *item = lv_obj_get_child(list, -1);
+        lv_obj_set_height(item, 72);
+        if (selected) {
+            lv_obj_set_style_bg_color(item, lv_color_mix(app.accent, colour("151a22"), 38), 0);
+            lv_obj_set_style_bg_opa(item, LV_OPA_COVER, 0);
+            lv_obj_set_style_radius(item, 8, 0);
+            lv_obj_set_style_border_color(item, app.accent, 0);
+            lv_obj_set_style_border_side(item, LV_BORDER_SIDE_FULL, 0);
+            bool pending = strcmp(id, current) != 0;
+            if (pending) {
+                lv_obj_t *subtitle = lv_obj_get_child(item, 1);
+                lv_obj_set_width(subtitle, 540);
+                lv_obj_set_height(subtitle, 20);
+                lv_label_set_long_mode(subtitle, LV_LABEL_LONG_DOT);
+                lv_obj_t *apply = button(item, "Apply", 571, 14, 88, 60, "timezone_apply", true);
+                /* A smaller visible button retains a 52px-high touch target. */
+                lv_obj_set_size(apply, 88, 44);
+                lv_obj_set_pos(apply, 571, 14);
+                lv_obj_set_ext_click_area(apply, 4);
+            }
+        }
+        y += 76;
+    }
+    if (!y)
+        text(list, "Time zones unavailable", 12, 30, 640, &font_ui_20, true);
+    else if (selected_y >= 0) {
+        lv_obj_update_layout(list);
+        lv_obj_scroll_to_y(list, selected_y > 76 ? selected_y - 76 : 0, LV_ANIM_OFF);
+    }
+}
+
+static void history_view(bool errors) {
+    lv_obj_t *list = scroll_area(88, 462);
+    cJSON *events = J("events");
+    int y = 0;
+    if (!errors) {
+        cJSON *operation;
+        cJSON_ArrayForEach(operation, J("operations")) {
+            row(list, y, jstr(operation, "label", "Operation"), "In progress",
+                jstr(operation, "detail", ""), NULL);
+            y += 82;
+        }
+    }
+    for (int i = cJSON_GetArraySize(events) - 1; i >= 0; i--) {
+        cJSON *e = cJSON_GetArrayItem(events, i);
+        if (errors && !jbool(e, "fault", false))
+            continue;
+        time_t stamp = (time_t)jnum(e, "time", 0);
+        struct tm tm;
+        localtime_r(&stamp, &tm);
+        char title[260], when[30];
+        strftime(when, sizeof(when), "%H:%M", &tm);
+        snprintf(title, sizeof(title), "%s  %s", when, jstr(e, "title", ""));
+        row(list, y, title, "", jstr(e, "detail", ""), NULL);
+        y += 82;
+    }
+    if (!y)
+        text(list, errors ? "No errors recorded" : "No status messages yet", 20, 60, 620,
+             &font_ui_20, true);
+}
+static void plate_event(lv_event_t *e) {
+    lv_obj_t *object = lv_event_get_target(e);
+    lv_area_t area;
+    lv_obj_get_coords(object, &area);
+    double x0 = N("settings.bed_mesh.mesh_min.0"), y0 = N("settings.bed_mesh.mesh_min.1"),
+           x1 = N("settings.bed_mesh.mesh_max.0"), y1 = N("settings.bed_mesh.mesh_max.1");
+    if (x1 <= x0 || y1 <= y0)
+        return;
+    double span = fmax(x1 - x0, y1 - y0) / app.zoom;
+    int code = lv_event_get_code(e);
+    static lv_point_t origin;
+    static double ox, oy;
+    static bool drag;
+    if (code == LV_EVENT_PRESSED) {
+        lv_indev_get_point(lv_indev_get_act(), &origin);
+        ox = app.plate_x;
+        oy = app.plate_y;
+        drag = false;
+        return;
+    }
+    if (code == LV_EVENT_PRESSING) {
+        lv_point_t p;
+        lv_indev_get_point(lv_indev_get_act(), &p);
+        if (abs(p.x - origin.x) + abs(p.y - origin.y) > 8)
+            drag = true;
+        if (drag) {
+            double maximum = fmax(x1 - x0, y1 - y0) - span;
+            app.plate_x = fmax(0, fmin(maximum, ox - (p.x - origin.x) * span / 280));
+            app.plate_y = fmax(0, fmin(maximum, oy + (p.y - origin.y) * span / 280));
+            lv_obj_invalidate(object);
+        }
+        return;
+    }
+    cJSON *part;
+    cJSON_ArrayForEach(part, J("status.exclude_object.objects")) {
+        cJSON *poly = cJSON_GetObjectItemCaseSensitive(part, "polygon");
+        int n = cJSON_GetArraySize(poly);
+        if (n < 3 || n > 1024)
+            continue;
+        lv_point_t *points = malloc(sizeof(lv_point_t) * n);
+        if (!points)
+            return;
+        for (int i = 0; i < n; i++) {
+            cJSON *p = cJSON_GetArrayItem(poly, i);
+            points[i].x = area.x1 + (jnum(p, "0", x0) - x0 - app.plate_x) * 280 / span;
+            points[i].y = area.y1 + 280 - (jnum(p, "1", y0) - y0 - app.plate_y) * 280 / span;
+        }
+        const char *name = jstr(part, "name", "");
+        bool selected = false, excluded = false;
+        cJSON *entry;
+        cJSON_ArrayForEach(entry, app.object_selection) if (cJSON_IsString(entry) &&
+                                                            !strcmp(entry->valuestring, name))
+            selected = true;
+        cJSON_ArrayForEach(
+            entry, J("status.exclude_object.excluded_objects")) if (cJSON_IsString(entry) &&
+                                                                    !strcmp(entry->valuestring,
+                                                                            name)) excluded = true;
+        if (code == LV_EVENT_DRAW_MAIN) {
+            lv_draw_ctx_t *ctx = lv_event_get_draw_ctx(e);
+            lv_draw_line_dsc_t line;
+            lv_draw_line_dsc_init(&line);
+            line.color = excluded ? colour("777777") : selected ? app.accent : colour("a4aebb");
+            line.width = selected ? 3 : 2;
+            for (int i = 0; i < n; i++)
+                lv_draw_line(ctx, &line, &points[i], &points[(i + 1) % n]);
+        } else if (code == LV_EVENT_RELEASED && !drag && !excluded) {
+            lv_point_t p;
+            lv_indev_get_point(lv_indev_get_act(), &p);
+            bool inside = false;
+            for (int i = 0, j = n - 1; i < n; j = i++) {
+                if (((points[i].y > p.y) != (points[j].y > p.y)) &&
+                    (p.x < (double)(points[j].x - points[i].x) * (p.y - points[i].y) /
+                                   (points[j].y - points[i].y) +
+                               points[i].x))
+                    inside = !inside;
+            }
+            if (inside) {
+                if (selected) {
+                    int index = 0;
+                    cJSON_ArrayForEach(entry, app.object_selection) {
+                        if (cJSON_IsString(entry) && !strcmp(entry->valuestring, name)) {
+                            cJSON_DeleteItemFromArray(app.object_selection, index);
+                            break;
+                        }
+                        index++;
+                    }
+                } else
+                    cJSON_AddItemToArray(app.object_selection, cJSON_CreateString(name));
+                lv_obj_invalidate(object);
+                app.dirty = true;
+                free(points);
+                return;
+            }
+        }
+        free(points);
+    }
+}
+static void objects_view(void) {
+    if (!app.printing && !app.paused) {
+        center_message("No print in progress", "Object exclusion becomes available during a print.",
+                       "Back to print", "route:home");
+        return;
+    }
+    if (!cJSON_GetArraySize(J("status.exclude_object.objects"))) {
+        center_message("Object definitions unavailable",
+                       "This G-code does not contain selectable object contours.", "Back to print",
+                       "route:home");
+        return;
+    }
+    lv_obj_t *plate = box(app.content, 174, 88, 282, 282, false);
+    lv_obj_add_flag(plate, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(plate, plate_event, LV_EVENT_ALL, NULL);
+    button(app.content, "icon:zoom-in", 474, 96, 56, 56, "zoom:in", false);
+    button(app.content, "icon:zoom-out", 474, 166, 56, 56, "zoom:out", false);
+    button(app.content, "icon:maximize", 474, 236, 56, 56, "zoom:fit", false);
+    footer("Back", "back", "Skip selected", "exclude");
+}
+void views_render(void) {
+    const char *p = app.route;
+    const char *title = "Settings";
+    if (!strcmp(p, "move") || !strcmp(p, "heat") || !strcmp(p, "fans") || !strcmp(p, "filament") ||
+        !strcmp(p, "tune") || !strcmp(p, "calibration"))
+        title = "Printer controls";
+    else if (!strcmp(p, "files"))
+        title = "Files";
+    else if (!strcmp(p, "file"))
+        title = "Print file";
+    else if (!strcmp(p, "mapping_pick")) {
+        static char mapping_title[128];
+        const char *type = jstr(mapping_filament(), "type", "");
+        snprintf(mapping_title, sizeof(mapping_title),
+                 *type ? "Select filament: %s" : "Select filament", type);
+        title = mapping_title;
+    } else if (!strncmp(p, "mapping", 7))
+        title = "Select filaments";
+    else if (!strcmp(p, "edit"))
+        title = "Filament settings";
+    else if (!strcmp(p, "materials"))
+        title = "Choose material";
+    else if (!strcmp(p, "colors"))
+        title = "Choose colour";
+    else if (!strcmp(p, "refill"))
+        title = "CFS preferences";
+    else if (!strcmp(p, "refill_sequence"))
+        title = "Auto refill sequence";
+    else if (!strcmp(p, "display"))
+        title = "Display & appearance";
+    else if (!strcmp(p, "timers"))
+        title = "Light & idle timers";
+    else if (!strcmp(p, "wifi"))
+        title = "Wi-Fi";
+    else if (!strcmp(p, "networks"))
+        title = "Choose Wi-Fi";
+    else if (!strcmp(p, "ethernet"))
+        title = "Ethernet";
+    else if (!strcmp(p, "recordings"))
+        title = "Time-lapse recordings";
+    else if (!strcmp(p, "usb"))
+        title = "USB drive";
+    else if (!strcmp(p, "machine"))
+        title = "Machine information";
+    else if (!strcmp(p, "software"))
+        title = "Software version";
+    else if (!strcmp(p, "timezone"))
+        title = "Time zone";
+    else if (!strcmp(p, "restart"))
+        title = "Restart";
+    else if (!strcmp(p, "save"))
+        title = "Save configuration";
+    else if (!strcmp(p, "history"))
+        title = "Status history";
+    else if (!strcmp(p, "errors"))
+        title = "Recent errors";
+    else if (!strcmp(p, "help"))
+        title = "Help & logs";
+    else if (!strcmp(p, "objects"))
+        title = "Print objects";
+    else if (!strcmp(p, "language"))
+        title = "Language";
+    char edit_title[80];
+    if (!strcmp(p, "edit")) {
+        snprintf(edit_title, sizeof(edit_title), "Slot %s", slot_label(app.selected_slot));
+        title = edit_title;
+    }
+    ui_header(title);
+    if (!strcmp(p, "move"))
+        move_view();
+    else if (!strcmp(p, "heat"))
+        heat_view();
+    else if (!strcmp(p, "fans"))
+        fans_view();
+    else if (!strcmp(p, "filament"))
+        filament_view();
+    else if (!strcmp(p, "edit"))
+        edit_view();
+    else if (!strcmp(p, "materials"))
+        materials_view();
+    else if (!strcmp(p, "colors"))
+        colors_view();
+    else if (!strcmp(p, "tune"))
+        tune_view();
+    else if (!strcmp(p, "calibration"))
+        calibration_view();
+    else if (!strcmp(p, "files"))
+        files_view();
+    else if (!strcmp(p, "file"))
+        file_view();
+    else if (!strcmp(p, "mapping"))
+        mapping_view();
+    else if (!strcmp(p, "mapping_pick"))
+        mapping_pick();
+    else if (!strcmp(p, "settings"))
+        settings_view();
+    else if (!strcmp(p, "display"))
+        display_view();
+    else if (!strcmp(p, "timers"))
+        timers_view();
+    else if (!strcmp(p, "refill"))
+        refill_view();
+    else if (!strcmp(p, "refill_sequence"))
+        refill_sequence();
+    else if (!strcmp(p, "network"))
+        network_view();
+    else if (!strcmp(p, "wifi"))
+        wifi_view();
+    else if (!strcmp(p, "ethernet"))
+        ethernet_view();
+    else if (!strcmp(p, "networks"))
+        wifi_networks();
+    else if (!strcmp(p, "timelapse"))
+        timelapse_view();
+    else if (!strcmp(p, "recordings"))
+        recordings_view();
+    else if (!strcmp(p, "storage"))
+        storage_view();
+    else if (!strcmp(p, "usb"))
+        usb_view();
+    else if (!strcmp(p, "system"))
+        system_view();
+    else if (!strcmp(p, "machine"))
+        machine_view();
+    else if (!strcmp(p, "timezone"))
+        timezone_view();
+    else if (!strcmp(p, "objects"))
+        objects_view();
+    else if (!strcmp(p, "history"))
+        history_view(false);
+    else if (!strcmp(p, "errors"))
+        history_view(true);
+    else if (!strcmp(p, "restart")) {
+        row(app.content, 90, "Restart Klipper", "›", "", "restart:klipper");
+        row(app.content, 168, "Firmware restart", "›", "", "restart:firmware");
+    } else if (!strcmp(p, "software")) {
+        row(app.content, 90, "OpenKlipper",
+            *S("platform.version") ? S("platform.version") : "Installed custom fork", "", NULL);
+        row(app.content, 168, "Touchscreen", "Native LVGL", "", NULL);
+        row(app.content, 246, "Build",
+            *S("platform.screen_version") ? S("platform.screen_version") : "Development", "", NULL);
+    } else if (!strcmp(p, "language")) {
+        row(app.content, 90, "Language", "English", "", NULL);
+    } else if (!strcmp(p, "help")) {
+        row(app.content, 90, "Recent errors", "›", "Messages and recovery details", "route:errors");
+        row(app.content, 168, "Status history", "›", "", "route:history");
+        row(app.content, 246, "Export logs to USB", "›", "", "export_logs");
+    } else if (!strcmp(p, "save")) {
+        if (!ui_unavailable("Saving configuration", "saving configuration and restarting"))
+            center_message("Save configuration?",
+                           "Saves pending calibration changes and restarts Klipper. Homing will be "
+                           "required afterward.",
+                           "Save and restart", "save_config");
+    }
+}
+static double temp_value, temp_min, temp_max;
+static char temp_key[40], temp_title[100];
+static bool temp_draft_editor;
+static void temperature_sheet(void) {
+    modal_frame(temp_title, 120, 61, 560, 358, false);
+    char value[40];
+    snprintf(value, sizeof(value), temp_value ? "%g°C" : "Off", temp_value);
+    button(app.body, "−5", 24, 92, 64, 80, "temp_delta:-5", false);
+    lv_obj_t *window = button(app.body, "", 98, 92, 364, 80, "temp_input", false);
+    lv_obj_set_style_bg_color(window, colour("07090c"), 0);
+    centered(text(window, "Target", 0, 13, lv_obj_get_width(window), &font_ui_15, true));
+    lv_point_t metrics;
+    lv_txt_get_size(&metrics, value, &font_ui_25, 0, 0, 1000, LV_TEXT_FLAG_NONE);
+    int x = (lv_obj_get_width(window) - metrics.x - 28) / 2;
+    text(window, value, x, 36, metrics.x + 2, &font_ui_25, false);
+    icon(window, "pencil", x + metrics.x + 12, 44, 16, colour("a4aebb"));
+    button(app.body, "+5", 472, 92, 64, 80, "temp_delta:5", false);
+    double nozzle[] = {0, 140, 220, 250}, bed[] = {0, 35, 60, 90}, chamber[] = {0, 35, 45, 50, 60},
+           filament[] = {200, 220, 250, 280};
+    double *presets = temp_draft_editor                 ? filament
+                      : !strcmp(temp_key, "chamber")    ? chamber
+                      : !strcmp(temp_key, "heater_bed") ? bed
+                                                        : nozzle;
+    int preset_count = presets == chamber ? 5 : 4;
+    int count = 0;
+    for (int i = 0; i < preset_count; i++)
+        if (presets[i] >= temp_min && presets[i] <= temp_max)
+            count++;
+    int left = (560 - (count * 82 - 10)) / 2 - 1, index = 0;
+    for (int i = 0; i < preset_count; i++) {
+        if (presets[i] < temp_min || presets[i] > temp_max)
+            continue;
+        char a[60], label[40];
+        snprintf(a, sizeof(a), "temp_draft:%g", presets[i]);
+        snprintf(label, sizeof(label), presets[i] ? "%g°C" : "Off", presets[i]);
+        button(app.body, label, left + index++ * 82, 186, 72, 60, a, temp_value == presets[i]);
+    }
+    button(app.body, "Cancel", 24, 282, 230, 56, "close", false);
+    button(app.body, "Set temperature", 306, 282, 230, 56, "temp_set", true);
+}
+static lv_obj_t *keyboard_input;
+static bool keyboard_symbols, keyboard_shift;
+static void keyboard_draw(void) {
+    modal_frame(app.keyboard_title, 84, 0, 716, 480, false);
+    app.keyboard_visible = true;
+    keyboard_input = lv_textarea_create(app.body);
+    lv_obj_set_pos(keyboard_input, 18, 70);
+    lv_obj_set_size(keyboard_input, 680, 60);
+    lv_textarea_set_one_line(keyboard_input, true);
+    lv_textarea_set_text(keyboard_input, app.keyboard_value);
+    lv_textarea_set_password_mode(keyboard_input,
+                                  !strcmp(app.keyboard_kind, "wifi") && !app.password_visible);
+    lv_obj_set_style_text_font(keyboard_input, &font_ui_20, 0);
+    lv_obj_set_style_bg_color(keyboard_input, colour("151a22"), 0);
+    lv_obj_set_style_bg_opa(keyboard_input, 255, 0);
+    lv_obj_set_style_text_color(keyboard_input, colour("f0f3f7"), 0);
+    lv_obj_set_style_border_color(keyboard_input, colour("343e4b"), 0);
+    if (!strcmp(app.keyboard_kind, "wifi"))
+        button(app.body, app.password_visible ? "icon:eye" : "icon:eye-off", 634, 73, 60, 54,
+               "key_eye", false);
+    const char *letters[] = {"qwertyuiop", "asdfghjkl", "zxcvbnm"},
+               *symbols[] = {"1234567890", "!@#$%^&*()", "-_=+[]{};:"};
+    for (int r = 0; r < 3; r++) {
+        const char *row = keyboard_symbols ? symbols[r] : letters[r];
+        int n = strlen(row), w = (680 - (n - 1) * 6) / n;
+        for (int i = 0; i < n; i++) {
+            char caption[2] = {row[i], 0}, action[20];
+            if (keyboard_shift && caption[0] >= 'a' && caption[0] <= 'z')
+                caption[0] -= 32;
+            snprintf(action, sizeof(action), "key:%s", caption);
+            button(app.body, caption, 18 + i * (w + 6), 144 + r * 54, w, 48, action, false);
+        }
+    }
+    button(app.body, keyboard_symbols ? "ABC" : "?123", 18, 310, 100, 48, "key_symbols", false);
+    button(app.body, "Shift", 128, 310, 100, 48, "key_shift", keyboard_shift);
+    button(app.body, "Space", 238, 310, 220, 48, "key: ", false);
+    button(app.body, "icon:delete", 468, 310, 100, 48, "key_back", false);
+    button(app.body, "More", 578, 310, 120, 48, "key_more", false);
+    button(app.body, "Cancel", 18, 402, 230, 60, "close", false);
+    button(app.body, !strcmp(app.keyboard_kind, "wifi") ? "Connect" : "Set colour", 458, 402, 240,
+           60, "key_done", true);
+}
+void ui_keyboard(const char *title, const char *kind, const char *value) {
+    snprintf(app.keyboard_title, sizeof(app.keyboard_title), "%s", title);
+    snprintf(app.keyboard_kind, sizeof(app.keyboard_kind), "%s", kind);
+    snprintf(app.keyboard_value, sizeof(app.keyboard_value), "%s", value);
+    keyboard_symbols = keyboard_shift = false;
+    keyboard_draw();
+}
+bool views_control_key(const char *action, char *key, size_t size) {
+    const char *a = !strcmp(action, "confirmed") ? app.confirm : action;
+    if (!strncmp(a, "file_open:", 10))
+        a += 10;
+    else if (!strncmp(a, "file_delete:", 12)) {
+        cJSON *r = cJSON_Parse(a + 12);
+        snprintf(key, size, "%s",
+                 !strcmp(jstr(r, "action", ""), "delete_recording") ? "delete_recording"
+                                                                    : "delete_file");
+        cJSON_Delete(r);
+        return true;
+    }
+    if (*a == '{') {
+        cJSON *r = cJSON_Parse(a);
+        if (!r)
+            return false;
+        const char *name = jstr(r, "action", "");
+        const char *arg = !strcmp(name, "temperature") ? jstr(r, "heater", "")
+                          : !strcmp(name, "fan")       ? jstr(r, "fan", "")
+                          : (!strcmp(name, "jog") || !strcmp(name, "position"))
+                              ? jstr(r, "axis", "")
+                          : !strcmp(name, "preference") ? jstr(r, "key", "")
+                                                        : "";
+        snprintf(key, size, *arg ? "%s:%s" : "%s", name, arg);
+        cJSON_Delete(r);
+        return *key != 0;
+    }
+    if (!strncmp(a, "jog:", 4) || !strncmp(a, "position:", 9)) {
+        bool jog = !strncmp(a, "jog:", 4);
+        snprintf(key, size, "%s:%c", jog ? "jog" : "position", a[jog ? 4 : 9]);
+        return true;
+    }
+    if (!strncmp(a, "temperature:", 12) || !strncmp(a, "fan:", 4)) {
+        snprintf(key, size, "%s", a);
+        return true;
+    }
+    if (!strncmp(a, "plr:", 4)) {
+        snprintf(key, size, "plr");
+        return true;
+    }
+    if (!strcmp(a, "key_done") && !strcmp(app.keyboard_kind, "wifi")) {
+        snprintf(key, size, "wifi_join");
+        return true;
+    }
+    if (!strcmp(a, "route:materials") || !strcmp(a, "route:colors") || !strcmp(a, "color_hex") ||
+        !strncmp(a, "material:", 9) || !strncmp(a, "color:", 6) ||
+        (!strcmp(a, "key_done") && !strcmp(app.keyboard_kind, "color"))) {
+        snprintf(key, size, "slot_save");
+        return true;
+    }
+    if (!strcmp(a, "temp_set") || !strcmp(a, "temp_input") || !strncmp(a, "temp_delta:", 11) ||
+        !strncmp(a, "temp_draft:", 11)) {
+        if (temp_draft_editor)
+            snprintf(key, size, "slot_save");
+        else
+            snprintf(key, size, "temperature:%s", temp_key);
+        return true;
+    }
+    if (!strcmp(a, "number:Set")) {
+        if (!strcmp(app.number_kind, "temperature")) {
+            snprintf(key, size, "temperature:%s", app.number_key);
+            return true;
+        }
+        if (!strcmp(app.number_kind, "position"))
+            snprintf(key, size, "position:%s", app.number_key);
+        else
+            snprintf(key, size, "%s", !strcmp(app.number_kind, "draft") ? "slot_save" : "tune");
+        return true;
+    }
+    if (!strncmp(a, "restart:", 8)) {
+        snprintf(key, size, "%s", !strcmp(a + 8, "firmware") ? "firmware_restart" : "restart");
+        return true;
+    }
+    if (!strcmp(a, "calibrate:save"))
+        return false;
+    const char *pairs[][2] = {{"jog:", "jog"},         {"position:", "position"},
+                              {"extrude:", "extrude"}, {"calibrate:", "calibrate"},
+                              {"tune:", "tune"},       {"tune_input:", "tune"}};
+    for (unsigned i = 0; i < sizeof(pairs) / sizeof(pairs[0]); i++)
+        if (!strncmp(a, pairs[i][0], strlen(pairs[i][0]))) {
+            snprintf(key, size, "%s", pairs[i][1]);
+            return true;
+        }
+    const char *names[][2] = {{"usb_format", "usb_format"},
+                              {"load", "load"},
+                              {"unload", "unload"},
+                              {"edit_slot", "slot_save"},
+                              {"save_slot", "slot_save"},
+                              {"draft_temperature", "slot_save"},
+                              {"motor_toggle", "motors"},
+                              {"start_print", "start"},
+                              {"delete_file", "delete_file"},
+                              {"cancel_print", "cancel"},
+                              {"save_config", "save_config"},
+                              {"exclude", "exclude"},
+                              {"scan_wifi", "wifi_scan"},
+                              {"timezone_apply", "timezone"},
+                              {"refresh_files", "files"},
+                              {"recordings", "recordings"},
+                              {"toggle_timelapse", "timelapse"}};
+    for (unsigned i = 0; i < sizeof(names) / sizeof(names[0]); i++)
+        if (!strcmp(a, names[i][0])) {
+            snprintf(key, size, "%s", names[i][1]);
+            return true;
+        }
+    return false;
+}
+void views_action(const char *a) {
+    if (!strncmp(a, "timezone_pick:", 14)) {
+        cJSON *zone;
+        cJSON_ArrayForEach(zone, J("timezone_presets")) {
+            if (!strcmp(jstr(zone, "id", ""), a + 14)) {
+                snprintf(app.timezone_draft, sizeof(app.timezone_draft), "%s", a + 14);
+                app.dirty = true;
+                break;
+            }
+        }
+    } else if (!strcmp(a, "timezone_apply")) {
+        const char *current = *S("prefs.timezone") ? S("prefs.timezone") : S("platform.timezone");
+        if (*app.timezone_draft && strcmp(app.timezone_draft, current)) {
+            cJSON *r = request("timezone");
+            cJSON_AddStringToObject(r, "name", app.timezone_draft);
+            ui_send(r);
+        }
+    } else if (!strncmp(a, "extrude:", 8)) {
+        cJSON *r = request("extrude");
+        cJSON_AddNumberToObject(r, "value", app.step * strtod(a + 8, NULL));
+        ui_send(r);
+    } else if (!strncmp(a, "step:", 5)) {
+        app.step = strtod(a + 5, NULL);
+        app.dirty = true;
+    } else if (!strncmp(a, "jog:", 4)) {
+        char axis = a[4];
+        double sign = strtod(a + 6, NULL);
+        cJSON *r = request("jog");
+        char key[2] = {axis, 0};
+        cJSON_AddStringToObject(r, "axis", key);
+        cJSON_AddNumberToObject(r, "value", app.step * sign);
+        ui_send(r);
+    } else if (!strncmp(a, "position:", 9)) {
+        char axis = a[9], path[80], title[50], key[2] = {axis, 0};
+        snprintf(path, sizeof(path), "axes.%c", axis + 32);
+        cJSON *limits = J(path);
+        if (!cJSON_IsObject(limits)) {
+            ui_notice("Position unavailable", "Configured axis limits could not be read.");
+            return;
+        }
+        snprintf(title, sizeof(title), "%c position", axis);
+        int index = axis == 'X' ? 0 : axis == 'Y' ? 1 : 2;
+        cJSON *p = cJSON_GetArrayItem(J("status.gcode_move.gcode_position"), index);
+        ui_number(title, "position", key, cJSON_IsNumber(p) ? p->valuedouble : 0,
+                  jnum(limits, "minimum", 0), jnum(limits, "maximum", 0));
+    } else if (!strncmp(a, "temperature:", 12)) {
+        temp_draft_editor = false;
+        const char *key = a + 12;
+        cJSON *h;
+        cJSON_ArrayForEach(h, J("heaters")) if (!strcmp(jstr(h, "key", ""), key)) {
+            cJSON *limits = cJSON_GetObjectItemCaseSensitive(h, "limits");
+            if (!cJSON_IsObject(limits)) {
+                ui_notice("Temperature control unavailable",
+                          "Configured limits could not be read.");
+                return;
+            }
+            snprintf(temp_title, sizeof(temp_title), "%s temperature", jstr(h, "label", "Heater"));
+            snprintf(temp_key, sizeof(temp_key), "%s", key);
+            temp_min = jnum(limits, "minimum", 0);
+            temp_max = jnum(limits, "maximum", 0);
+            temp_value = jnum(h, "target", 0);
+            temperature_sheet();
+            break;
+        }
+    } else if (!strncmp(a, "temp_delta:", 11)) {
+        temp_value = fmax(temp_min, fmin(temp_max, temp_value + strtod(a + 11, NULL)));
+        temperature_sheet();
+    } else if (!strncmp(a, "temp_draft:", 11)) {
+        temp_value = strtod(a + 11, NULL);
+        temperature_sheet();
+    } else if (!strcmp(a, "temp_input"))
+        ui_number(temp_title, temp_draft_editor ? "draft" : "temperature", temp_key, temp_value,
+                  temp_min, temp_max);
+    else if (!strcmp(a, "temp_set")) {
+        close_modal();
+        if (temp_draft_editor) {
+            cJSON_DeleteItemFromObject(app.draft, "nozzle_temp");
+            cJSON_AddNumberToObject(app.draft, "nozzle_temp", temp_value);
+            app.edit_dirty = true;
+            app.dirty = true;
+            return;
+        }
+        cJSON *r = request("temperature");
+        cJSON_AddStringToObject(r, "heater", temp_key);
+        cJSON_AddNumberToObject(r, "value", temp_value);
+        ui_send(r);
+    } else if (!strncmp(a, "slot:", 5)) {
+        snprintf(app.selected_slot, sizeof(app.selected_slot), "%s", a + 5);
+        app.dirty = true;
+    } else if (!strcmp(a, "edit_slot")) {
+        cJSON_Delete(app.draft);
+        app.draft = cJSON_Duplicate(slot_record(app.selected_slot), true);
+        if (!app.draft)
+            app.draft = cJSON_CreateObject();
+        app.edit_dirty = false;
+        ui_route("edit", false);
+    } else if (!strcmp(a, "cancel_edit")) {
+        if (app.edit_dirty) {
+            snprintf(app.pending_route, sizeof(app.pending_route), "filament");
+            ui_confirm("Discard unsaved filament changes?", "discard");
+        } else
+            ui_route("filament", false);
+    } else if (!strcmp(a, "save_slot")) {
+        cJSON *r = request("slot_save");
+        cJSON_AddStringToObject(r, "slot", app.selected_slot);
+        cJSON_AddItemToObject(r, "record", cJSON_Duplicate(app.draft, true));
+        ui_send(r);
+    } else if (!strncmp(a, "filter:", 7)) {
+        snprintf(app.filter, sizeof(app.filter), "%s", a + 7);
+        app.dirty = true;
+    } else if (!strncmp(a, "material:", 9)) {
+        cJSON *material = cJSON_Parse(a + 9);
+        if (material) {
+            const char *fields[] = {"name", "type", "nozzle_temp"};
+            for (int i = 0; i < 3; i++) {
+                cJSON *v = cJSON_GetObjectItemCaseSensitive(material, fields[i]);
+                if (v) {
+                    cJSON_DeleteItemFromObject(app.draft, fields[i]);
+                    cJSON_AddItemToObject(app.draft, fields[i], cJSON_Duplicate(v, true));
+                }
+            }
+            cJSON_Delete(material);
+            app.edit_dirty = true;
+            ui_route("edit", false);
+        }
+    } else if (!strncmp(a, "color:", 6)) {
+        cJSON_DeleteItemFromObject(app.draft, "color");
+        cJSON_AddStringToObject(app.draft, "color", a + 6);
+        app.edit_dirty = true;
+        ui_route("edit", false);
+    } else if (!strcmp(a, "color_hex"))
+        ui_keyboard("Hex colour", "color", jstr(app.draft, "color", ""));
+    else if (!strcmp(a, "draft_temperature")) {
+        cJSON *settings = J("settings.extruder");
+        double min = fmax(0, jnum(settings, "min_extrude_temp", 0)),
+               max = jnum(settings, "max_temp", 0);
+        if (max < min) {
+            ui_notice("Temperature unavailable", "Configured limits could not be read.");
+            return;
+        }
+        temp_draft_editor = true;
+        snprintf(temp_title, sizeof(temp_title), "Nozzle temperature");
+        snprintf(temp_key, sizeof(temp_key), "extruder");
+        temp_value = jnum(app.draft, "nozzle_temp", min);
+        temp_min = min;
+        temp_max = max;
+        temperature_sheet();
+    } else if (!strcmp(a, "load")) {
+        if (!strcmp(app.selected_slot, "E") &&
+            !B("status.filament_switch_sensor filament_sensor.filament_detected") &&
+            !*S("status.k2_cfs.active_slot")) {
+            cJSON *r = request("load");
+            cJSON_AddStringToObject(r, "slot", "E");
+            cJSON_AddBoolToObject(r, "inserted", true);
+            confirmed("Connect the spool-holder tube and insert external filament toward the "
+                      "extruder before continuing.",
+                      r);
+        } else {
+            cJSON *r = request("load");
+            cJSON_AddStringToObject(r, "slot", app.selected_slot);
+            ui_send(r);
+        }
+    } else if (!strcmp(a, "home_filament_strip")) {
+        ui_route("filament", false);
+    } else if (!strcmp(a, "home_history")) {
+        ui_route("history", false);
+    } else if (!strcmp(a, "home_fans")) {
+        ui_route("fans", false);
+    } else if (!strcmp(a, "unload")) {
+        simple("unload");
+    } else if (!strcmp(a, "cancel_print"))
+        confirmed("Stop this print? It cannot be resumed afterward.", request("cancel"));
+    else if (!strncmp(a, "tune:", 5)) {
+        const char *p = strchr(a + 5, ':');
+        if (!p)
+            return;
+        char key[20];
+        snprintf(key, sizeof(key), "%.*s", (int)(p - a - 5), a + 5);
+        cJSON *r = request("tune");
+        cJSON_AddStringToObject(r, "key", key);
+        cJSON_AddNumberToObject(r, "value", strtod(p + 1, NULL));
+        ui_send(r);
+    } else if (!strncmp(a, "tune_input:", 11)) {
+        const char *key = a + 11;
+        ui_number(!strcmp(key, "speed") ? "Print speed" : "Flow ratio", "tune", key,
+                  jnum(app.data,
+                       !strcmp(key, "speed") ? "status.gcode_move.speed_factor"
+                                             : "status.gcode_move.extrude_factor",
+                       1) *
+                      100,
+                  1, 1000);
+    } else if (!strncmp(a, "calibrate:", 10)) {
+        if (!strcmp(a + 10, "save")) {
+            ui_route("save", false);
+            return;
+        }
+        cJSON *r = request("calibrate");
+        cJSON_AddStringToObject(r, "kind", a + 10);
+        confirmed("Clear the bed and stay beside the printer. Start calibration?", r);
+    } else if (!strcmp(a, "save_config"))
+        confirmed("Save pending calibration changes and restart Klipper?", request("save_config"));
+    else if (!strncmp(a, "restart:", 8)) {
+        bool firmware = !strcmp(a + 8, "firmware");
+        confirmed(firmware
+                      ? "Klipper and the connected controllers will restart. Any current print "
+                        "will fail and cannot be resumed."
+                      : "Any current print will fail and cannot be resumed.",
+                  request(firmware ? "firmware_restart" : "restart"));
+    } else if (!strcmp(a, "open_files") || !strncmp(a, "files:", 6) ||
+               !strcmp(a, "refresh_files")) {
+        ui_route("files", false);
+    } else if (!strncmp(a, "file_open:", 10)) {
+        ui_command(a + 10);
+        ui_route("file", false);
+    } else if (!strncmp(a, "file_delete:", 12)) {
+        cJSON *r = cJSON_Parse(a + 12);
+        if (r) {
+            if (!strcmp(jstr(r, "action", ""), "file"))
+                cJSON_SetValuestring(cJSON_GetObjectItemCaseSensitive(r, "action"), "delete_file");
+            char message[1200];
+            snprintf(message, sizeof(message), "Delete %s? This cannot be undone.",
+                     jstr(r, "path", ""));
+            confirmed(message, r);
+        }
+    } else if (!strcmp(a, "calibrate_before")) {
+        calibrate_before = !calibrate_before;
+        app.dirty = true;
+    } else if (!strcmp(a, "review_mapping")) {
+        if (strcmp(app.mapping_file, S("file"))) {
+            cJSON_Delete(app.mapping);
+            app.mapping = cJSON_Duplicate(J("metadata.suggested_mapping"), true);
+            if (!app.mapping)
+                app.mapping = cJSON_CreateObject();
+            snprintf(app.mapping_file, sizeof(app.mapping_file), "%s", S("file"));
+        }
+        ui_route("mapping", false);
+    } else if (!strncmp(a, "mapping_pick:", 13)) {
+        snprintf(app.mapping_tool, sizeof(app.mapping_tool), "%s", a + 13);
+        ui_route("mapping_pick", false);
+    } else if (!strncmp(a, "mapping_set:", 12)) {
+        if (!known_slot(slot_record(a + 12)) ||
+            !compatible_material(mapping_filament(), slot_record(a + 12)))
+            return;
+        cJSON_DeleteItemFromObject(app.mapping, app.mapping_tool);
+        cJSON_AddStringToObject(app.mapping, app.mapping_tool, a + 12);
+        ui_route("mapping", true);
+    } else if (!strcmp(a, "motor_toggle")) {
+        bool enabled = motors_locked();
+        cJSON *r = request("motors");
+        cJSON_AddBoolToObject(r, "enable", !enabled);
+        if (enabled)
+            confirmed("The bed may move under its own weight.", r);
+        else
+            ui_send(r);
+    } else if (!strcmp(a, "start_print")) {
+        if (!mapping_ready())
+            return;
+        cJSON *r = request("start");
+        cJSON_AddStringToObject(r, "path", app.file);
+        cJSON_AddItemToObject(r, "mapping", cJSON_Duplicate(app.mapping, true));
+        cJSON_AddBoolToObject(r, "calibrate", calibrate_before);
+        ui_send(r);
+    } else if (!strcmp(a, "scan_wifi")) {
+        simple("wifi_scan");
+        ui_route("networks", false);
+    } else if (!strncmp(a, "wifi_select:", 12)) {
+        cJSON *r = cJSON_Parse(a + 12);
+        if (!r)
+            return;
+        snprintf(app.keyboard_title, sizeof(app.keyboard_title), "%s", jstr(r, "ssid", ""));
+        if (jbool(r, "secured", false)) {
+            char ssid[100];
+            snprintf(ssid, sizeof(ssid), "%s", app.keyboard_title);
+            ui_keyboard(ssid, "wifi", "");
+        } else {
+            cJSON *request_value = request("wifi_join");
+            cJSON_AddStringToObject(request_value, "ssid", jstr(r, "ssid", ""));
+            cJSON_AddStringToObject(request_value, "password", "");
+            confirmed("Join this open Wi-Fi network?", request_value);
+        }
+        cJSON_Delete(r);
+    } else if (!strncmp(a, "key:", 4)) {
+        if (strlen(app.keyboard_value) + strlen(a + 4) < sizeof(app.keyboard_value) - 1)
+            strcat(app.keyboard_value, a + 4);
+        lv_textarea_set_text(keyboard_input, app.keyboard_value);
+    } else if (!strcmp(a, "key_back")) {
+        size_t n = strlen(app.keyboard_value);
+        if (n)
+            app.keyboard_value[n - 1] = 0;
+        lv_textarea_set_text(keyboard_input, app.keyboard_value);
+    } else if (!strcmp(a, "key_symbols")) {
+        keyboard_symbols = !keyboard_symbols;
+        keyboard_draw();
+    } else if (!strcmp(a, "key_shift")) {
+        keyboard_shift = !keyboard_shift;
+        keyboard_draw();
+    } else if (!strcmp(a, "key_eye")) {
+        app.password_visible = !app.password_visible;
+        keyboard_draw();
+    } else if (!strcmp(a, "key_more")) {
+        modal_frame("More symbols", 120, 60, 560, 360, false);
+        const char *chars = "\\|~`<>?,./\"'";
+        for (size_t i = 0; i < strlen(chars); i++) {
+            char label[2] = {chars[i], 0}, action[10];
+            snprintf(action, sizeof(action), "extra:%c", chars[i]);
+            button(app.body, label, 24 + (i % 6) * 86, 90 + (i / 6) * 74, 76, 60, action, false);
+        }
+    } else if (!strncmp(a, "extra:", 6)) {
+        if (strlen(app.keyboard_value) < sizeof(app.keyboard_value) - 2)
+            strcat(app.keyboard_value, a + 6);
+        keyboard_draw();
+    } else if (!strcmp(a, "key_done")) {
+        close_modal();
+        if (!strcmp(app.keyboard_kind, "wifi")) {
+            cJSON *r = request("wifi_join");
+            cJSON_AddStringToObject(r, "ssid", app.keyboard_title);
+            cJSON_AddStringToObject(r, "password", app.keyboard_value);
+            ui_send(r);
+            ui_route("wifi", false);
+        } else if (!strcmp(app.keyboard_kind, "color")) {
+            const char *hex = app.keyboard_value;
+            if (*hex == '#')
+                hex++;
+            char *end = NULL;
+            if (strlen(hex) != 6) {
+                ui_notice("Invalid colour", "Use six hexadecimal digits.");
+                return;
+            }
+            strtoul(hex, &end, 16);
+            if (*end) {
+                ui_notice("Invalid colour", "Use six hexadecimal digits.");
+                return;
+            }
+            cJSON_DeleteItemFromObject(app.draft, "color");
+            cJSON_AddStringToObject(app.draft, "color", hex);
+            app.edit_dirty = true;
+            ui_route("edit", false);
+        }
+    } else if (!strcmp(a, "toggle_timelapse")) {
+        cJSON *r = request("timelapse");
+        cJSON_AddBoolToObject(r, "enabled", !B("platform.timelapse.enabled"));
+        ui_send(r);
+    } else if (!strcmp(a, "recordings")) {
+        simple("recordings");
+        ui_route("recordings", false);
+    } else if (!strcmp(a, "export_logs")) {
+        cJSON *r = request("export");
+        cJSON_AddStringToObject(r, "kind", "logs");
+        ui_send(r);
+    } else if (!strcmp(a, "usb_format"))
+        confirmed("Erase every file on the connected USB drive?", request("usb_format"));
+    else if (!strcmp(a, "units")) {
+        modal_frame("Choose CFS", 120, 60, 560, 360, false);
+        cJSON *r;
+        char seen[16][16];
+        int n = 0;
+        cJSON_ArrayForEach(r, J("slots")) {
+            const char *slot = jstr(r, "slot", "");
+            size_t length = strlen(slot);
+            if (!length || !strcmp(slot, "E"))
+                continue;
+            char group[16];
+            if (length == 1)
+                snprintf(group, sizeof(group), "1");
+            else
+                snprintf(group, sizeof(group), "%.*s", (int)length - 1, slot);
+            bool duplicate = false;
+            for (int i = 0; i < n; i++)
+                if (!strcmp(group, seen[i]))
+                    duplicate = true;
+            if (duplicate || n >= 12)
+                continue;
+            snprintf(seen[n], 16, "%s", group);
+            char label[40], action[60];
+            snprintf(label, sizeof(label), "CFS %s", group);
+            snprintf(action, sizeof(action), "unit:%s", group);
+            button(app.body, label, 24 + (n % 3) * 174, 90 + (n / 3) * 64, 162, 56, action,
+                   !strcmp(group, app.cfs_unit));
+            n++;
+        }
+    } else if (!strncmp(a, "unit:", 5)) {
+        snprintf(app.cfs_unit, sizeof(app.cfs_unit), "%s", a + 5);
+        close_modal();
+        app.dirty = true;
+    } else if (!strncmp(a, "zoom:", 5)) {
+        if (!strcmp(a + 5, "fit")) {
+            app.zoom = 1;
+            app.plate_x = app.plate_y = 0;
+        } else if (!strcmp(a + 5, "in"))
+            app.zoom = fmin(8, app.zoom * 2);
+        else
+            app.zoom = fmax(1, app.zoom / 2);
+        app.dirty = true;
+    } else if (!strcmp(a, "exclude")) {
+        if (!cJSON_GetArraySize(app.object_selection))
+            return;
+        cJSON *r = request("exclude");
+        cJSON_AddItemToObject(r, "names", cJSON_Duplicate(app.object_selection, true));
+        confirmed("Skip the selected objects for the rest of this print?", r);
+    } else if (!strncmp(a, "notice_ack:", 11)) {
+        cJSON *r = request("ack");
+        cJSON_AddNumberToObject(r, "id", strtod(a + 11, NULL));
+        ui_send(r);
+        close_modal();
+
+    } else if (!strcmp(a, "error_ack")) {
+        snprintf(app.last_fault, sizeof(app.last_fault), "%s", S("error"));
+        close_modal();
+    } else if (!strncmp(a, "plr:", 4)) {
+        cJSON *r = request("plr");
+        cJSON_AddBoolToObject(r, "resume", !strcmp(a + 4, "resume"));
+        confirmed("Only resume if the part is attached and the bed is clear.", r);
+    }
+}
+/* Long fault text remains available in place, without a duplicate Details page. */
+static void error_message(const char *message) {
+    lv_obj_t *area = lv_obj_create(app.body);
+    lv_obj_remove_style_all(area);
+    lv_obj_set_pos(area, 24, 78);
+    lv_obj_set_size(area, 512, 188);
+    lv_obj_set_scroll_dir(area, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(area, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_set_style_width(area, 3, LV_PART_SCROLLBAR);
+    lv_obj_set_style_bg_color(area, colour("a4aebb"), LV_PART_SCROLLBAR);
+    lv_obj_set_style_bg_opa(area, 120, LV_PART_SCROLLBAR);
+    text(area, message, 4, 6, 500, &font_ui_18, false);
+}
+void views_overlay(void) {
+    const char *error = S("error");
+    if (!*error && app.connected && !strcmp(S("status.webhooks.state"), "ready")) {
+        app.last_fault[0] = 0;
+        if (app.printer_fault_open) {
+            close_modal();
+            app.dirty = true;
+        }
+    }
+    cJSON *notices = J("notices");
+    cJSON *notice = cJSON_GetArrayItem(notices, 0);
+    if (notice) {
+        uint64_t id = (uint64_t)jnum(notice, "id", 0);
+        if (id > app.last_notice) {
+            app.last_notice = id;
+            const char *title = jstr(notice, "title", "Notice"),
+                       *detail = jstr(notice, "detail", "");
+            if (jbool(notice, "timed",
+                      false)) { /* Timed notices are non-modal and do not steal touch. */
+                lv_obj_t *toast = box(app.screen, 210, 408, 540, 60, false);
+                text(toast, title, 20, 18, 500, &font_ui_18, false);
+                lv_obj_del_delayed(toast, 3000);
+                cJSON *ack = request("ack");
+                cJSON_AddNumberToObject(ack, "id", id);
+                ui_send(ack);
+            } else {
+                modal_frame(title, 120, 60, 560, 360, true);
+                error_message(detail);
+                char action[80];
+                snprintf(action, sizeof(action), "notice_ack:%llu", (unsigned long long)id);
+                button(app.body, "OK", 160, 282, 240, 60, action, true);
+                return;
+            }
+        }
+    }
+    if (*error && strcmp(error, app.last_fault) && app.connected) {
+        snprintf(app.last_fault, sizeof(app.last_fault), "%s", error);
+        modal_frame("Printer stopped", 120, 60, 560, 360, true);
+        app.printer_fault_open = true;
+        error_message(error);
+        button(app.body, "OK", 160, 282, 240, 60, "error_ack", true);
+        return;
+    }
+    if (!app.overlay && !cJSON_IsObject(J("operation")) && B("status.hark_plr.available")) {
+        modal_frame("Interrupted print", 120, 60, 560, 360, true);
+        text(app.body,
+             "An interrupted print can be recovered. Check the bed and part before continuing.", 28,
+             90, 504, &font_ui_20, false);
+        button(app.body, "Discard", 24, 282, 230, 56, "plr:discard", false);
+        button(app.body, "Resume", 306, 282, 230, 56, "plr:resume", true);
+    }
+}

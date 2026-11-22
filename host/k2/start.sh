@@ -42,6 +42,6 @@ start-stop-daemon -K -p /var/run/k2relay.pid 2>/dev/null
 start-stop-daemon -S -b -m -p /var/run/k2relay.pid -N -10 -x /bin/sh -- -c \
     "while true; do taskset 0x2 python3 -u $HL/relay.py >> /tmp/k2relay.log 2>&1; sleep 2; done"
 
-# Touchscreen (talks to the Moonraker on the host PC, set in harkscreen.cfg).
-[ -x /mnt/UDISK/harkscreen/start.sh ] && sh /mnt/UDISK/harkscreen/start.sh
+# Touchscreen (talks to the Moonraker on the host PC, set in native-screen.cfg).
+[ -x /mnt/UDISK/openklipper-screen/start.sh ] && sh /mnt/UDISK/openklipper-screen/start.sh
 echo "$(date) host-link up"

@@ -16,7 +16,7 @@ earlier notes calling it a K2 Plus were wrong.
 | Full prints | Multiple completed jobs, including PETG functional parts and test towers |
 | Pressure advance | Strain-gauge measurement validated by printed comparison (PETG 0.085) |
 | Input shaping | Head accelerometer via `lis2dw_k2` (X mzv 54.8 Hz, Y mzv 45.4 Hz on F021) |
-| Touchscreen | Hark Screen in daily use |
+| Touchscreen | Native LVGL UI in development |
 | Camera | MJPEG in Mainsail; AI failure detection works from it |
 
 ## Known limitations

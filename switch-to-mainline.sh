@@ -99,7 +99,7 @@ echo $! > /var/run/klippy_mainline.pid
 echo "mainline klippy started, pid $(cat /var/run/klippy_mainline.pid)"
 echo "log: $PDATA/logs/klippy.log"
 echo "switch back with: sh $MAINLINE/switch-to-stock.sh"
-# Hark Screen touchscreen UI (takes the panel over from the boot animation)
-[ -x /mnt/UDISK/harkscreen/start.sh ] && sh /mnt/UDISK/harkscreen/start.sh
+# Native touchscreen UI (takes the panel over from the boot animation)
+[ -x /mnt/UDISK/openklipper-screen/start.sh ] && sh /mnt/UDISK/openklipper-screen/start.sh
 # Hark Cam: USB camera as MJPEG on :8080 (Mainsail /webcam/), replacing cam_app/webrtc
 [ -x /mnt/UDISK/harkcam/start.sh ] && sh /mnt/UDISK/harkcam/start.sh
