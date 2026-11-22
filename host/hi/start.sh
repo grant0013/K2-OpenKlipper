@@ -61,3 +61,8 @@ start-stop-daemon -S -b -m -p $PID -N -10 -x /bin/sh -- -c \
 sleep 2
 echo "$(date) Hi host-link up: udc $(cat /sys/class/udc/*/state)"
 tail -2 /tmp/hirelay.log
+
+# Chamber camera for the host's Mainsail (/webcam/ proxies to :8080) and the
+# AI print watcher (snapshots). Hark Cam takes the camera from Creality's
+# cam_app; a reboot gives it back with the rest of stock.
+[ -x /mnt/UDISK/harkcam/start.sh ] && sh /mnt/UDISK/harkcam/start.sh

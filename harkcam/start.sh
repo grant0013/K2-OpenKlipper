@@ -74,6 +74,10 @@ else
 fi
 sleep 1
 cd /tmp
-taskset 0x1 nice -n 10 /usr/bin/python3 /mnt/UDISK/harkcam/harkcam.py 8080 /dev/video0 >/tmp/harkcam.log 2>&1 &
+# CPU0 where taskset exists (the K2); the Hi's busybox has none, and its
+# Klipper runs on the external host anyway
+PIN=""
+command -v taskset >/dev/null 2>&1 && PIN="taskset 0x1"
+$PIN nice -n 10 /usr/bin/python3 /mnt/UDISK/harkcam/harkcam.py 8080 /dev/video0 >/tmp/harkcam.log 2>&1 &
 echo $! > $PIDF
 echo "harkcam started (${MODE:-mjpeg}), pid $(cat $PIDF)"
