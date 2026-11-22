@@ -66,5 +66,8 @@
     "machine_max_jerk_y": [
         "12",
         "12"
-    ]
+    ],
+    "resonance_avoidance": "1",
+    "min_resonance_avoidance_speed": "100",
+    "max_resonance_avoidance_speed": "118"
 }
