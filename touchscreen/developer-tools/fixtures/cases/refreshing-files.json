@@ -1,0 +1,7 @@
+{
+  "description": "Background refresh keeps the file list visible and uses sidebar progress.",
+  "scenario": "refreshing-files",
+  "page": "files",
+  "actions": [],
+  "printer_image": "assets/demo-printer-combo.png"
+}

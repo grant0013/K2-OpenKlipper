@@ -113,13 +113,21 @@ into a newer list generation. Missing or unreadable thumbnails clear stale cache
 previews. The list row and its separate trash target must not overlap: a disabled
 trash control must never open the print-file screen underneath it.
 
-Navigation remains a fixed group above a separate activity area. Activity uses
-short explicit captions limited to two lines (e.g. Loading / filament), never an
-unbounded operation description. The same sidebar area opens status history while idle. Printing Home exposes
-history through its full status row and omits the duplicate sidebar control. The
-row centers one or two lines beside CFS and truncates overflow with an ellipsis.
-Print preparation stays on Home;
-file deletion results take precedence on file pages.
+Navigation remains fixed above a separate activity area. `ActivitySpec` in
+`src/ui.c` declares short captions for supported operations. Instant setters and
+unknown actions have no badge. Selection considers every active operation;
+a hidden latest operation cannot mask another task. Work related to the current
+file/storage page takes precedence over unrelated work. Background file reads and
+Wi-Fi worker state are included even when no request operation remains active.
+Changes to those busy flags invalidate the sidebar on any page.
+
+The badge is hidden when idle and disappears immediately on completion; history
+retains results and errors. Printing alone never creates a badge. Home owns its
+print-start/pause/resume/stop/recovery feedback through the centered status row.
+The Wi-Fi join page and network scanner own their respective progress states;
+the history page already lists operations. Other pages can show the same task in
+the sidebar. Errors remain modal notices. History is always reachable through
+Help & logs and through the Home print status row, without a permanent idle badge.
 
 Moonraker file-delete API reference:
 https://moonraker.readthedocs.io/en/latest/external_api/file_manager/#file-delete

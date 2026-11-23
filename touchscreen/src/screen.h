@@ -40,8 +40,7 @@ typedef struct {
     bool select_feeding_cfs;
     int shown_temperature[3];
     bool temperature_shown[3], wifi_joining;
-    char wifi_ssid[100], sidebar_result[40];
-    uint64_t sidebar_until;
+    char wifi_ssid[100];
     char assets[1024], socket[108], selected_slot[16], cfs_unit[16], file[1024], mapping_file[1024];
     char timezone_draft[128];
     char filter[20], number_text[32], number_title[100], number_kind[24], number_key[64];

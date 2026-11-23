@@ -75,7 +75,7 @@ class FlowTests(unittest.TestCase):
         done["availability"] = action_policy.availability(done["status"], True, [])
         items, commands = self.render("move", [{"snapshot": done}], data=active)
         self.assertTrue(next(i for i in items if i["action"] == "jog:X:1")["enabled"])
-        self.assertTrue(
+        self.assertFalse(
             any(i["action"] == "route:history" and i["rect"][1] >= 391 for i in items)
         )
         self.assertEqual(commands, [])

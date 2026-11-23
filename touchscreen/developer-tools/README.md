@@ -110,6 +110,7 @@ sh touchscreen/developer-tools/preview.sh --list
 | `wifi-connected`, `wifi-failed` | Network result notices |
 | `homing`, `error` | Activity indicator and recoverable fault dialog |
 | `calibrating` | Calibration activity and blocked Home print selection |
+| `refreshing-files` | Visible file list with background sidebar progress |
 | `printing-long`, `dark-preview` | Hours/minutes remaining and dark model visibility |
 | `printing-extreme`, `printing-status` | Long time/layer counts and two-line truncated status |
 | `wifi-scanning`, `wifi-connecting` | Centered network progress states |

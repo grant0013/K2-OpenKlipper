@@ -152,6 +152,7 @@ SCENARIOS = (
     "disconnected",
     "shutdown",
     "calibrating",
+    "refreshing-files",
     "wifi-scanning",
     "wifi-connecting",
     "usb-ejected",
@@ -311,6 +312,8 @@ def preview_scenario(name="idle", printing=False):
         data["print_stage"] = (
             "Preparing the printer: waiting for the bed temperature to stabilize before the next operation begins"
         )
+    if name == "refreshing-files":
+        data["files_refresh"] = {"busy": True, "error": ""}
     if name == "calibrating":
         data["operation"] = {
             "id": 1,
@@ -381,6 +384,7 @@ def preview_scenario(name="idle", printing=False):
         data["status"]["hark_plr"] = {"available": True}
     elif name == "disconnected":
         data["connected"] = False
+    data["wifi"].update(data["platform"]["wifi"])
     if data.get("operation"):
         operation = data["operation"]
         operation["resources"] = sorted(

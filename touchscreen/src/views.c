@@ -946,9 +946,7 @@ static lv_obj_t *list_action(lv_obj_t *list, const char *name, int x, int y, con
 }
 static void files_view(void) {
     button_fixed(app.content, "icon:refresh-cw", 600, 9, 64, 64, "refresh_files", false);
-    const char *refresh = *S("files_refresh.error") ? "Refresh failed — tap refresh to retry"
-                          : B("files_refresh.busy") ? "Refreshing…"
-                                                    : "";
+    const char *refresh = *S("files_refresh.error") ? "Refresh failed — tap refresh to retry" : "";
     lv_obj_t *status = text(app.content, refresh, 100, 32, 484, &font_ui_14, true);
     lv_obj_set_height(status, 22);
     lv_label_set_long_mode(status, LV_LABEL_LONG_DOT);
@@ -994,10 +992,8 @@ static void files_view(void) {
         free(payload);
         y += 88;
     }
-    if (!y) {
-        const char *empty = *S("files_refresh.error") ? S("files_refresh.error")
-                            : B("files_refresh.busy") ? "Reading files…"
-                                                      : "No print files";
+    if (!y && !B("files_refresh.busy")) {
+        const char *empty = *S("files_refresh.error") ? S("files_refresh.error") : "No print files";
         text(list, empty, 14, 40, 620, &font_ui_20, true);
     }
 }
@@ -1402,7 +1398,8 @@ static void wifi_view(void) {
     footer(NULL, NULL, "Connect to Wi-Fi", "scan_wifi");
 }
 static void wifi_networks(void) {
-    if (B("wifi.busy") || active_operation("wifi_scan")) {
+    if (active_operation("wifi_scan") ||
+        (B("wifi.busy") && !strncmp(S("wifi.message"), "Scanning", 8))) {
         network_progress("Scanning available networks", "Please wait…");
         return;
     }

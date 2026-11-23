@@ -113,6 +113,7 @@ def main():
             ("shutdown", "home", "shutdown", []),
             ("service-lost", "filament", "idle", [{"transport_lost": True}]),
             ("calibrating", "home", "calibrating", []),
+            ("refreshing-files", "files", "refreshing-files", []),
             ("wifi-scanning", "networks", "wifi-scanning", []),
             ("wifi-connecting", "wifi", "wifi-connecting", []),
             ("usb-ejected", "storage", "usb-ejected", []),

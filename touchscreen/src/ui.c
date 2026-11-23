@@ -823,6 +823,8 @@ void ui_data(cJSON *data) {
     char previous_move[256];
     move_state(previous_move, sizeof(previous_move));
     bool old_asleep = B("platform.asleep");
+    bool files_busy = B("files_refresh.busy");
+    bool wifi_busy = B("wifi.busy");
     bool old_print = app.printing, old_pause = app.paused;
     char previous_file[1024];
     snprintf(previous_file, sizeof(previous_file), "%s", S("status.print_stats.filename"));
@@ -830,6 +832,8 @@ void ui_data(cJSON *data) {
     bool old_fitted = B("status.k2_cfs.fitted");
     cJSON_Delete(app.data);
     app.data = data;
+    if (files_busy != B("files_refresh.busy") || wifi_busy != B("wifi.busy"))
+        app.dirty = true;
     app.connected = B("connected");
     app.service_link = true;
     app.ever_service = true;
@@ -935,12 +939,6 @@ void ui_data(cJSON *data) {
         }
         if (jbool(result, "success", false)) {
             const char *action = result_action;
-            if (!strcmp(action, "delete_file") || !strcmp(action, "delete_recording")) {
-                snprintf(app.sidebar_result, sizeof(app.sidebar_result), "Deleted\n%s",
-                         !strcmp(action, "delete_file") ? "file" : "recording");
-                app.sidebar_until = platform_millis() + 3000;
-                app.dirty = true;
-            }
             if (!strcmp(action, "slot_save")) {
                 const char *slot = jstr(result, "slot", "");
                 if (!*slot || !strcmp(slot, app.selected_slot)) {
@@ -961,59 +959,89 @@ void ui_data(cJSON *data) {
         views_overlay();
 }
 
-static cJSON *sidebar_operation(void) {
-    cJSON *op, *selected = NULL;
-    cJSON_ArrayForEach(op, J("operations")) {
-        const char *action = jstr(op, "action", "");
-        bool file_page = !strcmp(app.route, "files") || !strcmp(app.route, "file") ||
-                         !strncmp(app.route, "mapping", 7);
-        bool relevant = file_page && (!strcmp(action, "file") || !strcmp(action, "files") ||
-                                      !strcmp(action, "delete_file"));
-        relevant |= (!strcmp(app.route, "recordings") || !strcmp(app.route, "storage")) &&
-                    (!strcmp(action, "export") || !strcmp(action, "delete_recording") ||
-                     !strcmp(action, "usb_eject"));
-        if (relevant)
-            selected = op;
-    }
-    if (selected)
-        return selected;
-    op = J("operation");
-    const char *action = jstr(op, "action", "");
-    bool network_page = !strcmp(app.route, "wifi") || !strcmp(app.route, "networks") ||
-                        !strcmp(app.route, "network");
-    if ((network_page && (!strcmp(action, "wifi_join") || !strcmp(action, "wifi_scan"))) ||
-        !strcmp(action, "temperature") || !strcmp(action, "preference") ||
-        ((app.printing || app.paused) && !strcmp(action, "start")))
+/* Explicit presentation rules: unlisted instant setters have no activity badge.
+ * Page-level progress owns network tasks and the history view owns all details. */
+typedef struct {
+    const char *action, *caption;
+} ActivitySpec;
+static const ActivitySpec activities[] = {{"home", "Homing"},
+                                          {"jog", "Moving"},
+                                          {"position", "Moving"},
+                                          {"extrude", "Moving\nfilament"},
+                                          {"load", "Loading\nfilament"},
+                                          {"unload", "Unloading\nfilament"},
+                                          {"calibrate", "Calibrating"},
+                                          {"calibration_result", "Saving\ncalibration"},
+                                          {"save_config", "Saving\nsettings"},
+                                          {"slot_save", "Saving\nfilament"},
+                                          {"files", "Refreshing\nfiles"},
+                                          {"file", "Reading\nfile"},
+                                          {"recordings", "Reading\nvideos"},
+                                          {"delete_file", "Deleting\nfile"},
+                                          {"delete_recording", "Deleting\nvideo"},
+                                          {"export", "Exporting\nfiles"},
+                                          {"usb_eject", "Ejecting\nUSB"},
+                                          {"usb_format", "Formatting\nUSB"},
+                                          {"start", "Starting\nprint"},
+                                          {"pause", "Pausing"},
+                                          {"resume", "Resuming"},
+                                          {"cancel", "Stopping\nprint"},
+                                          {"plr", "Recovering\nprint"},
+                                          {"restart", "Restarting"},
+                                          {"firmware_restart", "Restarting"},
+                                          {"wifi_scan", "Scanning\nWi-Fi"},
+                                          {"wifi_join", "Connecting\nWi-Fi"}};
+static const ActivitySpec *activity_spec(const char *action) {
+    bool network = (!strcmp(app.route, "wifi") && !strcmp(action, "wifi_join")) ||
+                   (!strcmp(app.route, "networks") && !strcmp(action, "wifi_scan"));
+    bool print_home = !strcmp(app.route, "home") && (app.printing || app.paused);
+    if (!strcmp(app.route, "history") || network ||
+        (print_home &&
+         (!strcmp(action, "start") || !strcmp(action, "pause") || !strcmp(action, "resume") ||
+          !strcmp(action, "cancel") || !strcmp(action, "plr"))))
         return NULL;
-    return op;
+    for (unsigned i = 0; i < sizeof(activities) / sizeof(activities[0]); i++)
+        if (!strcmp(action, activities[i].action))
+            return &activities[i];
+    return NULL;
 }
-static const char *activity_caption(void) {
-    const char *action = jstr(sidebar_operation(), "action", "");
-    const char *captions[][2] = {{"home", "Homing"},
-                                 {"jog", "Moving"},
-                                 {"position", "Moving"},
-                                 {"load", "Loading\nfilament"},
-                                 {"unload", "Unloading\nfilament"},
-                                 {"calibrate", "Calibrating"},
-                                 {"delete_file", "Deleting\nfile"},
-                                 {"delete_recording", "Deleting\nvideo"},
-                                 {"slot_save", "Saving\nfilament"},
-                                 {"save_config", "Saving"},
-                                 {"preference", "Saving"},
-                                 {"temperature", "Setting"},
-                                 {"start", "Starting\nprint"},
-                                 {"pause", "Pausing"},
-                                 {"resume", "Resuming"},
-                                 {"cancel", "Stopping"},
-                                 {"restart", "Restarting"},
-                                 {"firmware_restart", "Restarting"},
-                                 {"wifi_scan", "Scanning"},
-                                 {"wifi_join", "Connecting"},
-                                 {"export", "Exporting\nfiles"}};
-    for (unsigned i = 0; i < sizeof(captions) / sizeof(captions[0]); i++)
-        if (!strcmp(action, captions[i][0]))
-            return captions[i][1];
-    return "Working";
+static int activity_priority(const ActivitySpec *spec) {
+    bool files = !strcmp(app.route, "files") || !strcmp(app.route, "file") ||
+                 !strncmp(app.route, "mapping", 7);
+    bool storage = !strcmp(app.route, "recordings") || !strcmp(app.route, "storage") ||
+                   !strcmp(app.route, "usb");
+    const char *action = spec->action;
+    if ((files &&
+         (!strcmp(action, "files") || !strcmp(action, "file") || !strcmp(action, "delete_file"))) ||
+        (storage && (!strcmp(action, "recordings") || !strcmp(action, "delete_recording") ||
+                     !strcmp(action, "export") || !strncmp(action, "usb_", 4))))
+        return 3;
+    return !strcmp(action, "files") || !strcmp(action, "recordings") ? 1 : 2;
+}
+static const ActivitySpec *sidebar_activity(void) {
+    const ActivitySpec *selected = B("files_refresh.busy") ? activity_spec("files") : NULL;
+    if (B("wifi.busy")) {
+        const char *message = S("wifi.message");
+        const ActivitySpec *network = !strncmp(message, "Scanning", 8) ? activity_spec("wifi_scan")
+                                      : !strncmp(message, "Connecting", 10)
+                                          ? activity_spec("wifi_join")
+                                          : NULL;
+        if (network && (!selected || activity_priority(network) > activity_priority(selected)))
+            selected = network;
+    }
+    cJSON *operations = J("operations"), *op;
+    cJSON_ArrayForEach(op, operations) {
+        const ActivitySpec *spec = activity_spec(jstr(op, "action", ""));
+        if (spec && (!selected || activity_priority(spec) > activity_priority(selected)))
+            selected = spec;
+    }
+    /* Older snapshots may only have the single-operation mirror. */
+    if (!cJSON_GetArraySize(operations)) {
+        const ActivitySpec *spec = activity_spec(jstr(J("operation"), "action", ""));
+        if (spec && (!selected || activity_priority(spec) > activity_priority(selected)))
+            selected = spec;
+    }
+    return selected;
 }
 
 static void navigation(void) {
@@ -1047,38 +1075,26 @@ static void navigation(void) {
         snprintf(nav_icon, sizeof(nav_icon), "nav-%s", names[i]);
         icon(b, nav_icon, 5, 6, 56, i == current ? app.accent : fg);
     }
-    /* Home already exposes history in the print status area. Other pages keep
-     * their contextual operation feedback and history access. */
-    if (!strcmp(app.route, "home") &&
-        (app.printing || app.paused || !strcmp(S("status.print_stats.state"), "error")))
+    const ActivitySpec *activity = sidebar_activity();
+    if (!activity)
         return;
-    cJSON *operation = sidebar_operation();
-    lv_obj_t *activity =
-        button_fixed(app.nav, "", 4, 391, 76, 70, "route:history", !strcmp(app.route, "history"));
-    lv_obj_set_style_bg_opa(activity, 0, 0);
-    lv_obj_set_style_border_width(activity, 0, 0);
-    const char *caption = "Status\nhistory";
-    if (cJSON_IsObject(operation)) {
-        lv_obj_t *spinner = lv_spinner_create(activity, 1000, 60);
-        lv_obj_set_pos(spinner, 26, 6);
-        lv_obj_set_size(spinner, 24, 24);
-        lv_obj_set_style_arc_width(spinner, 3, LV_PART_MAIN);
-        lv_obj_set_style_arc_width(spinner, 3, LV_PART_INDICATOR);
-        lv_obj_set_style_arc_color(spinner, edge, LV_PART_MAIN);
-        lv_obj_set_style_arc_color(spinner, app.accent, LV_PART_INDICATOR);
-        lv_obj_clear_flag(spinner, LV_OBJ_FLAG_CLICKABLE);
-        caption = activity_caption();
-    } else {
-        bool recent = app.sidebar_until > platform_millis();
-        icon(activity, recent ? "check" : "history", 24, 6, 28, recent ? app.accent : muted);
-        if (recent)
-            caption = app.sidebar_result;
-    }
-    lv_obj_t *label = text(activity, caption, 2, 36, 72, &font_ui_12, false);
+    lv_obj_t *control = button_fixed(app.nav, "", 4, 391, 76, 70, "route:history", false);
+    lv_obj_set_style_bg_opa(control, 0, 0);
+    lv_obj_set_style_border_width(control, 0, 0);
+    lv_obj_t *spinner = lv_spinner_create(control, 1000, 60);
+    lv_obj_set_pos(spinner, 26, 6);
+    lv_obj_set_size(spinner, 24, 24);
+    lv_obj_set_style_arc_width(spinner, 3, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(spinner, 3, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(spinner, edge, LV_PART_MAIN);
+    lv_obj_set_style_arc_color(spinner, app.accent, LV_PART_INDICATOR);
+    lv_obj_clear_flag(spinner, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_t *label = text(control, activity->caption, 2, 36, 72, &font_ui_12, false);
     lv_obj_set_height(label, 32);
     lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
 }
+
 static void connection_center(lv_obj_t *label) {
     lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
 }
@@ -1175,10 +1191,6 @@ void ui_update(void) {
         views_refresh();
 }
 void ui_tick(void) {
-    if (app.sidebar_until && platform_millis() >= app.sidebar_until) {
-        app.sidebar_until = 0;
-        app.dirty = true;
-    }
     bool pressing = platform_pressed();
     if ((app.dirty || rebuild) && !pressing && !app.overlay)
         ui_render();

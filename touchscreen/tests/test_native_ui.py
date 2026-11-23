@@ -65,7 +65,7 @@ class NativeUI(unittest.TestCase):
 
  def test_idle_home_has_no_history_button_and_right_column_cfs(self):
   items,_=self.render()
-  self.assert_rect(items,'route:history',[4,391,76,70])
+  self.assertFalse(any(i['action']=='route:history' for i in items))
   self.assert_rect(items,'home_filament_strip',[591,289,190,80])
   self.assert_rect(items,'open_files',[103,391,470,70])
   self.assert_rect(items,'home_fans',[691,391,90,70])
@@ -245,7 +245,7 @@ class NativeUI(unittest.TestCase):
   image=Image.open(self.path/'screen.ppm')
   for point in ((0,0),(799,0),(0,479),(799,479)):
    self.assertEqual(image.getpixel(point)[:3],(7,9,12))
-  data=copy.deepcopy(self.data);data['operation']={'id':1,'label':'Homing','detail':'Homing axes'}
+  data=copy.deepcopy(self.data);data['operation']={'id':1,'action':'home','label':'Homing','detail':'Homing axes'}
   self.render(data=data)
   initial=Image.open(self.path/'screen.ppm').crop((20,400,68,435)).copy()
   self.render(data=data,actions=[{}]*15)

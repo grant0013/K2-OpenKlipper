@@ -53,7 +53,8 @@ operation become unavailable.
 
 ![Operation in progress](screenshots/executing.png)
 
-Completed file deletions show a short result in the sidebar. Calibration failures
+The indicator disappears when the operation finishes. Idle screens have no
+activity badge, and printing is represented in the Home status area. Calibration failures
 appear immediately as error dialogs. During calibration, the Home file button
 shows **Calibration in progress** instead of offering another print. Homing alone
 does not block file browsing.
@@ -235,8 +236,9 @@ capability data.
 ### Temperature entry, activity and messages
 
 Temperature controls share the same layout. Numeric entry opens a larger keypad.
-The bottom of the sidebar names the current operation, including **Load filament**
-and **Unload filament**; these indicators do not open a blocking progress dialog.
+The bottom of the sidebar names active work, including **Loading filament**,
+**Unloading filament** and **Refreshing files**. Refresh keeps the file list visible.
+Progress already shown on the current page is not repeated in the sidebar.
 Faults and notices appear separately, with a clear dismissal action.
 
 | Bed temperature | Chamber temperature |
@@ -345,3 +347,11 @@ K2 OpenKlipper includes an optional failure watcher for an external PC, using
 Obico and a local vision model. Its settings, including automatic pause, live on
 that PC in `/etc/default/k2-detect`. It does not expose a touchscreen settings
 API. See [the upstream watcher implementation](../tools/ai-detect/) for setup.
+
+### Refresh without blocking browsing
+
+The file list stays in place while **Refreshing files** appears in the sidebar.
+The badge disappears when the read completes. Tap an active badge to open status
+history; history is also available under **Help & logs** when idle.
+
+![Background file refresh](screenshots/refreshing-files.png)
