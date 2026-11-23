@@ -636,7 +636,7 @@ static void filament_view(void) {
         if (!seen && boxes < 16)
             snprintf(groups[boxes++], 16, "%s", group);
     }
-    const int top = 154;
+    const int top = boxes > 1 ? 162 : 88;
     if (app.select_feeding_cfs) {
         cJSON_ArrayForEach(r, J("slots")) {
             const char *slot = jstr(r, "slot", "");
@@ -717,12 +717,12 @@ static void filament_view(void) {
         int x = external ? 548 : start + i * (width + 10);
         int tile_width = external ? 126 : width;
         int tile_top = external ? 88 : top;
-        int tile_height = external ? 288 : 174;
+        int tile_height = external ? 288 : 328 - top;
         char action[50];
         snprintf(action, sizeof(action), "slot:%s", slot);
         lv_obj_t *tile = button(app.content, "", x, tile_top, tile_width, tile_height, action,
                                 !strcmp(slot, app.selected_slot));
-        int content_y = external ? 57 : 0;
+        int content_y = external ? 57 : (tile_height - 166) / 2;
         char display_slot[64];
         snprintf(display_slot, sizeof(display_slot), "%s",
                  !strcmp(slot, "E") ? "Spool holder" : slot_label(slot));

@@ -85,7 +85,7 @@ sh touchscreen/developer-tools/preview.sh --case multi-cfs
 | `idle` | Printer illustration, one CFS, light/fan and heater controls |
 | `printing` | Holding target temperatures, progress and three print objects |
 | `heating` | Current-to-target arrows while heating |
-| `multi-cfs` | Three unit choices, twelve spools and mixed PLA/PETG/ASA |
+| `multi-cfs` | Four unit choices, sixteen spools and mixed PLA/PETG/ASA/ABS |
 | `file` | Large padded preview, metadata and calibration checkbox |
 | `mapping` | Three file filaments mapped across CFS units; aligned colors/materials |
 | `objects` | Selectable outlines, zoom and skip confirmation |

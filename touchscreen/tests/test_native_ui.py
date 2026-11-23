@@ -80,7 +80,7 @@ class NativeUI(unittest.TestCase):
 
  def test_filament_slots_and_footer_use_current_native_geometry(self):
   items,_=self.render('filament')
-  expected={'slot:A':[103,154,123,174],'slot:D':[502,154,123,174],
+  expected={'slot:A':[103,88,123,240],'slot:D':[502,88,123,240],
             'slot:E':[651,88,126,288],'edit_slot':[147,398,110,68],
             'load':[269,398,190,68],'unload':[471,398,190,68],
             'route:refill':[673,398,64,68]}
@@ -275,6 +275,21 @@ class NativeUI(unittest.TestCase):
   items,commands=self.render('filament',['unit:2','edit_slot'],data)
   self.assertTrue(any(item.get('text')=='Slot CFS 2 · A' for item in items) or
                   any(item['action']=='draft_temperature' for item in items))
+
+ def test_cfs_selector_count_tracks_connected_units(self):
+  for count in (1,2,3,4):
+   data=copy.deepcopy(self.data)
+   for unit in range(2,count+1):
+    for letter in 'ABCD':data['slots'].append(dict(data['slots'][0],slot=str(unit)+letter))
+   data['cfs_units']=count
+   items,commands=self.render('filament',data=data)
+   selectors=[item for item in items if item['action'].startswith('unit:')]
+   self.assertEqual(len(selectors),count if count>1 else 0)
+   self.assertEqual(commands,[])
+   if count>1:
+    selector_bottom=max(item['rect'][1]+item['rect'][3] for item in selectors)
+    spool=next(item for item in items if item['action']=='slot:A')
+    self.assertGreaterEqual(spool['rect'][1]-selector_bottom,16)
 
  def test_sidebar_files_refreshes_printer_storage(self):
   data=copy.deepcopy(self.data);data['source']='usb';data['platform']['usb']={'mounted':True}

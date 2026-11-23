@@ -236,10 +236,11 @@ def preview_scenario(name="idle", printing=False):
             ("5035CE", "E34C55", "4F9F73", "EDCE52"),
             ("1E88E5", "F5F5F5", "F39C12", "222222"),
             ("D15AA5", "00A6A6", "8D6E63", "ABB2BC"),
+            ("FF7043", "7E57C2", "66BB6A", "90CAF9"),
         )
         records = []
         for unit, (kind, temperature) in enumerate(
-            (("PLA", 220), ("PETG", 250), ("ASA", 260)), 1
+            (("PLA", 220), ("PETG", 250), ("ASA", 260), ("ABS", 260)), 1
         ):
             for letter, color in zip("ABCD", palette[unit - 1]):
                 records.append(
@@ -253,7 +254,7 @@ def preview_scenario(name="idle", printing=False):
                     }
                 )
         data["slots"] = records
-        data["cfs_units"] = 3
+        data["cfs_units"] = 4
         data["status"]["k2_cfs"]["active_slot"] = "1B"
         data["status"]["filament_switch_sensor filament_sensor"] = {
             "filament_detected": True
@@ -263,11 +264,11 @@ def preview_scenario(name="idle", printing=False):
                 r["slot"]: {k: v for k, v in r.items() if k != "slot"} for r in records
             },
             map_targets=[r["slot"] for r in records] + ["E"],
-            map_tools=["T" + str(i) for i in range(12)],
+            map_tools=["T" + str(i) for i in range(16)],
         )
         data["materials"] = [
             {"name": "Demo " + kind, "type": kind, "nozzle_temp": temperature}
-            for kind, temperature in (("PLA", 220), ("PETG", 250), ("ASA", 260))
+            for kind, temperature in (("PLA", 220), ("PETG", 250), ("ASA", 260), ("ABS", 260))
         ]
         data["metadata"]["filaments"] = [
             {"tool": i, "type": kind, "colour": palette[i][i]}

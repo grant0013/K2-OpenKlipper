@@ -31,8 +31,8 @@ class PreviewCaseTests(unittest.TestCase):
 
     def test_multi_cfs_mapping_and_no_cfs_cases_keep_distinct_capabilities(self):
         multi = demo.preview_case("mapping")
-        self.assertEqual(multi["cfs_units"], 3)
-        self.assertEqual(len(multi["slots"]), 12)
+        self.assertEqual(multi["cfs_units"], 4)
+        self.assertEqual(len(multi["slots"]), 16)
         self.assertEqual(len(multi["metadata"]["filaments"]), 3)
         self.assertEqual(multi["preview"]["actions"], ["review_mapping"])
         single = demo.preview_case("no-cfs")
