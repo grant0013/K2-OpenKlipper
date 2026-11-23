@@ -7,9 +7,11 @@
     <rect x="72" y="131" width="247" height="359" rx="6" fill="#303d4c"/>
     <rect x="87" y="171" width="216" height="281" rx="4" fill="#101923"/>
     <!-- Z screws sit beside the chamber, below the independent upper gantry. -->
-    <path d="M100 248V443M291 248V443" stroke="#273442" stroke-width="8"/>
-    <path d="M110 253V441M281 253V441" stroke="#64788f" stroke-width="4"/>
-    <path d="M100 253H115M276 253H291M100 441H115M276 441H291" stroke="#4a5d72"/>
+    <!-- Each side has front/rear shafts, offset with the bed's depth. -->
+    <path d="M131 233V421M292 233V421" stroke="#405269" stroke-width="3"/>
+    <path d="M126 233H136M287 233H297M126 421H136M287 421H297" stroke="#344252" stroke-width="2"/>
+    <path d="M102 253V441M263 253V441" stroke="#64788f" stroke-width="4"/>
+    <path d="M97 253H107M258 253H268M97 441H107M258 441H268" stroke="#4a5d72"/>
     <path d="M97 196H293M97 208H293" stroke="#7c8ea3"/>
     <rect x="96" y="190" width="10" height="26" rx="2" fill="#303d4c"/>
     <rect x="284" y="190" width="10" height="26" rx="2" fill="#303d4c"/>
