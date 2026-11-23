@@ -1,0 +1,7 @@
+{
+  "description": "Failed Wi-Fi connection notice.",
+  "scenario": "wifi-failed",
+  "page": "wifi",
+  "printer_image": "assets/demo-printer-combo.png",
+  "actions": []
+}

@@ -1,284 +1,274 @@
 # Native touchscreen developer guide
 
-This folder contains the native touchscreen's development utilities. They run on
-a Linux PC and are not part of the printer's runtime. Edit and build the native
-C/LVGL interface directly; the same sources render the printer panel, desktop
-preview and offscreen screenshots.
+The touchscreen is a native C11/LVGL application with a Python backend. The same
+C sources render the printer panel, interactive Linux desktop preview and
+headless screenshots. This folder contains development tools; the printer uses
+the files in `runtime/`, `backend/` and the committed ARM package.
 
-Keep printer-specific calibration and hardware overrides out of this shared
-implementation. Heater limits, travel limits, printer identity and CFS
-capabilities come from runtime configuration. Changes should include a desktop
-preview, relevant tests and an ARM build. Hardware acceptance is separate from
-fixture tests.
+Run the commands below from the repository root. Keep local builds and generated
+snapshots in `touchscreen/out/`, which is ignored by Git. Printer-specific hotend,
+extruder, cutter and Z-reference changes belong in printer configuration or a
+separate integration branch.
 
-## Architecture and files
-
-Paths in the source map below are relative to `touchscreen/`.
+## Architecture and source map
 
 ```text
-Touch / mouse -> native C + LVGL UI -> typed JSON over private Unix socket
-                                      -> Python service -> Moonraker -> Klipper
-                                                        -> local platform tools
+Touch / mouse -> C + LVGL UI -> typed JSON over private Unix socket
+                               -> Python service -> Moonraker -> Klipper macros
+                                                 -> local platform services
 ```
 
-The native application never implements motor, heater or CFS loading sequences.
-The service validates requests against fresh printer state and configuration,
-then calls the existing Klipper macros. A bounded resource coordinator tracks
-operations without blocking navigation or queuing conflicting movements.
-The activity indicator stays in the navigation rail; routine actions do not open
-a loading modal. See [the control contract](CONTROL-CONTRACT.md) for the action
-policy, required widget bindings, view inputs and extension rules.
+The UI does not implement motion, heating or CFS loading sequences. The backend
+validates requests against current state and configuration, reserves resources
+and calls the existing firmware functions. See the [control contract](CONTROL-CONTRACT.md)
+for availability, operations, widget bindings and extension rules.
 
-| File or directory | Responsibility |
+Paths in this table are relative to `touchscreen/`:
+
+| Path | Responsibility |
 | --- | --- |
-| `src/main.c` | Arguments, startup, event loop, fixture and screenshot modes |
-| `src/platform.c` | Linux framebuffer, touch input, X11 window, socket transport and screenshots |
-| `src/json.c` | JSON access helpers shared by views and state handling |
-| `src/ui.c` | Reusable widgets, navigation, numeric keypad, dialogs and updates |
-| `src/views.c` | Home, printer controls, filament, files, settings and their actions |
-| `src/view_inputs.c` | Declarative snapshot dependencies; avoids rebuilding pages for unrelated telemetry |
-| `src/screen.h` | Application state and C interfaces |
-| `backend/action_policy.py` | Required action declarations, resource ownership and shared availability |
-| `backend/service.py` | Moonraker HTTP/WebSocket connection, typed request validation, operations and snapshots |
-| `backend/model.py` | Printer capabilities, heater/axis limits, filament records and mapping |
-| `backend/platform_services.py` | Printer-local Wi-Fi, time zone, brightness and storage services |
-| `backend/storage.py` | Image preparation, file/export helpers, time-zone choices and filament-reading policy |
-| `assets/` | Editable SVG icons, source fonts and their licences |
-| `assets/generated/` | Build output: raster icons and LVGL font C files; ignored by Git |
-| `build/` | CMake build definition, ARM toolchain and compile-time LVGL configuration |
-| `runtime/` | Printer startup, launcher and example display configuration |
-| `installation/` | Package validation, installation and display preference migration |
-| `precompiled/armv7/` | Shipped executable, assets, licenses and integrity manifest |
-| `out/` | Ignored local host/ARM build outputs |
-| `tests/` | Backend guards and actual LVGL touch/layout integration tests |
+| `src/main.c` | Startup, event loop, fixture actions and screenshot arguments |
+| `src/platform.c` | Framebuffer/touch, X11, socket transport and screen capture |
+| `src/ui.c` | Shared controls, navigation, dialogs, fixture-only updates |
+| `src/views.c` | Page layouts, keyboard, image fitting and UI actions |
+| `src/view_inputs.c` | Snapshot dependencies; live updates without unnecessary page rebuilds |
+| `src/json.c`, `src/screen.h` | JSON helpers, UI state and shared layout constants |
+| `backend/action_policy.py` | Action declarations, resource ownership and availability |
+| `backend/service.py` | Moonraker connection, validation, operations and thumbnail loading |
+| `backend/model.py` | Configuration-derived limits, capabilities and filament compatibility |
+| `backend/platform_services.py` | Wi-Fi and printer-local platform integration |
+| `backend/storage.py` | Cached image preparation, files, USB export and time-zone helpers |
+| `assets/` | Production icon SVGs, source fonts and licenses |
+| `assets/generated/` | Generated production PNGs/font C files; ignored by Git |
+| `build/` | CMake, ARM toolchain and LVGL configuration |
+| `runtime/` | Startup scripts and example display configuration |
+| `installation/` | Installer, package validation and preference migration |
+| `precompiled/armv7/` | Committed printer executable, assets, licenses and manifest |
+| `developer-tools/fixtures/` | Portable desktop cases and bundled demo artwork |
+| `tests/` | Backend and actual native UI regression checks |
+| `out/` | Ignored build, preview and diagnostic outputs |
 
-The layout is defined directly in `src/ui.c` and `src/views.c`.
+Pillow prepares images in the backend worker; it does not draw UI frames.
+Production layout is defined in the C source, not a separate layout document.
 
-The installer at the repository root invokes `touchscreen/installation/install.sh`. The
-Python service does not draw frames. Pillow is used for cached image preparation,
-not for the rendering loop. Fonts and icons are generated at build time.
+## Build the desktop application
 
-## Tools in this folder
+Required tools: C compiler, CMake 3.18+, Python 3.10+, Pillow, Node/npm,
+ImageMagick's `convert` with SVG support, and X11 development headers. Interactive
+windows require a desktop display, including XWayland on a Wayland desktop.
+Headless rendering does not need a display server.
 
-| File | Purpose | Output |
-| --- | --- | --- |
-| `build.sh host` | Install pinned build dependencies, generate assets and build the desktop app | `out/host/`, `assets/generated/` |
-| `build.sh arm` | Generate the same assets and cross-compile/package the printer app | `out/arm/`, `precompiled/armv7/` |
-| `format.sh` | Check or apply the native C style from this folder | C source formatting |
-| `build_assets.py` | Convert the bundled fonts and SVG icons using pinned tools | `assets/generated/` |
-| `render_screenshots.py` | Render the user README screenshots from synthetic states and the bundled example part | `screenshots/` |
-| `demo_snapshot.py` | Generate synthetic printer states for safe UI previews | A JSON snapshot at the requested path |
-| `preview.sh` | Run the native desktop application using a snapshot/scenario | An interactive window; no printer commands |
-| `package_arm.py` | Assemble an already-built ARM executable, assets, licenses and revision manifest | `precompiled/armv7/` |
-| `package.json`, `package-lock.json` | Pin `lv_font_conv` and `lucide-static` used during asset generation | Installed build dependencies in `node_modules/` |
-
-
-## Build on a Linux PC
-
-Run commands from the repository root. Required tools are a C compiler, CMake,
-Python 3.9 or newer, Node/npm and ImageMagick with SVG support. The interactive
-preview also needs X11 headers and a desktop display, including XWayland on a
-Wayland desktop. This is a native Linux preview, not a CPU or firmware emulator.
-
-For a Debian/Ubuntu development machine, the relevant packages are:
+On Debian/Ubuntu:
 
 ```sh
-sudo apt install build-essential cmake python3 nodejs npm imagemagick libx11-dev clang-format
+sudo apt install build-essential cmake python3 python3-pil nodejs npm imagemagick libx11-dev clang-format
 sh touchscreen/developer-tools/build.sh host
 ```
 
-The build downloads pinned LVGL 8.4.0 and cJSON 1.7.19 archives with SHA-256
-checks, installs the locked asset tools, generates fonts/icons, and produces
-`touchscreen/out/host/openklipper-screen`. Source fonts are bundled with their
-licences. Node/npm and font tools are not runtime requirements on the printer.
+The build fetches pinned, hash-checked LVGL 8.4.0/cJSON 1.7.19 sources, installs
+locked asset tools, generates fonts/icons and creates
+`touchscreen/out/host/openklipper-screen`. Re-run the build after C or production
+asset changes. This is a native desktop preview, not a firmware/CPU emulator.
 
-## Source formatting and build configuration
+## Run the bundled PC cases
 
-Run `sh touchscreen/developer-tools/format.sh --check` to check C formatting,
-or omit `--check` to apply it. The style file lives beside the developer tools.
-CMake, its ARM toolchain and `lv_conf.h` live together in `build/`. Build artifacts
-are written to `out/host/` and `out/arm/`; do not commit those directories.
-
-## Preview without a printer
+All assets and case definitions are in [fixtures/](fixtures/README.md). No files
+from a developer's home directory or earlier preview outputs are needed.
 
 ```sh
-python3 touchscreen/developer-tools/demo_snapshot.py /tmp/screen-demo.json
-sh touchscreen/developer-tools/preview.sh /tmp/screen-demo.json
+sh touchscreen/developer-tools/preview.sh --case idle
+sh touchscreen/developer-tools/preview.sh --case printing
+sh touchscreen/developer-tools/preview.sh --case heating
+sh touchscreen/developer-tools/preview.sh --case multi-cfs
 ```
 
-Open a particular screen or a transient state directly:
+| Case | What to check |
+| --- | --- |
+| `idle` | Printer illustration, one CFS, light/fan and heater controls |
+| `printing` | Holding target temperatures, progress and three print objects |
+| `heating` | Current-to-target arrows while heating |
+| `multi-cfs` | Three unit choices, twelve spools and mixed PLA/PETG/ASA |
+| `file` | Large padded preview, metadata and calibration checkbox |
+| `mapping` | Three file filaments mapped across CFS units; aligned colors/materials |
+| `objects` | Selectable outlines, zoom and skip confirmation |
+| `empty-extruder` | Spools present without a nozzle-loaded marker |
+| `no-cfs` | Printer-only illustration and no CFS shortcut |
+| `wifi-password` | Full-screen password keyboard, eye control and `?123`/`ABC` |
+| `wifi-connected`, `wifi-failed` | Connection result notices |
+| `homing`, `error` | Activity indicator and printer fault dialog |
+
+List cases or open another page using the same state:
 
 ```sh
-sh touchscreen/developer-tools/preview.sh --scenario idle
-sh touchscreen/developer-tools/preview.sh --scenario printing
-sh touchscreen/developer-tools/preview.sh --scenario heating
-sh touchscreen/developer-tools/preview.sh --scenario printing --page objects
-sh touchscreen/developer-tools/preview.sh --scenario multi-cfs --page filament
-sh touchscreen/developer-tools/preview.sh --scenario multi-cfs --page file
+sh touchscreen/developer-tools/preview.sh --list
+sh touchscreen/developer-tools/preview.sh --case multi-cfs --page file
+sh touchscreen/developer-tools/preview.sh --case idle --page fans
+sh touchscreen/developer-tools/preview.sh --case idle --page restart
+```
 
-sh touchscreen/developer-tools/preview.sh --scenario idle --page display
-sh touchscreen/developer-tools/preview.sh --scenario idle --page fans
+The native window is 800 × 480; mouse presses represent touches. `?123` opens one
+numbers/punctuation page, `ABC` returns to letters, and the capital arrow changes
+case. The password field masks input by default. Wi-Fi success follows association
+and address assignment; the preview uses synthetic responses.
+
+Fixture mode never connects to the printer. Navigation, dialogs, mapping and
+object selection run locally. Confirmed file/recording deletions and timelapse/CFS
+switches update only demo state; restarting resets it. Motion, heating, actual
+Wi-Fi changes, exports and other firmware operations are not simulated to completion.
+The sample printer settings are not configuration to apply to real hardware.
+
+### Custom states and saved snapshots
+
+Existing `--scenario` commands still work. Scenarios provide raw generated state;
+cases additionally select artwork, an opening page and optional click actions.
+Useful additional scenarios include `heated`, `load`, `unload`, `meshing`,
+`notice`, `recovery` and `disconnected`.
+
+```sh
 sh touchscreen/developer-tools/preview.sh --scenario heated --page move
-sh touchscreen/developer-tools/preview.sh --scenario error
-sh touchscreen/developer-tools/preview.sh --scenario loading
-sh touchscreen/developer-tools/preview.sh --scenario homing
-sh touchscreen/developer-tools/preview.sh --scenario wifi-connected --page wifi
-sh touchscreen/developer-tools/preview.sh --scenario wifi-failed --page wifi
+sh touchscreen/developer-tools/preview.sh --scenario disconnected --page move
+python3 touchscreen/developer-tools/demo_snapshot.py \
+  touchscreen/out/preview/idle.json --case idle
+sh touchscreen/developer-tools/preview.sh touchscreen/out/preview/idle.json
 ```
 
-The `multi-cfs` scenario provides three CFS units, twelve present spools, mixed
-PLA/PETG/ASA materials, and three file-filament requirements for mapping.
+Generated snapshots contain paths for the current checkout. Commit portable case
+recipes and their assets, rather than generated snapshots. To add a new state or
+workflow, follow the [fixture instructions](fixtures/README.md).
 
-The printing and heating scenarios include three sample objects. Open the jump
-button on Home, or use `--page objects`, to preview object selection. The
-`heating` scenario shows current temperatures below their targets; `printing`
-shows them holding their targets.
+### Headless rendering
 
-The `heated` scenario uses synthetic nozzle, bed and chamber temperatures so
-manual extrusion and active heater targets can be previewed safely.
+The same launcher can write a PPM screenshot instead of opening a window:
 
-Other scenarios: `printing`, `meshing`, `load`, `unload`, `notice`, `recovery`,
-and `disconnected` (use `--page move` to see the connection warning). These are
-synthetic states rendered by the same dialogs as the printer. Operation scenarios
-keep the activity indicator running until the window is closed; controls reflect
-the real resource policy, but no printer operation is executed.
+```sh
+sh touchscreen/developer-tools/preview.sh --case mapping \
+  --snapshot touchscreen/out/preview/mapping.ppm
+convert touchscreen/out/preview/mapping.ppm touchscreen/out/preview/mapping.png
+```
 
-Files keeps its cached list visible while refreshing in the background; its
-header reports refresh progress or failure without opening an operation modal.
-Time-zone rows select a draft value. The highlighted row shows the selection. A pending row reveals its own **Apply** button; Back discards it.
-The compact current-zone summary and full-height list keep browsing space available.
-
-The window is 800 by 480 pixels. Mouse presses represent touches. Text entry
-uses a full-width keyboard: the capital-arrow key changes case, `?123` shows
-numbers and all punctuation on one page, and `ABC` returns to letters. For printing
-layouts, generate the snapshot with `--printing`.
-
-Fixture mode never connects to the printer service or sends printer commands.
-Navigation and dialogs run locally; operations needing a backend response do not
-complete as live operations. Confirmed file/recording deletions remove only
-demo list entries, and the time-lapse/CFS switches update demo state; reopening
-the preview resets both. It is a UI preview, not a simulated printer backend.
-The dimensions and heater limits in the demo generator are synthetic examples,
-not defaults applied to a real printer.
-
-For offscreen rendering, without a desktop display:
+For geometry and recorded requests, use the native binary directly:
 
 ```sh
 touchscreen/out/host/openklipper-screen \
   --assets touchscreen/assets/generated \
-  --fixture /tmp/screen-demo.json --page home \
-  --snapshot /tmp/screen-home.ppm
+  --fixture touchscreen/out/preview/idle.json --page home \
+  --snapshot touchscreen/out/preview/home.ppm \
+  --geometry touchscreen/out/preview/home-geometry.json \
+  --record-commands touchscreen/out/preview/commands.jsonl
 ```
 
-Other useful pages include `move`, `heat`, `fans`, `filament`, `calibration`,
-`files`, `display` and `timezone`. The application also supports fixture action
-scripts, geometry exports and command recording; see `tests/test_native_ui.py`
-for examples that exercise the real LVGL controls.
+Fixture action sequences are described in `tests/test_native_ui.py`. Bundled
+case actions are applied automatically by the launcher, including password entry
+and filament-mapping workflows.
 
-## Refresh the user guide screenshots
+## Shared UI patterns
 
-After building the desktop target, run:
+- Use `row()` for navigation/information cards and `toggle_card()` for binary
+  preferences. Settings card gaps come from `SETTINGS_CARD_GAP` and
+  `SETTINGS_ROW_PITCH`. Footer actions use spacing rather than separator rules.
+- Use `image_fit()` for previews. Cached thumbnails preserve proportions, remove
+  transparent margins, and leave a small UI inset. Missing/unreadable list images
+  fall back to the file icon.
+- A CFS spool being present is different from filament reaching the extruder.
+  The nozzle marker requires the extruder sensor and the reported active source.
+- Mapping places the file/source captions above aligned swatches and material
+  names. Material mismatches remain disabled and are rechecked by the backend.
+- The keyboard sets single-line mode before its final size/padding. Keep the
+  text and eye control centered, and retain all printable password characters.
+
+Controls still use the shared action-policy bindings; a different visual style
+must not bypass availability, current-file protection or confirmation checks.
+
+## Tools and generated files
+
+| Tool | Purpose |
+| --- | --- |
+| `build.sh host\|arm` | Install pinned asset tools and build the chosen target; ARM also packages it |
+| `format.sh [--check]` | Apply/check the C style in `.clang-format` |
+| `build_assets.py` | Generate production icons and LVGL font sources |
+| `build_fixtures.py` | Rebuild committed preview PNGs from the bundled SVG artwork |
+| `demo_snapshot.py` | Materialize a case/scenario, or list available cases |
+| `preview.sh` | Interactive or headless native preview |
+| `render_screenshots.py` | Regenerate the PNGs referenced by the user README |
+| `package_arm.py` | Package an already-built ARM runtime and record its provenance |
+| `package.json`, `package-lock.json` | Pin the asset-generation dependencies |
 
 ```sh
+sh touchscreen/developer-tools/format.sh --check
+python3 touchscreen/developer-tools/build_fixtures.py
 python3 touchscreen/developer-tools/render_screenshots.py
 ```
 
-This uses the same native application and fixture mode, with the original example
-part in `fixtures/demo-part.svg`. It writes the six PNGs referenced by the user
-README. It does not connect to a printer. Review the screenshots after changing
-layout or typography; keep documentation images aligned with the current UI.
+Commit fixture artwork and the user-facing screenshots after reviewing the
+rendered output. Do not commit `out/`, `node_modules/` or `assets/generated/`.
 
-## Build the precompiled printer package
+## Tests and diagnostics
 
-On the Linux build machine, install the cross compiler and run:
+Build the host binary before testing; native UI tests otherwise skip themselves.
+The suite uses mocks/fixtures and does not operate a printer.
+
+```sh
+python3 -m unittest discover -s touchscreen/tests -v
+```
+
+To check native memory/undefined-behavior issues in a separate build:
+
+```sh
+cmake -S touchscreen/build -B touchscreen/out/asan \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
+  -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+cmake --build touchscreen/out/asan --parallel 4
+ASAN_OPTIONS=detect_leaks=0 SCREEN_BINARY="$PWD/touchscreen/out/asan/openklipper-screen" \
+  python3 -m unittest discover -s touchscreen/tests -v
+```
+
+On the printer, the socket is `/tmp/openklipper-screen.sock`. Logs are
+`/tmp/openklipper-screen-service.log` and `/tmp/openklipper-screen.log`; matching
+PID files use the same base names. Display configuration is normally
+`native-screen.cfg`, with preferences in `native-screen-settings.json` beside it.
+Desktop checks do not replace real installation and hardware acceptance testing.
+
+## Maintain the precompiled printer package
+
+Normal users run the project installer. Its selected release source archive
+already contains `precompiled/armv7/`; no separate touchscreen download or printer
+compilation is needed. The root installer invokes `installation/install.sh`.
+
+After committing runtime/build source changes:
 
 ```sh
 sudo apt install gcc-arm-linux-gnueabihf
 sh touchscreen/developer-tools/build.sh arm
-```
-
-The ARM target is statically linked for ARMv7 with NEON and hard-float ABI. Confirm
-that target compatibility before using it on another controller architecture.
-No display server or X11 runtime is required on the printer.
-
-The build creates `touchscreen/out/arm/` and assembles the ready-built runtime in
-`touchscreen/precompiled/armv7/`. Commit this package with the source so GitHub's
-normal source archive contains everything the project installer needs. Users run
-the normal installer; they do not download a separate touchscreen bundle.
-
-### Publishing a source change
-
-1. Commit the source/build/runtime input changes.
-2. Build the ARM target and assemble the package with `build.sh arm`.
-3. Validate it and commit the updated `precompiled/armv7/` files.
-
-```sh
 python3 touchscreen/installation/validate_package.py \
   --source touchscreen --package touchscreen/precompiled/armv7
 ```
 
-The manifest records hashes of runtime/build inputs and all compiled package
-files. Source fingerprints are used instead of requiring the package commit to
-match its own Git hash: committing compiled files necessarily creates a new
-commit. The build-source commit is retained as provenance. Documentation-only
-changes do not require rebuilding; changing an input without updating the package
-is rejected before installation changes the printer.
+Commit the updated package as a second commit. Its manifest hashes runtime/build
+inputs and package files, and records the build-source commit as provenance.
+Uncommitted source inputs prevent packaging; stale packages prevent installation.
+Documentation, fixture recipes and test-only changes do not require a new binary.
 
-The root installer copies startup scripts and the backend into their existing
-printer locations. Moving source folders does not change the printer's boot
-commands or configuration paths. `installation/install.sh` is an internal step,
-not a second user installation procedure.
+The target is statically linked ARMv7/NEON/hard-float. Confirm architecture support
+before using it on another controller. The printer needs no X11, Node/npm or
+font-generation tools.
 
-### External-host release automation
+`.github/workflows/host-release-asset.yml` separately checks out a release tag,
+builds the ARM runtime and creates `k2-openklipper-host.zip`. The packer includes
+the compiled screen and omits the K2-specific Klipper C helper, which an external
+host builds locally. It uploads the ZIP to the GitHub release, not a test machine.
+Normal printer installation downloads the release-tag source archive, not this ZIP.
 
-`.github/workflows/host-release-asset.yml` checks out the selected release tag,
-installs the ARM cross-compiler, and runs the same `build.sh arm` command before
-creating `k2-openklipper-host.zip`. The release packer includes that freshly built
-panel runtime and omits the K2-specific Klipper C helper, which the external host
-builds itself. The ZIP is uploaded to the GitHub release; it is not deployed to
-a testing machine. Earlier tags without native UI keep their original packer.
+### Isolated touchscreen testing on a printer
 
-This is separate from normal printer installation. The printer installer selects
-the newest published release tag (or an explicit `OKL_REF`) and downloads its
-source archive, which already includes the committed precompiled runtime.
-Maintainers must update those committed files for runtime/build source changes.
-
-### Touchscreen-only installation for developers
-
-For isolated screen testing, copy the matching project checkout to an idle
-printer and run the internal installer from that checkout:
+For developer-only screen testing, copy the matching checkout to an idle printer
+and run from that checkout. Replace the example configuration path/profile with
+the printer's actual values:
 
 ```sh
 sh touchscreen/installation/install.sh /mnt/UDISK/printer_data_mainline/config F008
 sh /mnt/UDISK/openklipper-screen/start.sh /mnt/UDISK/printer_data_mainline/config/native-screen.cfg
 ```
 
-The optional profile argument should match the printer (F008 is only an example).
-This updates and restarts the touchscreen/service without reinstalling Klipper.
-Use the full project installer for normal printer installations and updates.
-
-Keep model-specific hotend, extruder, cutter and Z-reference settings in the
-printer's configuration or its separate integration branch. They are not part of
-the shared native touchscreen implementation.
-
-## Checks and runtime diagnostics
-
-After building the host target:
-
-```sh
-python3 -m unittest discover -s touchscreen/tests -v
-```
-
-UI integration tests require the host binary and generated assets. They are
-skipped when the binary is missing, so build before checking the result. Set
-`SCREEN_BINARY` to test another native build, for example an AddressSanitizer
-build. The Python tests use mocks rather than operating a printer.
-
-On the printer, the service uses `/tmp/openklipper-screen.sock`. Runtime logs are
-`/tmp/openklipper-screen-service.log` and `/tmp/openklipper-screen.log`; PID files
-use the same names. Configuration is normally `native-screen.cfg` alongside the
-printer configuration, with preferences in `native-screen-settings.json`.
-
-First activation and complete-system testing still require validation on actual
-hardware. A successful PC rendering test does not establish printer hardware
-compatibility or replace a full installation backup.
+This installs the screen/service without reinstalling Klipper. Use the full
+project installer for normal installations and complete-system acceptance tests.

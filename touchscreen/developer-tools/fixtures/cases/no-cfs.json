@@ -1,0 +1,8 @@
+{
+  "description": "Idle printer without CFS; the CFS shortcut is hidden.",
+  "scenario": "idle",
+  "page": "home",
+  "printer_image": "assets/demo-printer-only.png",
+  "actions": [],
+  "cfs": false
+}

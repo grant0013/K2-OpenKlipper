@@ -28,7 +28,7 @@ def main():
                 "convert",
                 "-background",
                 "none",
-                str(Path(__file__).parent / "fixtures/demo-part.svg"),
+                str(Path(__file__).parent / "fixtures/assets/demo-part.svg"),
                 "-trim",
                 "+repage",
                 "PNG32:" + str(preview),

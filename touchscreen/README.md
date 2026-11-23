@@ -60,9 +60,8 @@ material mismatches block Start print. Long lists scroll by touch.
 
 Browse printer files with embedded slicer thumbnails, using a fallback icon when
 no preview is available. Review the selected file in a larger preview beside its
-print details. Each list row has a trash
-icon with a filename-specific Cancel/OK confirmation. Other files can be deleted
-during printing; the active print file is protected. Saved time-lapse recordings
+print details. Each list row has a trash icon with a filename-specific Cancel/OK
+confirmation. Other files can be deleted during printing; the active print file is protected. Saved time-lapse recordings
 use the same deletion flow and can be exported to USB when the time-lapse
 component and a USB drive are available.
 
@@ -87,6 +86,7 @@ is in English.
 
 Build, desktop preview, architecture, tests and packaging are covered in the
 [Native touchscreen developer guide](developer-tools/README.md). All developer
-utilities live in `developer-tools/`; layout and behavior are implemented in the
-native source and Python backend. Keep hardware-specific changes in printer
-configuration or a separate integration branch.
+utilities and portable [PC preview cases](developer-tools/fixtures/README.md) live
+in `developer-tools/`; layout and behavior are implemented in the native source
+and Python backend. Keep hardware-specific changes in printer configuration or a
+separate integration branch.

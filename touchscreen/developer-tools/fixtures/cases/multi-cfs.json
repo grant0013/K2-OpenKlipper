@@ -1,0 +1,7 @@
+{
+  "description": "Three CFS units, twelve spools and three file-filament requirements.",
+  "scenario": "multi-cfs",
+  "page": "filament",
+  "printer_image": "assets/demo-printer-combo.png",
+  "actions": []
+}

@@ -25,12 +25,14 @@ There is no worker-pool framework, subclass hierarchy, or hidden deferred jog qu
 | Manual extrusion | Motion, filament and nozzle |
 | Homing, CFS load/unload | Motion, filament, nozzle and part fan |
 | Calibration | Motion, filament, all heaters and controllable fans |
-| Start print | Motion, filament, heaters, part fan and selected-file metadata |
+| Start print | Motion, filament, heaters, part fan, metadata and `file:<path>` |
 | Save configuration | All mutable controls |
 | Temperature or fan | Only the selected heater/channel |
 | Filament editing and CFS preferences | Filament; preferences also serialize persistence |
 | Display preferences / time zone | Preference persistence |
-| File list / metadata | Coalesced background read / selected-file metadata |
+| File list / metadata | Coalesced read / selected metadata and `file:<path>` |
+| File deletion | Storage and the selected `file:<path>` |
+| Recording deletion / USB export | Recording/storage resources, as declared by the action policy |
 | Restart or print interruption | Reserved interrupt channel; confirmation/state guards still apply |
 
 Only independent requests can be outstanding together. Klipper may itself serialize
@@ -97,13 +99,17 @@ light `Never` settings still disable their respective timers.
 
 Files and time-lapse recording lists expose a trash icon on each row, with a
 filename-specific Cancel/OK confirmation. The print-file preview has no Delete action.
-The service requires explicit confirmation, validates a relative G-code path,
-rechecks idle state and delegates deletion to Moonraker's G-code root. Errors
-leave the list intact. Successful deletion clears only that file's selection and
-metadata. File-list reads serialize with deletion so an older refresh cannot
-restore a deleted row. Start, metadata selection and deletion share the file
-resource; delete also reserves storage. Deletion is unavailable while printing
-or paused. Moonraker remains responsible for filesystem/root permissions.
+The service requires explicit confirmation, validates a relative G-code path and
+rechecks the active print filename before delegating to Moonraker. Other files
+can be deleted while printing or paused; the active file cannot. Start, metadata
+selection and deletion reserve a per-path resource so a pending print start also
+protects its file. Deletion additionally reserves storage. Errors leave the list
+intact; success clears only the matching selection, cache and metadata.
+
+File-list reads serialize with deletion, and old thumbnail workers cannot publish
+into a newer list generation. Missing or unreadable thumbnails clear stale cached
+previews. The list row and its separate trash target must not overlap: a disabled
+trash control must never open the print-file screen underneath it.
 
 Navigation remains a fixed group above a separate activity area. Activity uses
 short explicit captions limited to two lines (e.g. Loading / filament), never an
@@ -131,8 +137,9 @@ before sending any G-code. There is no override dialog or silent material fallba
 Recording deletion uses Moonraker's published timelapse root and rechecks the
 completed-recordings list before deleting. The bundled time-lapse renderer writes
 in its temporary directory and publishes videos to that root after rendering.
-Only MP4/MKV filenames are eligible. Deletion is blocked while printing/paused
-and serialized with recording reads and USB export by the shared action policy.
+Only MP4/MKV filenames are eligible. Completed recordings can be deleted during
+printing; the shared action policy serializes deletion with recording reads and
+USB export. The list uses separate, borderless save/export and trash touch areas.
 
 
 ## Axis homing and motor controls

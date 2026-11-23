@@ -8,6 +8,8 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
+CASES = FIXTURES / "cases"
 sys.path.insert(0, str(ROOT / "backend"))
 import action_policy
 from service import Service
@@ -156,10 +158,11 @@ SCENARIOS = (
 def preview_scenario(name="idle", printing=False):
     data = snapshot(printing or name in ("printing", "heating"))
     data["platform"].update(
-        thumbnail=str(ROOT / "developer-tools/fixtures/demo-part.png"),
-        file_thumbnail=str(ROOT / "developer-tools/fixtures/demo-part.png"),
+        printer_image=str(FIXTURES / "assets/demo-printer-combo.png"),
+        thumbnail=str(ROOT / "developer-tools/fixtures/assets/demo-part.png"),
+        file_thumbnail=str(ROOT / "developer-tools/fixtures/assets/demo-part.png"),
         file_thumbnails={
-            row["path"]: str(ROOT / "developer-tools/fixtures/demo-part.png")
+            row["path"]: str(ROOT / "developer-tools/fixtures/assets/demo-part.png")
             for row in data["files"][:3]
         },
     )
@@ -325,15 +328,76 @@ def preview_scenario(name="idle", printing=False):
     return data
 
 
+def available_cases():
+    return sorted(path.stem for path in CASES.glob("*.json"))
+
+
+def preview_case(name):
+    """Materialize a portable UI case using the current snapshot schema."""
+    if name not in available_cases():
+        raise ValueError("Unknown preview case: " + name)
+    recipe = json.loads((CASES / (name + ".json")).read_text())
+    if recipe["scenario"] not in SCENARIOS:
+        raise ValueError("Unknown scenario in case " + name)
+    data = preview_scenario(recipe["scenario"])
+    image = (FIXTURES / recipe["printer_image"]).resolve()
+    if not image.is_relative_to(FIXTURES.resolve()) or not image.is_file():
+        raise ValueError("Case artwork must be a bundled fixture asset")
+    data["platform"]["printer_image"] = str(image)
+    if recipe.get("model"):
+        data["model"] = recipe["model"]
+    if recipe.get("cfs") is False:
+        data["status"]["k2_cfs"].update(fitted=False, active_slot=None)
+        data["status"]["filament_switch_sensor filament_sensor"] = {
+            "filament_detected": False
+        }
+        data["status"]["hark_cfs_slots"].update(
+            slots={}, map_targets=["E"], map_tools=["T0"]
+        )
+        data["slots"] = []
+        data["cfs_units"] = 0
+        data["metadata"]["suggested_mapping"] = {}
+        data["availability"] = action_policy.availability(
+            data["status"], data["connected"], []
+        )
+    data["preview"] = {
+        "case": name,
+        "description": recipe["description"],
+        "page": recipe.get("page", "home"),
+        "actions": recipe.get("actions", []),
+    }
+    return data
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("output", type=Path)
-    parser.add_argument("--printing", action="store_true")
-    parser.add_argument("--scenario", choices=SCENARIOS, default="idle")
-    args = parser.parse_args()
-    args.output.write_text(
-        json.dumps(preview_scenario(args.scenario, args.printing), indent=2) + "\n"
+    parser.add_argument("output", type=Path, nargs="?")
+    choice = parser.add_mutually_exclusive_group()
+    choice.add_argument("--scenario", choices=SCENARIOS)
+    choice.add_argument("--case", choices=available_cases())
+    parser.add_argument(
+        "--printing", action="store_true", help="Mark a raw scenario as printing"
     )
+    parser.add_argument(
+        "--list", action="store_true", help="List bundled preview cases"
+    )
+    args = parser.parse_args()
+    if args.list:
+        for name in available_cases():
+            recipe = json.loads((CASES / (name + ".json")).read_text())
+            print(name + " — " + recipe["description"])
+        return
+    if args.output is None:
+        parser.error("an output path is required unless --list is used")
+    if args.case and args.printing:
+        parser.error("--printing applies to --scenario, not --case")
+    data = (
+        preview_case(args.case)
+        if args.case
+        else preview_scenario(args.scenario or "idle", args.printing)
+    )
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(data, indent=2) + "\n")
     print(args.output.resolve())
 
 

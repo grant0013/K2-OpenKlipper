@@ -251,7 +251,7 @@ class FileDeleteUITests(unittest.TestCase):
         invalid = Image.open(self.path / "screen.ppm").copy()
         self.assertIsNone(ImageChops.difference(baseline, invalid).getbbox())
         data["platform"]["file_thumbnails"]["part.gcode"] = str(
-            test_native_ui.ROOT / "developer-tools/fixtures/demo-part.png"
+            test_native_ui.ROOT / "developer-tools/fixtures/assets/demo-part.png"
         )
         self.render("files", data=data)
         thumbnail = Image.open(self.path / "screen.ppm").copy()
