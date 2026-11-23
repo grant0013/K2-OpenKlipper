@@ -61,7 +61,7 @@ for family, sizes, source in (
 icons = {
     "droplets": (24,),
     "house": (36,),
-    "folder-open": (20, 24),
+    "folder-open": (20, 24, 96),
     "settings": (24,),
     "move": (24,),
     "thermometer": (24,),

@@ -25,7 +25,8 @@ The screenshots below are rendered by the native application with example data.
 - Tap the status text or history icon to open **Status history**. One or two lines
   are centered beside CFS; longer messages end with an ellipsis.
 - CFS colors and the nozzle marker show available and feeding filament.
-- Light and fan shortcuts remain available; filament colors do not follow the UI accent.
+- The light icon shows its current state: rays when on, a crossed bulb when off.
+  Light and fan shortcuts remain available; filament colors do not follow the UI accent.
 
 | Printing | Heating toward targets |
 | --- | --- |
@@ -38,6 +39,8 @@ The screenshots below are rendered by the native application with example data.
 | Hours and minutes remaining | Dark model preview |
 | --- | --- |
 | ![Hours and minutes remaining](screenshots/printing-long.png) | ![Dark model preview](screenshots/dark-preview.png) |
+
+![Bulb with rays when on](screenshots/idle-lit.png)
 
 ### Temperatures
 
@@ -97,6 +100,7 @@ returns to the previous page automatically.
 
 - Home, jog X/Y and Z, or tap a coordinate to enter a destination within travel limits.
 - Motion and movement-step selection follow homing and operation availability.
+  Printing is identified by Klipper print state, not its generic idle timer.
 - Extrude/retract only when the nozzle is hot enough and the printer state allows it.
 - Unlock motors for manual movement; confirmation warns that the bed may drop.
 
@@ -123,7 +127,8 @@ returns to the previous page automatically.
 - With one CFS, no unit selector is shown. With multiple reported units, two to four
   selectors share the available width; the spool holder remains separate.
 - Without CFS, edit the spool-holder card and feed filament manually. Load/Unload
-  buttons are hidden.
+  buttons are hidden. **Clear** in the spool-holder editor removes its saved details
+  with confirmation; it does not move or unload filament.
 
 | One CFS | No CFS |
 | --- | --- |
@@ -148,6 +153,14 @@ returns to the previous page automatically.
 | CFS preferences | Automatic refill sequence |
 | --- | --- |
 | ![CFS preferences](screenshots/refill.png) | ![Automatic refill sequence](screenshots/refill-sequence.png) |
+
+| Spool-holder editor | Clear confirmation |
+| --- | --- |
+| ![Edit spool holder](screenshots/spool-holder-edit.png) | ![Clear spool-holder details](screenshots/clear-spool.png) |
+
+Saved CFS slot details are not proof that the same spool is still installed. The
+current driver reports spool events but does not automatically clear or replace
+these records. Verify material and color after a physical spool change.
 
 Automatic refill uses loaded slots with matching material and color; the sequence
 page shows matching sources. Startup/insertion reading options follow backend support.
@@ -176,7 +189,12 @@ backend work. A single unit's environmental readings are not copied to other uni
 ## Files and starting a print
 
 1. Browse sliced files with thumbnails or a fallback icon. Refresh keeps the list
-   visible and reports progress in the sidebar.
+   visible and reports progress in the sidebar. File review shows a spinner while
+   reading a new preview, then a larger fallback icon if no preview is available.
+   Home uses the same fallback during printing. Previous previews are never reused.
+
+   Embedded Creality/Orca PNGs and material metadata are read when Moonraker has
+   not extracted them; file names are not used to guess material.
 2. Review the preview and print details; select **Calibrate before printing** if available.
 3. Match each file filament's color/material to a printer source, then **Start print**.
    Source lists scroll by touch. Incompatible materials are disabled and block starting;
@@ -201,6 +219,12 @@ backend work. A single unit's environmental readings are not copied to other uni
 | Delete confirmation | Stop-print confirmation |
 | --- | --- |
 | ![Delete confirmation](screenshots/delete-file.png) | ![Stop-print confirmation](screenshots/stop-print.png) |
+
+| Reading preview | No embedded preview |
+| --- | --- |
+| ![Reading the selected file](screenshots/file-reading.png) | ![Selected file without preview](screenshots/file-no-preview.png) |
+
+![Print without preview](screenshots/printing-no-preview.png)
 
 ## Settings
 

@@ -37,6 +37,7 @@ Paths below are relative to `touchscreen/`:
 | `backend/model.py` | Printer capabilities, limits and filament compatibility |
 | `backend/platform_services.py` | Network and printer-local services |
 | `backend/storage.py` | Image cache, file/export and time-zone helpers |
+| `backend/gcode_metadata.py` | Bounded fallback reader for embedded G-code metadata and PNGs |
 | `assets/` | Production SVGs, fonts and licenses |
 | `build/` | CMake, ARM toolchain and LVGL configuration |
 | `runtime/` | Startup scripts and example configuration |
@@ -104,6 +105,8 @@ sh touchscreen/developer-tools/preview.sh --list
 | `heating` | Current-to-target temperature arrows |
 | `multi-cfs` | Four units and sixteen spools |
 | `file` | File preview, metadata and calibration option |
+| `file-reading`, `file-no-preview`, `printing-no-preview` | Reading and missing-thumbnail states |
+| `idle-lit` | Light icon with visible rays |
 | `mapping` | File filament requirements and source selection |
 | `objects` | Object outlines and skip confirmation |
 | `empty-extruder` | Spools present, no filament feeding the nozzle |
@@ -183,6 +186,8 @@ Reuse the existing UI helpers:
   Shared spacing comes from `SETTINGS_CARD_GAP` and `SETTINGS_ROW_PITCH`.
 - `image_fit()` for proportional previews with a small inset. Missing file
   thumbnails fall back to the file icon.
+- `modal_message()` for shared centered dialog bodies. It fills the space between
+  header and buttons, with vertical scrolling when text exceeds the viewport.
 - Shared keyboard and numeric-entry controls. Single-line keyboard mode must be
   set before final field dimensions; preserve all printable password characters.
 

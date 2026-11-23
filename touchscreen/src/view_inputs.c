@@ -9,7 +9,7 @@ typedef struct {
     const char *inputs[12];
 } ViewSpec;
 static const ViewSpec views[] = {
-    {"home", {"settings", "slots"}},
+    {"home", {"settings", "slots", "platform.print_preview_busy"}},
     {"move",
      {"settings", "status.toolhead.homed_axes", "status.stepper_enable",
       "status.extruder.can_extrude"}},
@@ -21,7 +21,7 @@ static const ViewSpec views[] = {
      {"slots", "materials", "metadata", "cfs_units", "status.k2_cfs",
       "status.filament_switch_sensor filament_sensor", "platform.file_thumbnail"}},
     {"files|file",
-     {"files", "files_refresh", "metadata", "file", "platform.file_thumbnail",
+     {"files", "files_refresh", "metadata", "file", "file_read", "platform.file_thumbnail",
       "platform.file_thumbnails", "slots", "settings"}},
     {"settings|display|timers|refill|refill_sequence",
      {"prefs", "refill", "settings", "cfs_units", "status.k2_cfs.fitted"}},
@@ -54,9 +54,9 @@ static bool contains(const char *list, const char *route) {
 }
 char *ui_view_signature(void) {
     cJSON *value = cJSON_CreateObject();
-    const char *base[] = {"connected", "status.webhooks.state",         "status.print_stats.state",
-                          "error",     "status.webhooks.state_message", "platform.connection_error",
-                          "result"};
+    const char *base[] = {
+        "connected", "status.webhooks.state",         "status.print_stats.state",
+        "error",     "status.webhooks.state_message", "platform.connection_error"};
     for (unsigned i = 0; i < sizeof(base) / sizeof(base[0]); i++)
         cJSON_AddItemToObject(value, base[i], cJSON_Duplicate(J(base[i]), true));
     bool found = false;

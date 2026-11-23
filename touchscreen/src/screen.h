@@ -34,7 +34,7 @@ typedef struct {
     int history_count;
     bool select_feeding_cfs;
     int shown_temperature[3];
-    bool temperature_shown[3], wifi_joining;
+    bool temperature_shown[3], wifi_joining, file_waiting, nav_dirty;
     char wifi_ssid[100];
     char assets[1024], socket[108], selected_slot[16], cfs_unit[16], file[1024], mapping_file[1024];
     char timezone_draft[128];
@@ -102,6 +102,7 @@ bool ui_unavailable(const char *, const char *);
 char *ui_view_signature(void);
 bool ui_section_root(void);
 void ui_header(const char *);
+void modal_message(const char *);
 void ui_tabs(bool, const char *);
 lv_obj_t *box(lv_obj_t *, int, int, int, int, bool);
 lv_obj_t *text(lv_obj_t *, const char *, int, int, int, const lv_font_t *, bool);

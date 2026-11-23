@@ -25,7 +25,11 @@ class PreviewCaseTests(unittest.TestCase):
                 self.assertEqual(data["preview"]["case"], name)
                 self.assertIsInstance(data["preview"]["actions"], list)
                 self.assertTrue(Path(data["platform"]["printer_image"]).is_file())
-                self.assertTrue(Path(data["platform"]["file_thumbnail"]).is_file())
+                thumbnail = data["platform"].get("file_thumbnail")
+                if thumbnail:
+                    self.assertTrue(Path(thumbnail).is_file())
+                else:
+                    self.assertIn(name, ("file-reading", "file-no-preview"))
                 recipe = json.loads((demo.CASES / (name + ".json")).read_text())
                 self.assertFalse(Path(recipe["printer_image"]).is_absolute())
 

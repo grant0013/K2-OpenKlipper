@@ -1,6 +1,7 @@
 """Native service behavior: guard actual printer actions and retire operation state."""
 
 import copy
+import time
 from pathlib import Path
 import sys
 import tempfile
@@ -66,6 +67,7 @@ class ServiceTests(unittest.TestCase):
         self.state = status()
         self.config = settings()
         self.mr.query.side_effect = lambda: copy.deepcopy(self.state)
+        self.mr.status_snapshot.side_effect = lambda: {"status": self.mr.query(), "eventtime": time.monotonic()}
         self.mr.settings.side_effect = lambda: copy.deepcopy(self.config)
         self.s = Service(config, self.mr)
         self.s.status = copy.deepcopy(self.state)

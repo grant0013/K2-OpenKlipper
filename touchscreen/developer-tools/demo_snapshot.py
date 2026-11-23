@@ -136,6 +136,10 @@ def snapshot(printing=False):
 
 SCENARIOS = (
     "idle",
+    "idle-lit",
+    "file-reading",
+    "file-no-preview",
+    "printing-no-preview",
     "heated",
     "multi-cfs",
     "heating",
@@ -312,6 +316,16 @@ def preview_scenario(name="idle", printing=False):
         data["print_stage"] = (
             "Preparing the printer: waiting for the bed temperature to stabilize before the next operation begins"
         )
+    if name == "idle-lit":
+        data["status"]["output_pin chamber_led"] = {"value": 1}
+    if name in ("file-reading", "file-no-preview"):
+        data["platform"].pop("file_thumbnail", None)
+        data["file_read"] = {"busy": name == "file-reading", "path": data["file"]}
+        if name == "file-reading":
+            data["metadata"] = {}
+    if name == "printing-no-preview":
+        data = preview_scenario("printing")
+        data["platform"].pop("thumbnail", None)
     if name == "refreshing-files":
         data["files_refresh"] = {"busy": True, "error": ""}
     if name == "calibrating":

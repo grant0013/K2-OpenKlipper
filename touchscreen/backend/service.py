@@ -31,6 +31,7 @@ from collections import deque
 from pathlib import Path
 
 import action_policy
+import gcode_metadata
 import model
 import platform_services as platform
 import storage
@@ -232,6 +233,10 @@ class Service:
         self.events, self.notices, self.files, self.metadata = [], [], [], {}
         self.operations = {}
         self.pending_temperatures = {}
+        self.pending_fans = {}
+        self.requested_values = {}
+        self.selection_id = 0
+        self.file_read = {"busy": False, "path": ""}
         self.files_preloaded = False
         self.files_ready = False
         self.results = deque(maxlen=32)
@@ -304,16 +309,19 @@ class Service:
         )
 
     def fresh(self, idle=False):
-        status = self.mr.query()
+        snapshot = self.mr.status_snapshot()
         settings = self.mr.settings()
+        # A slower HTTP response must not overwrite newer subscription state.
+        self.merge_status(snapshot["status"], snapshot.get("eventtime"))
         with self.lock:
-            self.status, self.settings = status, settings
+            status = {
+                key: dict(value) if isinstance(value, dict) else value
+                for key, value in self.status.items()
+            }
+            self.settings = settings
         if model.stopped(status):
             raise RuntimeError("Printer stopped. Resolve its error first.")
-        if idle and (
-            model.active(status)
-            or status.get("idle_timeout", {}).get("state") == "Printing"
-        ):
+        if idle and model.active(status):
             raise RuntimeError(
                 "Unavailable during printing. Finish or stop the print first."
             )
@@ -353,12 +361,41 @@ class Service:
             )
             if blocked:
                 raise action_policy.ActionBusy(blocked)
+            if action == "file":
+                self.selection_id += 1
+                request = dict(request, selection_id=self.selection_id)
+                self.selected_file = str(request["path"])
+                self.file_read = {"busy": True, "path": self.selected_file}
+                self.platform.pop("file_thumbnail", None)
+                self.metadata.pop(self.selected_file, None)
+            if action in ("temperature", "fan"):
+                channel = (
+                    request.get("heater")
+                    if action == "temperature"
+                    else request.get("fan")
+                )
+                if action == "temperature":
+                    limits = model.heater_limits(self.settings, channel)
+                    if not limits or not limits.contains(
+                        float(request.get("value", float("nan")))
+                    ):
+                        raise ValueError("Temperature is outside configured limits")
+                if action == "fan":
+                    value = float(request.get("value", float("nan")))
+                    if not math.isfinite(value) or not 0 <= value <= 100:
+                        raise ValueError("Invalid fan speed")
+                self.requested_values[(action, channel)] = (
+                    float(request["value"]),
+                    time.monotonic() + 8,
+                )
+            if action == "fan" and any(
+                op.get("action") == "fan" and op.get("fan") == request["fan"]
+                for op in self.operations.values()
+            ):
+                self.pending_fans[request["fan"]] = dict(request)
+                self.sequence += 1
+                return
             if action == "temperature":
-                limit = model.heater_limits(self.settings, request.get("heater"))
-                if not limit or not limit.contains(
-                    float(request.get("value", float("nan")))
-                ):
-                    raise ValueError("Temperature is outside configured limits")
                 if any(
                     op.get("action") == "temperature"
                     and op.get("heater") == request["heater"]
@@ -374,6 +411,7 @@ class Service:
                 "action": action,
                 "slot": request.get("slot", ""),
                 "heater": request.get("heater", ""),
+                "fan": request.get("fan", ""),
                 "kind": request.get("kind", ""),
                 "ssid": request.get("ssid", ""),
                 "label": spec.label,
@@ -389,6 +427,21 @@ class Service:
         except Exception:
             with self.lock:
                 self.operations.pop(token, None)
+                if (
+                    action == "file"
+                    and request.get("selection_id") == self.selection_id
+                ):
+                    self.file_read["busy"] = False
+                if action in ("temperature", "fan"):
+                    self.requested_values.pop(
+                        (
+                            action,
+                            request.get("heater")
+                            if action == "temperature"
+                            else request.get("fan"),
+                        ),
+                        None,
+                    )
                 self.sequence += 1
             raise
 
@@ -462,14 +515,31 @@ class Service:
                     "success": success,
                     "error": failure,
                     "slot": request.get("slot", ""),
+                    "path": request.get("path", ""),
                 }
                 self.result = result
                 self.results.append(result)
                 self.operations.pop(token, None)
                 self.sequence += 1
+                if (
+                    action == "file"
+                    and request.get("selection_id") == self.selection_id
+                ):
+                    self.file_read["busy"] = False
+                channel = (
+                    request.get("heater")
+                    if action == "temperature"
+                    else request.get("fan")
+                )
+                if not success and action in ("temperature", "fan"):
+                    current = self.requested_values.get((action, channel))
+                    if current and current[0] == float(request["value"]):
+                        self.requested_values.pop((action, channel), None)
                 pending = (
                     self.pending_temperatures.pop(request.get("heater"), None)
                     if action == "temperature"
+                    else self.pending_fans.pop(request.get("fan"), None)
+                    if action == "fan"
                     else None
                 )
                 if pending is not None:
@@ -482,7 +552,43 @@ class Service:
 
     def snapshot(self):
         with self.lock:
-            status, settings = self.status, self.settings
+            status = {
+                key: dict(value) if isinstance(value, dict) else value
+                for key, value in self.status.items()
+            }
+            settings = self.settings
+            for (action, channel), (value, expiry) in list(
+                self.requested_values.items()
+            ):
+                if time.monotonic() >= expiry:
+                    self.requested_values.pop((action, channel), None)
+                    continue
+                if action == "temperature":
+                    obj, field, desired = (
+                        ("hark_chamber", "requested", value)
+                        if channel == "chamber"
+                        else (channel, "target", value)
+                    )
+                else:
+                    obj = {
+                        "part": "fan",
+                        "side": "fan_generic auxiliary_fan",
+                        "exhaust": "fan_generic exhaust_fan",
+                    }[channel]
+                    field, desired = "speed", value / 100
+                in_flight = any(
+                    op.get("action") == action
+                    and op.get("heater" if action == "temperature" else "fan")
+                    == channel
+                    for op in self.operations.values()
+                )
+                if (
+                    abs(float(status.get(obj, {}).get(field, -999)) - desired) < 0.001
+                    and not in_flight
+                ):
+                    self.requested_values.pop((action, channel), None)
+                else:
+                    status.setdefault(obj, {})[field] = desired
             slots = []
             for key, rec in model.records(status).items():
                 slots.append(dict(rec, slot=key, label=model.slot_label(key)))
@@ -565,6 +671,7 @@ class Service:
                     "error": self.files_error,
                 },
                 "file": self.selected_file,
+                "file_read": dict(self.file_read),
                 "metadata": self.metadata.get(self.selected_file, {}),
                 "source": self.files_source,
                 "wifi": dict(
@@ -771,6 +878,10 @@ class Service:
                 self.gcode({"speed": "M220 S%g", "flow": "M221 S%g"}[key] % value)
         elif action in ("load", "unload"):
             self.filament_action(action, r, status)
+        elif action == "slot_clear":
+            if r.get("slot") != "E" or r.get("confirm") is not True:
+                raise ValueError("Only the spool holder can be cleared here")
+            self.gcode("CFS_SLOT_CLEAR SLOT=E")
         elif action == "slot_save":
             self.save_slot(r, status, settings)
         elif action == "calibrate":
@@ -884,17 +995,43 @@ class Service:
             path = str(r["path"])
             if self.files_source == "usb":
                 path = storage.import_usb_file(self.mr, path)
-            self.selected_file = path
-            meta = self.mr.metadata(path)
+            selection = r.get("selection_id", self.selection_id)
+            if self.selection_id == selection:
+                self.selected_file = path
+                self.platform.pop("file_thumbnail", None)
+            meta, embedded = self.read_metadata(path)
             meta["filaments"] = platform.file_filaments(meta)
             meta["suggested_mapping"] = model.suggest_mapping(
                 meta["filaments"] or [{"tool": 0}], self.status
             )
-            self.metadata[path] = meta
+            preview = None
             try:
-                self.prepare_thumbnail(path, meta, "file_thumbnail", (328, 337))
+                if embedded:
+                    preview = storage.prepare_image(
+                        io.BytesIO(embedded),
+                        self.cache_path,
+                        "selected-" + str(selection),
+                        (328, 337),
+                        trim=True,
+                    )
+                else:
+                    preview = self.prepare_thumbnail(
+                        path,
+                        meta,
+                        "selected-" + str(selection),
+                        (328, 337),
+                        publish=False,
+                    )
             except (OSError, ValueError):
-                self.platform.pop("file_thumbnail", None)
+                pass
+            with self.lock:
+                self.metadata[path] = meta
+                if self.selection_id == selection and self.selected_file == path:
+                    self.platform.pop("file_thumbnail", None)
+                    if preview:
+                        self.platform["file_thumbnail"] = preview
+                    self.file_read = {"busy": False, "path": path}
+                    self.sequence += 1
         elif action == "start":
             self.start_print(r, status, settings)
         elif action == "preference":
@@ -1163,6 +1300,7 @@ class Service:
     def merge_status(self, delta, eventtime=None, full=False):
         with self.lock:
             initialized = bool(self.status)
+            previous_file = self.status.get("print_stats", {}).get("filename", "")
             for name, values in delta.items():
                 if eventtime is not None:
                     if eventtime < self.status_times.get(name, float("-inf")):
@@ -1173,6 +1311,15 @@ class Service:
                 else:
                     self.status[name] = values
             self.connected = True
+            if self.status.get("webhooks", {}).get("state") != "ready":
+                self.requested_values.clear()
+                self.pending_temperatures.clear()
+                self.pending_fans.clear()
+            filename = self.status.get("print_stats", {}).get("filename", "")
+            if filename != previous_file:
+                self.platform.pop("thumbnail", None)
+                self.platform.pop("estimated_time", None)
+                self.platform["print_preview_busy"] = bool(filename)
             state = self.status.get("print_stats", {}).get("state", "")
             stage = self.status.get("gcode_macro _STAGE", {}).get("text", "")
             if state != self.last_state:
@@ -1369,6 +1516,48 @@ class Service:
             )
             self.artwork_key = signature
 
+    def refresh_print_preview(self, filename):
+        preview = None
+        meta = {}
+        try:
+            meta, embedded = self.read_metadata(filename)
+            if embedded:
+                preview = storage.prepare_image(
+                    io.BytesIO(embedded),
+                    self.cache_path,
+                    "print-preview",
+                    (446, 236),
+                    trim=True,
+                )
+            else:
+                preview = self.prepare_thumbnail(
+                    filename, meta, "print-preview", (446, 236), publish=False
+                )
+        except (OSError, ValueError, RuntimeError):
+            pass
+        with self.lock:
+            if self.status.get("print_stats", {}).get("filename") != filename:
+                return
+            self.platform.pop("thumbnail", None)
+            if preview:
+                self.platform["thumbnail"] = preview
+            self.platform["estimated_time"] = meta.get("estimated_time", 0)
+            self.platform["print_preview_busy"] = False
+            self.sequence += 1
+
+    def read_metadata(self, path):
+        meta = self.mr.metadata(path)
+        embedded = None
+        if not meta.get("filament_type") or not meta.get("thumbnails"):
+            try:
+                extra, embedded = gcode_metadata.read(self.mr.base, path)
+                for key, value in extra.items():
+                    if not meta.get(key):
+                        meta[key] = value
+            except (OSError, ValueError, TypeError):
+                pass
+        return meta, embedded
+
     def file_thumbnails(self, files, generation=None):
         for item in files:
             if generation is not None and generation != self.file_generation:
@@ -1400,9 +1589,11 @@ class Service:
                     self.sequence += 1
                 continue
 
-    def prepare_thumbnail(self, path, meta, key, bounds):
+    def prepare_thumbnail(self, path, meta, key, bounds, publish=True):
         thumbnails = meta.get("thumbnails") or []
         if not thumbnails:
+            if publish:
+                self.platform.pop(key, None)
             return
         selected = max(thumbnails, key=lambda t: t.get("width", 0) * t.get("height", 0))
         parent = Path(path).parent.as_posix()
@@ -1421,7 +1612,8 @@ class Service:
         ready = storage.prepare_image(
             io.BytesIO(data), self.cache_path, key, bounds, trim=True
         )
-        self.platform[key] = ready
+        if publish:
+            self.platform[key] = ready
         return ready
 
     def refresh_platform(self):
@@ -1453,35 +1645,37 @@ class Service:
         version = Path(__file__).resolve().parents[1] / "VERSION"
         if version.exists():
             info["screen_version"] = version.read_text().strip()
-        for key in (
-            "recordings",
-            "timelapse",
-            "printer_image",
-            "thumbnail",
-            "file_thumbnail",
-            "estimated_time",
-            "screen_version",
-            "version",
-            "asleep",
-            "icons",
-            "file_thumbnails",
-            "stock_firmware",
-        ):
-            if key in self.platform:
-                info[key] = self.platform[key]
-        if disk and disk.get("mounted"):
-            info["usb_free"] = storage.free_space(platform.USB_MOUNT)
-        uid = disk.get("id") if disk else None
-        if self.usb_initialized and uid != self.usb_id:
-            self.event(
-                "USB drive connected" if uid else "USB drive removed", timed=True
-            )
-            if not uid and self.files_source == "usb":
-                self.files = []
-                self.files_source = "gcodes"
-        self.usb_initialized = True
-        self.usb_id = uid
-        self.platform = info
+        with self.lock:
+            for key in (
+                "recordings",
+                "timelapse",
+                "printer_image",
+                "thumbnail",
+                "file_thumbnail",
+                "estimated_time",
+                "screen_version",
+                "version",
+                "asleep",
+                "icons",
+                "file_thumbnails",
+                "print_preview_busy",
+                "stock_firmware",
+            ):
+                if key in self.platform:
+                    info[key] = self.platform[key]
+            if disk and disk.get("mounted"):
+                info["usb_free"] = storage.free_space(platform.USB_MOUNT)
+            uid = disk.get("id") if disk else None
+            if self.usb_initialized and uid != self.usb_id:
+                self.event(
+                    "USB drive connected" if uid else "USB drive removed", timed=True
+                )
+                if not uid and self.files_source == "usb":
+                    self.files = []
+                    self.files_source = "gcodes"
+            self.usb_initialized = True
+            self.usb_id = uid
+            self.platform = info
         try:
             self.prepare_artwork()
             self.prepare_icons()
@@ -1535,12 +1729,7 @@ class Service:
                 filename = self.status.get("print_stats", {}).get("filename", "")
                 if filename and filename != self.print_file:
                     self.print_file = filename
-                    try:
-                        meta = self.mr.metadata(filename)
-                        self.platform["estimated_time"] = meta.get("estimated_time", 0)
-                        self.prepare_thumbnail(filename, meta, "thumbnail", (446, 236))
-                    except Exception:
-                        self.platform.pop("thumbnail", None)
+                    self.refresh_print_preview(filename)
                 if now - platform_at > 5:
                     self.refresh_platform()
                     platform_at = now

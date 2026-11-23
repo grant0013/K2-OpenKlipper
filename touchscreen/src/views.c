@@ -215,13 +215,29 @@ static void file_title(char *out, size_t size, const char *path) {
                       !strcasecmp(extension, ".g")))
         *extension = '\0';
 }
+static void preview_placeholder(lv_obj_t *parent, int x, int y, int width, int height, bool busy) {
+    if (busy) {
+        lv_obj_t *spinner = lv_spinner_create(parent, 1000, 60);
+        lv_obj_set_pos(spinner, x + (width - 52) / 2, y + (height - 52) / 2);
+        lv_obj_set_size(spinner, 52, 52);
+        lv_obj_set_style_arc_width(spinner, 4, LV_PART_MAIN);
+        lv_obj_set_style_arc_width(spinner, 4, LV_PART_INDICATOR);
+        lv_obj_set_style_arc_color(spinner, colour("343e4b"), LV_PART_MAIN);
+        lv_obj_set_style_arc_color(spinner, app.accent, LV_PART_INDICATOR);
+        lv_obj_clear_flag(spinner, LV_OBJ_FLAG_CLICKABLE);
+    } else
+        icon(parent, "folder-open", x + (width - 96) / 2, y + (height - 96) / 2, 96,
+             colour("a4aebb"));
+}
 void view_home(void) {
     bool printing = app.printing || app.paused || !strcmp(S("status.print_stats.state"), "error");
     const char *filename = S("status.print_stats.filename");
     if (printing) {
         lv_obj_t *preview = box(app.content, 0, 19, HOME_MAIN, 260, false);
         lv_obj_set_style_bg_color(preview, colour("30343c"), 0);
-        home_image(S("platform.thumbnail"), 19, 220);
+        if (!image_fit(app.content, S("platform.thumbnail"), 12, 31, HOME_MAIN - 24, 196))
+            preview_placeholder(app.content, 0, 19, HOME_MAIN, 220,
+                                B("platform.print_preview_busy"));
         char display_name[1024];
         file_title(display_name, sizeof(display_name), filename);
         lv_obj_t *name = text(app.content, display_name, 14, 31, HOME_MAIN - 28, &font_ui_17, true);
@@ -258,8 +274,9 @@ void view_home(void) {
         else
             icon(app.content, "printer-3d", (HOME_MAIN - 44) / 2, 178, 44, colour("a4aebb"));
         const char *blocked = ui_control_reason("open_files");
-        button_with_icon(app.content, "folder-open", *blocked ? blocked : "Print a file", 0, 391,
-                         HOME_MAIN, 70, "open_files", !*blocked);
+        const char *caption = strstr(blocked, "Calibration") ? blocked : "Print a file";
+        button_with_icon(app.content, "folder-open", caption, 0, 391, HOME_MAIN, 70, "open_files",
+                         !*blocked);
     }
     int count = cJSON_GetArraySize(J("heaters"));
     if (count > 3)
@@ -329,10 +346,8 @@ void views_refresh(void) {
             lv_txt_get_size(&target_size, lv_label_get_text(app.target[i]), font, 0, 0,
                             LV_COORD_MAX, LV_TEXT_FLAG_NONE);
             int width = current_size.x + (approaching ? 28 + target_size.x : 0);
-            int x =
-                thermals
-                    ? 48 + (lv_obj_get_width(lv_obj_get_parent(app.current[i])) - 58 - width) / 2
-                    : 46 + (132 - width) / 2;
+            int x = thermals ? (lv_obj_get_width(lv_obj_get_parent(app.current[i])) - width) / 2
+                             : 46 + (132 - width) / 2;
             lv_obj_set_width(app.current[i], current_size.x);
             lv_obj_set_x(app.current[i], x);
             if (approaching) {
@@ -508,6 +523,11 @@ static void heat_view(void) {
         button_fixed(app.content, "Turn heaters off", 189, 402, 296, 64,
                      "{\"action\":\"heaters_off\"}", false);
 }
+static int fan_draft[3];
+static uint64_t fan_draft_until[3];
+static int fan_index(const char *name) {
+    return !strcmp(name, "part") ? 0 : !strcmp(name, "side") ? 1 : 2;
+}
 typedef struct {
     char *name;
     lv_obj_t *output;
@@ -529,6 +549,9 @@ static void slider_event(lv_event_t *e) {
         }
     }
     if (lv_event_get_code(e) == LV_EVENT_RELEASED) {
+        int index = fan_index(control->name);
+        fan_draft[index] = lv_slider_get_value(slider);
+        fan_draft_until[index] = platform_millis() + 1500;
         cJSON *r = request("fan");
         cJSON_AddStringToObject(r, "fan", control->name);
         cJSON_AddNumberToObject(r, "value", lv_slider_get_value(slider));
@@ -550,6 +573,8 @@ static void fans_view(void) {
         char path[150], value[30];
         snprintf(path, sizeof(path), "status.%s.speed", objects[i]);
         int speed = (int)round(N(path) * 100);
+        if (fan_draft_until[i] > platform_millis())
+            speed = fan_draft[i];
         snprintf(value, sizeof(value), "%d%%", speed);
         lv_obj_t *output = text(app.content, value, 550, y, 124, &font_ui_16, false);
         right(output);
@@ -817,7 +842,12 @@ static void edit_view(void) {
             right(text(field, values[i], 230, 25, 320, &font_ui_20, false));
         icon(field, i == 2 ? "pencil" : "chevron-right", 560, 30, 16, colour("a4aebb"));
     }
-    footer("Cancel", "cancel_edit", "Save", "save_slot");
+    if (!strcmp(app.selected_slot, "E")) {
+        button_fixed(app.content, "Cancel", 0, 402, 210, 64, "cancel_edit", false);
+        button_fixed(app.content, "Clear", 232, 402, 210, 64, "clear_spool", false);
+        button_fixed(app.content, "Save", 464, 402, 210, 64, "save_slot", true);
+    } else
+        footer("Cancel", "cancel_edit", "Save", "save_slot");
 }
 static void materials_view(void) {
     const char *filters[] = {"All", "PLA", "PETG", "ABS", "TPU", "Other"};
@@ -1000,17 +1030,20 @@ static void files_view(void) {
 static void file_view(void) {
     if (ui_unavailable("Starting a print", "starting another print"))
         return;
-    const char *path = S("file");
+    const char *path = app.file_waiting ? app.file : S("file");
     if (!*path) {
         center_message("Select a file", "Choose a sliced G-code file.", "Files", "open_files");
         return;
     }
-    snprintf(app.file, sizeof(app.file), "%s", path);
+    if (path != app.file)
+        snprintf(app.file, sizeof(app.file), "%s", path);
     lv_obj_t *art = box(app.content, 0, 19, 352, 361, false);
     lv_obj_set_style_bg_color(art, colour("30343c"), 0);
     lv_obj_set_style_border_width(art, 0, 0);
     const char *thumbnail = S("platform.file_thumbnail");
-    image_fit(app.content, thumbnail, 12, 31, 328, 337);
+    bool reading = app.file_waiting || B("file_read.busy");
+    if (reading || !image_fit(app.content, thumbnail, 12, 31, 328, 337))
+        preview_placeholder(app.content, 12, 31, 328, 337, reading);
     lv_obj_t *details = box(app.content, 368, 19, 306, 361, false);
     lv_obj_set_style_border_width(details, 0, 0);
     char title[1024];
@@ -1023,6 +1056,9 @@ static void file_view(void) {
     snprintf(values[0], sizeof(values[0]), "%.0f min", N("metadata.estimated_time") / 60);
     snprintf(values[1], sizeof(values[1]), "%.1f g", N("metadata.filament_weight_total"));
     snprintf(values[2], sizeof(values[2]), "%.0f", N("metadata.layer_count"));
+    if (reading)
+        for (int i = 0; i < 3; i++)
+            snprintf(values[i], sizeof(values[i]), "—");
     for (int i = 0; i < 3; i++) {
         text(app.content, labels[i], 384, 125 + i * 50, 160, &font_ui_16, true);
         lv_obj_t *value = text(app.content, values[i], 548, 123 + i * 50, 110, &font_ui_20, false);
@@ -1045,7 +1081,12 @@ static void file_view(void) {
         text(toggle, "Calibrate before printing", 52, 20, 224, &font_ui_17, false);
     }
     button_fixed(app.content, "Back", 0, 402, 352, 64, "back", false);
-    button_fixed(app.content, "Start printing", 368, 402, 306, 64, "review_mapping", true);
+    lv_obj_t *start =
+        button_fixed(app.content, "Start printing", 368, 402, 306, 64, "review_mapping", true);
+    if (reading || (has("file_read") && !cJSON_GetArraySize(J("metadata")))) {
+        lv_obj_add_state(start, LV_STATE_DISABLED);
+        lv_obj_set_style_opa(start, 100, 0);
+    }
 }
 static void colour_swatch(lv_obj_t *parent, int x, int y, const char *hex, int size) {
     lv_obj_t *swatch = box(parent, x, y, size, size, false);
@@ -1140,7 +1181,7 @@ static void mapping_view(void) {
         text(required, caption, 16, 6, 258, &font_ui_16, true);
         colour_swatch(required, 16, 42, jstr(filament, "colour", jstr(filament, "color", "828b98")),
                       32);
-        lv_obj_t *required_type = text(required, jstr(filament, "type", "Unknown material"), 60, 44,
+        lv_obj_t *required_type = text(required, jstr(filament, "type", "Not specified"), 60, 44,
                                        214, &font_ui_20, false);
         lv_label_set_long_mode(required_type, LV_LABEL_LONG_DOT);
         lv_obj_set_height(required_type, 26);
@@ -1171,7 +1212,9 @@ static void mapping_view(void) {
     }
     if (!y)
         text(list, "No filament requirements found in this file.", 14, 40, 620, &font_ui_20, true);
-    footer("Back", "back", "Start print", mapping_ready() ? "start_print" : NULL);
+    button_fixed(app.content, "Back", 0, 402, 286, 64, "back", false);
+    button_fixed(app.content, "Start print", 348, 402, 320, 64,
+                 mapping_ready() ? "start_print" : NULL, true);
 }
 static void mapping_pick(void) {
     cJSON *filament = mapping_filament();
@@ -1841,7 +1884,8 @@ void views_render(void) {
         title = "Language";
     char edit_title[80];
     if (!strcmp(p, "edit")) {
-        snprintf(edit_title, sizeof(edit_title), "Slot %s", slot_label(app.selected_slot));
+        snprintf(edit_title, sizeof(edit_title), !strcmp(app.selected_slot, "E") ? "%s" : "Slot %s",
+                 slot_label(app.selected_slot));
         title = edit_title;
     }
     if (strcmp(p, "objects") && strcmp(p, "file") && strcmp(p, "mapping"))
@@ -2175,6 +2219,7 @@ bool views_control_key(const char *action, char *key, size_t size) {
                               {"load", "load"},
                               {"unload", "unload"},
                               {"edit_slot", "slot_save"},
+                              {"clear_spool", "slot_clear"},
                               {"save_slot", "slot_save"},
                               {"draft_temperature", "slot_save"},
                               {"motor_toggle", "motors"},
@@ -2286,6 +2331,10 @@ void views_action(const char *a) {
     } else if (!strncmp(a, "slot:", 5)) {
         snprintf(app.selected_slot, sizeof(app.selected_slot), "%s", a + 5);
         app.dirty = true;
+    } else if (!strcmp(a, "clear_spool")) {
+        cJSON *clear = request("slot_clear");
+        cJSON_AddStringToObject(clear, "slot", "E");
+        confirmed("Clears spool holder details. Filament is not unloaded.", clear);
     } else if (!strcmp(a, "edit_slot")) {
         cJSON_Delete(app.draft);
         app.draft = cJSON_Duplicate(slot_record(app.selected_slot), true);
@@ -2416,6 +2465,19 @@ void views_action(const char *a) {
                !strcmp(a, "refresh_files")) {
         ui_route("files", false);
     } else if (!strncmp(a, "file_open:", 10)) {
+        cJSON *request = cJSON_Parse(a + 10);
+        const char *selected = jstr(request, "path", "");
+        snprintf(app.file, sizeof(app.file), "%s", selected);
+        app.file_waiting = true;
+        cJSON_DeleteItemFromObject(app.data, "file");
+        cJSON_AddStringToObject(app.data, "file", selected);
+        cJSON_DeleteItemFromObject(app.data, "metadata");
+        cJSON_AddObjectToObject(app.data, "metadata");
+        cJSON_DeleteItemFromObject(J("platform"), "file_thumbnail");
+        cJSON_DeleteItemFromObject(app.data, "file_read");
+        cJSON *read = cJSON_AddObjectToObject(app.data, "file_read");
+        cJSON_AddBoolToObject(read, "busy", true);
+        cJSON_Delete(request);
         ui_command(a + 10);
         ui_route("file", false);
     } else if (!strncmp(a, "file_delete:", 12)) {
@@ -2608,18 +2670,7 @@ void views_action(const char *a) {
     }
 }
 /* Long fault text remains available in place, without a duplicate Details page. */
-static void error_message(const char *message) {
-    lv_obj_t *area = lv_obj_create(app.body);
-    lv_obj_remove_style_all(area);
-    lv_obj_set_pos(area, 24, 78);
-    lv_obj_set_size(area, 512, 188);
-    lv_obj_set_scroll_dir(area, LV_DIR_VER);
-    lv_obj_set_scrollbar_mode(area, LV_SCROLLBAR_MODE_AUTO);
-    lv_obj_set_style_width(area, 3, LV_PART_SCROLLBAR);
-    lv_obj_set_style_bg_color(area, colour("a4aebb"), LV_PART_SCROLLBAR);
-    lv_obj_set_style_bg_opa(area, 120, LV_PART_SCROLLBAR);
-    text(area, message, 4, 6, 500, &font_ui_18, false);
-}
+
 void views_overlay(void) {
     if (ui_connection_mode() != CONNECTION_READY)
         return;
@@ -2649,7 +2700,7 @@ void views_overlay(void) {
                 ui_send(ack);
             } else {
                 modal_frame(title, 120, 60, 560, 360, true);
-                error_message(detail);
+                modal_message(detail);
                 char action[80];
                 snprintf(action, sizeof(action), "notice_ack:%llu", (unsigned long long)id);
                 button(app.body, "OK", 160, 282, 240, 60, action, true);
@@ -2661,15 +2712,14 @@ void views_overlay(void) {
         snprintf(app.last_fault, sizeof(app.last_fault), "%s", error);
         modal_frame("Printer stopped", 120, 60, 560, 360, true);
         app.printer_fault_open = true;
-        error_message(error);
+        modal_message(error);
         button(app.body, "OK", 160, 282, 240, 60, "error_ack", true);
         return;
     }
     if (!app.overlay && !cJSON_IsObject(J("operation")) && B("status.hark_plr.available")) {
         modal_frame("Interrupted print", 120, 60, 560, 360, true);
-        text(app.body,
-             "An interrupted print can be recovered. Check the bed and part before continuing.", 28,
-             90, 504, &font_ui_20, false);
+        modal_message(
+            "An interrupted print can be recovered. Check the bed and part before continuing.");
         button(app.body, "Discard", 24, 282, 230, 56, "plr:discard", false);
         button(app.body, "Resume", 306, 282, 230, 56, "plr:resume", true);
     }

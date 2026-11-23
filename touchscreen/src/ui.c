@@ -411,10 +411,25 @@ void modal_frame(const char *title, int x, int y, int w, int h, bool critical) {
     lv_obj_set_style_text_align(t, LV_TEXT_ALIGN_CENTER, 0);
     snprintf(modal_kind, sizeof(modal_kind), "%s", critical ? "fault" : "dialog");
 }
+void modal_message(const char *message) {
+    lv_obj_t *area = lv_obj_create(app.body);
+    lv_obj_remove_style_all(area);
+    lv_obj_set_pos(area, 24, 72);
+    lv_obj_set_size(area, 512, 198);
+    lv_obj_set_scroll_dir(area, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(area, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_set_style_width(area, 3, LV_PART_SCROLLBAR);
+    lv_obj_set_style_bg_color(area, muted, LV_PART_SCROLLBAR);
+    lv_obj_set_style_bg_opa(area, 120, LV_PART_SCROLLBAR);
+    lv_point_t size;
+    lv_txt_get_size(&size, message, &font_ui_20, 0, 0, 500, LV_TEXT_FLAG_NONE);
+    lv_obj_t *label =
+        text(area, message, 6, size.y < 198 ? (198 - size.y) / 2 : 0, 500, &font_ui_20, false);
+    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+}
 void ui_notice(const char *title, const char *message) {
     modal_frame(title, 120, 60, 560, 360, true);
-    lv_obj_t *t = text(app.body, message, 28, 90, 504, &font_ui_18, false);
-    lv_obj_set_height(t, 160);
+    modal_message(message);
     button(app.body, "OK", 160, 282, 240, 56, "close", true);
 }
 void ui_confirm(const char *message, const char *command) {
@@ -422,24 +437,22 @@ void ui_confirm(const char *message, const char *command) {
     snprintf(app.confirm_message, sizeof(app.confirm_message), "%s", message);
     cJSON *parsed = cJSON_Parse(command);
     const char *kind = jstr(parsed, "action", "");
-    const char *title = !strcmp(kind, "motors")    ? "Unlock motors?"
-                        : !strcmp(kind, "restart") ? "Restart printer control?"
+    const char *title = !strcmp(kind, "slot_clear") ? "Clear spool holder?"
+                        : !strcmp(kind, "motors")   ? "Unlock motors?"
+                        : !strcmp(kind, "restart")  ? "Restart printer control?"
                         : (!strcmp(kind, "delete_file") || !strcmp(kind, "delete_recording"))
                             ? "Delete file?"
                         : !strcmp(kind, "firmware_restart") ? "Restart controller firmware?"
                                                             : "Confirm";
     modal_frame(title, 120, 60, 560, 360, false);
-    lv_obj_t *t = text(app.body, message, 28, 104, 504, &font_ui_20, false);
-    lv_obj_set_style_text_align(t, LV_TEXT_ALIGN_CENTER, 0);
-    if ((!strcmp(kind, "delete_file") || !strcmp(kind, "delete_recording"))) {
-        lv_obj_set_height(t, 140);
-        lv_label_set_long_mode(t, LV_LABEL_LONG_DOT);
-    }
+    modal_message(message);
     button(app.body, "Cancel", 24, 282, 230, 56, "close", false);
     const char *label =
         (!strcmp(kind, "delete_file") || !strcmp(kind, "delete_recording")) ? "OK" : "Continue";
     if (!strcmp(command, "discard"))
         label = "Discard changes";
+    else if (!strcmp(kind, "slot_clear"))
+        label = "Clear";
     else if (!strcmp(kind, "motors"))
         label = "Unlock motors";
     else if (!strcmp(kind, "cancel"))
@@ -833,7 +846,9 @@ void ui_data(cJSON *data) {
     cJSON_Delete(app.data);
     app.data = data;
     if (files_busy != B("files_refresh.busy") || wifi_busy != B("wifi.busy"))
-        app.dirty = true;
+        app.nav_dirty = true;
+    if (app.file_waiting && !strcmp(S("file"), app.file) && B("file_read.busy"))
+        app.file_waiting = false;
     app.connected = B("connected");
     app.service_link = true;
     app.ever_service = true;
@@ -864,6 +879,10 @@ void ui_data(cJSON *data) {
         strcmp(previous_operations ? previous_operations : "",
                new_operations ? new_operations : "") ||
         strcmp(previous_operation ? previous_operation : "", new_operation ? new_operation : ""))
+        app.nav_dirty = true;
+    if (policy_changed && !strcmp(app.route, "home"))
+        app.dirty = true;
+    if (policy_changed && !strcmp(app.route, "fans"))
         app.dirty = true;
     free(previous_policy);
     free(previous_operations);
@@ -933,12 +952,25 @@ void ui_data(cJSON *data) {
             continue;
         result_ids[result_cursor++ % 32] = id;
         const char *result_action = jstr(result, "action", "");
+        if (ui_connection_mode() != CONNECTION_READY)
+            app.dirty = true;
+        if (!strcmp(result_action, "file") && !strcmp(jstr(result, "path", ""), app.file)) {
+            app.file_waiting = false;
+            app.dirty = true;
+        }
         if (!strcmp(result_action, "wifi_join")) {
             app.wifi_joining = false;
             app.dirty = true;
         }
         if (jbool(result, "success", false)) {
             const char *action = result_action;
+            if (!strcmp(action, "slot_clear")) {
+                cJSON_Delete(app.draft);
+                app.draft = NULL;
+                app.edit_dirty = false;
+                if (!strcmp(app.route, "edit"))
+                    ui_route("filament", true);
+            }
             if (!strcmp(action, "slot_save")) {
                 const char *slot = jstr(result, "slot", "");
                 if (!*slot || !strcmp(slot, app.selected_slot)) {
@@ -1045,6 +1077,7 @@ static const ActivitySpec *sidebar_activity(void) {
 }
 
 static void navigation(void) {
+    app.nav_dirty = false;
     if (app.nav)
         lv_obj_del(app.nav);
     app.nav = lv_obj_create(app.screen);
@@ -1191,6 +1224,10 @@ void ui_update(void) {
 }
 void ui_tick(void) {
     bool pressing = platform_pressed();
+    if (app.nav_dirty && !pressing && !app.overlay && ui_connection_mode() == CONNECTION_READY) {
+        navigation();
+        app.nav_dirty = false;
+    }
     if ((app.dirty || rebuild) && !pressing && !app.overlay)
         ui_render();
 }

@@ -54,6 +54,7 @@ ACTIONS = {
         report=True,
     ),
     "save_config": rule("Saving configuration", {"*"}, idle=True, report=True),
+    "slot_clear": rule("Clearing spool holder", {"filament"}, idle=True),
     "slot_save": rule("Saving filament", {"filament"}, idle=True),
     "temperature": rule("Setting temperature"),
     "fan": rule("Setting fan"),
@@ -66,7 +67,7 @@ ACTIONS = {
         "Deleting recording", {"recordings", "storage"}, ready=False, report=True
     ),
     "delete_file": rule("Deleting file", {"storage"}, report=True),
-    "file": rule("Reading file", {"file"}, ready=False),
+    "file": rule("Reading file", ready=False),
     "recordings": rule("Reading recordings", {"recordings"}, ready=False),
     "export": rule("Exporting", {"storage"}, ready=False, report=True),
     "usb_format": rule(
@@ -130,14 +131,18 @@ def reason(request, status, connected, operations):
             )
             else ""
         )
-    if request.get("action") == "temperature":
+    if request.get("action") in ("temperature", "fan"):
         operations = tuple(
             op
             for op in operations
             if not (
-                op.get("action") == "temperature"
+                op.get("action") == request.get("action")
                 and (
-                    op.get("heater") == request.get("heater")
+                    (
+                        op.get("heater") == request.get("heater")
+                        if request.get("action") == "temperature"
+                        else op.get("fan") == request.get("fan")
+                    )
                     or set(op.get("resources", ())) == set(spec.resources)
                 )
             )
@@ -186,8 +191,6 @@ def reason(request, status, connected, operations):
     if spec.idle_only:
         if status.get("print_stats", {}).get("state") in ("printing", "paused"):
             return "Unavailable during printing"
-        if status.get("idle_timeout", {}).get("state") == "Printing":
-            return "Wait for the current movement to finish"
     if (
         status.get("k2_cfs", {}).get("change_pending")
         and spec.resources & MACHINE

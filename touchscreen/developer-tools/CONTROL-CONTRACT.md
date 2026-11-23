@@ -203,3 +203,30 @@ avoid rounding flicker. Control decisions continue to use unmodified sensor valu
 USB eject publishes unavailable state immediately and retains it while the same
 drive remains unmounted. Network progress is page-level; password entry uses a
 neutral field, one-shot Shift and double-tap Caps Lock.
+
+## Live feedback and file selection
+
+Use `print_stats.state` for active/paused print detection. `idle_timeout.state` may
+say Printing after ordinary commands and must not disable all idle controls.
+Physical operation/resource locks and fresh command validation remain authoritative.
+Fresh HTTP snapshots are merged using Moonraker event timestamps, so a delayed
+query cannot replace newer subscription homing/state fields.
+Accepted temperature/fan requests publish requested values immediately, without
+altering measured temperatures. Only the latest repeat for a channel is retained;
+errors remove the echo and show a notice, and echoes expire if telemetry never
+confirms them. Own-channel setters stay editable while other interlocks remain.
+
+Operation/sidebar changes invalidate navigation independently of page content.
+Completion results are not a global reason to rebuild all controls. Custom fan
+sliders keep their released value while request acceptance reaches the backend.
+
+File selection clears thumbnail/metadata on admission and publishes `file_read`.
+Each selection has an ID: late work may cache its own metadata but cannot replace
+the selected preview. The native view also waits for acknowledgment before using
+snapshot file data. Missing previews use the file-list fallback icon; reading uses
+a spinner. Print filename changes independently clear the Home preview.
+
+The optional G-code fallback reads at most 512 KiB from each end via Moonraker,
+never guesses material from filenames, validates embedded PNG blocks, and feeds
+image decoding through the existing worker cache. `modal_message()` owns all
+confirmation/error body alignment and scroll behavior.
