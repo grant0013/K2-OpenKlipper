@@ -200,11 +200,10 @@ void view_home(void) {
         lv_obj_set_style_border_side(tile, LV_BORDER_SIDE_TOP, 0);
         icon(tile, i == 0 ? "nozzle" : i == 1 ? "bed" : "chamber", 12, 15, 24, colour("a4aebb"));
         text(tile, jstr(heater, "label", ""), 44, 17, 82, &font_ui_14, true);
-        app.current[i] = text(tile, "", 8, 48, 52, &font_ui_20, false);
-        right(app.current[i]);
-        centered(text(tile, "/", 62, 48, 12, &font_ui_20, true));
-        app.target[i] = text(tile, "", 78, 48, 50, &font_ui_20, true);
-        right(app.target[i]);
+        /* Keep the reading anchored beneath the icon for every digit count.
+         * The optional destination follows it, without an empty target column. */
+        app.current[i] = text(tile, "", 12, 48, 114, &font_ui_20, false);
+        lv_label_set_recolor(app.current[i], true);
     }
     lv_obj_t *light = button(app.content, "", 540, 307, 64, 70, "{\"action\":\"light\"}", false);
     const char *light_path =
@@ -280,6 +279,9 @@ void views_refresh(void) {
             if (!strcmp(app.route, "heat"))
                 snprintf(value, sizeof(value), target ? "%.0f° / %.0f°" : "%.0f°",
                          jnum(heater, "current", 0), target);
+            else if (target > 0 && fabs(jnum(heater, "current", 0) - target) > 1.0)
+                snprintf(value, sizeof(value), "%.0f° #a4aebb → %.0f°#", jnum(heater, "current", 0),
+                         target);
             else
                 snprintf(value, sizeof(value), "%.0f°", jnum(heater, "current", 0));
             lv_label_set_text(app.current[i], value);

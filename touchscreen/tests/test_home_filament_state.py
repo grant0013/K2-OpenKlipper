@@ -1,7 +1,11 @@
 """Render real widgets to distinguish filament presence, selection and targets."""
 
 import copy
+import sys
 import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
 import action_policy
 import test_native_ui
@@ -53,18 +57,45 @@ class HomeFilamentStateTests(unittest.TestCase):
             ImageChops.difference(a, b).crop((660, 325, 695, 360)).getbbox()
         )
 
-    def test_three_digit_current_and_target_share_right_edges_and_baseline(self):
+    def test_current_readings_start_at_same_position_for_different_digit_counts(self):
+        data = copy.deepcopy(self.data)
+        for h, current in zip(data["heaters"], (200, 58, 9)):
+            h.update(current=current, target=0)
+        image = self.frame("home", data)
+        bounds = []
+        for y in (67, 158, 249):
+            crop = image.crop((655, y, 769, y + 30))
+            bounds.append(
+                crop.convert("L").point(lambda v: 255 if v > 100 else 0).getbbox()
+            )
+        self.assertLessEqual(max(b[0] for b in bounds) - min(b[0] for b in bounds), 1)
+        self.assertLessEqual(max(b[1] for b in bounds) - min(b[1] for b in bounds), 1)
+
+    def test_target_is_only_shown_while_approaching_it(self):
         data = copy.deepcopy(self.data)
         for h in data["heaters"]:
-            h.update(current=350, target=350)
-        image = self.frame("home", data)
-        # Compare identical glyphs in both columns for every heater.
+            h.update(current=200, target=0)
+        off = self.frame("home", data)
+        for h in data["heaters"]:
+            h["target"] = 200
+        holding = self.frame("home", data)
         for y in (67, 158, 249):
-            current = image.crop((651, y, 703, y + 30))
-            target = image.crop((719, y, 771, y + 30))
-
-            def ink_bounds(crop):
-                mask = crop.convert("L").point(lambda v: 255 if v > 100 else 0)
-                return mask.getbbox()
-
-            self.assertEqual(ink_bounds(current), ink_bounds(target))
+            region = (655, y, 769, y + 30)
+            self.assertIsNone(
+                ImageChops.difference(off, holding).crop(region).getbbox()
+            )
+        for target in (210, 180):
+            for h in data["heaters"]:
+                h["target"] = target
+            approaching = self.frame("home", data)
+            # Both heating and cooling retain the destination, on one line.
+            for y in (67, 158, 249):
+                region = (705, y, 769, y + 30)
+                self.assertIsNotNone(
+                    ImageChops.difference(holding, approaching).crop(region).getbbox()
+                )
+                self.assertIsNone(
+                    ImageChops.difference(holding, approaching)
+                    .crop((655, y + 24, 769, y + 30))
+                    .getbbox()
+                )
