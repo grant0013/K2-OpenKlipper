@@ -13,9 +13,7 @@ separate integration branch.
 ## Architecture and source map
 
 ```text
-Touch / mouse -> C + LVGL UI -> typed JSON over private Unix socket
-                               -> Python service -> Moonraker -> Klipper macros
-                                                 -> local platform services
+Touch / mouse -> C + LVGL UI -> typed JSON over private Unix socket  -> Python service -> Moonraker -> Klipper macros -> local platform services
 ```
 
 The UI does not implement motion, heating or CFS loading sequences. The backend
