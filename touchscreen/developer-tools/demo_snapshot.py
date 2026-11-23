@@ -123,6 +123,7 @@ def snapshot(printing=False):
 SCENARIOS = (
     "idle",
     "heated",
+    "heating",
     "empty-extruder",
     "printing",
     "error",
@@ -138,7 +139,46 @@ SCENARIOS = (
 
 
 def preview_scenario(name="idle", printing=False):
-    data = snapshot(printing or name == "printing")
+    data = snapshot(printing or name in ("printing", "heating"))
+    data["platform"].update(
+        thumbnail=str(ROOT / "developer-tools/fixtures/demo-part.png"),
+        file_thumbnail=str(ROOT / "developer-tools/fixtures/demo-part.png"),
+    )
+    data["status"]["exclude_object"] = {
+        "objects": [
+            {
+                "name": "Part_" + str(i + 1),
+                "center": [x + 25, 150],
+                "polygon": [[x, 75], [x + 50, 75], [x + 50, 225], [x, 225]],
+            }
+            for i, x in enumerate((40, 125, 210))
+        ],
+        "excluded_objects": [],
+        "current_object": "Part_1",
+    }
+    if name in ("printing", "heating"):
+        data["status"]["filament_switch_sensor filament_sensor"] = {
+            "filament_detected": True
+        }
+        data["status"]["print_stats"]["info"] = {
+            "current_layer": 100,
+            "total_layer": 250,
+        }
+        data["print_stage"] = "Heating" if name == "heating" else "Printing"
+        for heater, current in zip(data["heaters"], (180, 45, 35)):
+            target = {"extruder": 210, "heater_bed": 60, "chamber": 55}[heater["key"]]
+            current = current if name == "heating" else target
+            heater.update(current=current, target=target)
+            if heater["key"] != "chamber":
+                data["status"][heater["key"]].update(temperature=current, target=target)
+        data["status"]["hark_chamber"]["requested"] = 55
+        data["status"]["extruder"]["can_extrude"] = True
+        if name == "heating":
+            data["status"]["print_stats"].update(
+                print_duration=0, info={"current_layer": 0, "total_layer": 250}
+            )
+            data["status"]["virtual_sdcard"]["progress"] = 0
+        data["availability"] = action_policy.availability(data["status"], True, [])
     operations = {
         "loading": ("file", "Reading the selected print file…"),
         "homing": ("home", "Homing X, Y and Z…"),

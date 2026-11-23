@@ -5,7 +5,7 @@ SRC=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 usage() {
     echo "Usage: $0 SNAPSHOT.json [--page PAGE]"
     echo "       $0 --scenario NAME [--page PAGE]"
-    echo "Scenarios: idle heated empty-extruder printing error loading homing meshing load unload notice recovery disconnected"
+    echo "Scenarios: idle heated heating empty-extruder printing error loading homing meshing load unload notice recovery disconnected"
 }
 if [ "$#" -eq 0 ]; then usage; exit 2; fi
 if [ "$1" = "--help" ]; then usage; exit 0; fi

@@ -109,6 +109,11 @@ sh touchscreen/developer-tools/preview.sh /tmp/screen-demo.json
 Open a particular screen or a transient state directly:
 
 ```sh
+sh touchscreen/developer-tools/preview.sh --scenario idle
+sh touchscreen/developer-tools/preview.sh --scenario printing
+sh touchscreen/developer-tools/preview.sh --scenario heating
+sh touchscreen/developer-tools/preview.sh --scenario printing --page objects
+
 sh touchscreen/developer-tools/preview.sh --scenario idle --page display
 sh touchscreen/developer-tools/preview.sh --scenario idle --page fans
 sh touchscreen/developer-tools/preview.sh --scenario heated --page move
@@ -116,6 +121,11 @@ sh touchscreen/developer-tools/preview.sh --scenario error
 sh touchscreen/developer-tools/preview.sh --scenario loading
 sh touchscreen/developer-tools/preview.sh --scenario homing
 ```
+
+The printing and heating scenarios include three sample objects. Open the jump
+button on Home, or use `--page objects`, to preview object selection. The
+`heating` scenario shows current temperatures below their targets; `printing`
+shows them holding their targets.
 
 The `heated` scenario uses synthetic nozzle, bed and chamber temperatures so
 manual extrusion and active heater targets can be previewed safely.
