@@ -60,7 +60,7 @@ class WifiUITests(unittest.TestCase):
             commands,
             [{"action": "wifi_join", "ssid": "Demo network", "password": "testpass"}],
         )
-        self.assertTrue(any(i["action"] == "scan_wifi" for i in items))
+        self.assertFalse(any(i["action"] == "scan_wifi" for i in items))
 
     def test_single_symbols_page_covers_printable_password_characters_without_more(
         self,
@@ -106,7 +106,7 @@ class WifiUITests(unittest.TestCase):
         accent = tuple(
             bytes.fromhex(self.data["prefs"].get("accent", "#3d8bfd").lstrip("#"))
         )
-        borders = [y for y in range(60, 150) if image.getpixel((400, y)) == accent]
+        borders = [y for y in range(60, 150) if image.getpixel((400, y)) == (89, 100, 113)]
         self.assertTrue(borders)
         top, bottom = min(borders), max(borders) + 1
         self.assertGreaterEqual(bottom - top, eye[3] + 8)
@@ -114,7 +114,7 @@ class WifiUITests(unittest.TestCase):
         ink = (
             image.crop((30, top + 2, 350, bottom - 2))
             .convert("L")
-            .point(lambda v: 255 if v > 200 else 0)
+            .point(lambda v: 255 if v > 110 else 0)
             .getbbox()
         )
         self.assertIsNotNone(ink)

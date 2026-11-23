@@ -1,0 +1,7 @@
+{
+  "description": "Hours and minutes with full-width print status.",
+  "scenario": "printing-long",
+  "page": "home",
+  "printer_image": "assets/demo-printer-combo.png",
+  "actions": []
+}

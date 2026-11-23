@@ -12,7 +12,9 @@ and completion-reporting flag. Parameterized actions resolve their actual heater
 fan or preference resource before admission. Unknown actions fail closed.
 
 `Service.submit()` reserves resources under the service lock before starting work.
-Conflicting requests are rejected, never queued for later movement. An expected
+Conflicting requests are rejected, never queued for later movement. Heater target
+updates are the exception: while one setter is in flight, retain only the latest
+validated target for that heater, then revalidate it before submission. An expected
 `ActionBusy` response refreshes availability without creating a modal fault.
 There are at most six independent operations plus one explicit print interruption
 or restart. A failing thread start or execution always releases its reservation.
@@ -51,8 +53,8 @@ touch behavior and policy handling. `button_fixed()` uses a larger caption for
 tall footer/card actions. All geometry comes from the native source.
 
 `views_control_key()` maps UI-only aliases to the public action key. Serialized
-backend requests derive their keys automatically. Navigation, browsing and drafts
-are local actions; mutation controls bind to their corresponding backend action.
+backend requests derive their keys automatically. Navigation and drafts are local actions; Home print selection and movement-step
+selection consume UI-only policy keys. Other browsing remains local; mutation controls bind to their corresponding backend action.
 Custom controls such as fan sliders must also consume `ui_control_reason()`.
 The final send path checks the policy again, and the service revalidates fresh state.
 
@@ -113,7 +115,8 @@ trash control must never open the print-file screen underneath it.
 
 Navigation remains a fixed group above a separate activity area. Activity uses
 short explicit captions limited to two lines (e.g. Loading / filament), never an
-unbounded operation description. Existing status history remains unchanged.
+unbounded operation description. The same sidebar area opens history while idle. Print preparation stays on Home;
+file deletion results take precedence on file pages.
 
 Moonraker file-delete API reference:
 https://moonraker.readthedocs.io/en/latest/external_api/file_manager/#file-delete
@@ -145,7 +148,8 @@ USB export. The list uses separate, borderless save/export and trash touch areas
 ## Axis homing and motor controls
 
 XY movement and absolute-position entry require both X and Y homed; Z requires
-Z homed. UI availability has per-axis keys so open numeric dialogs disable Set
+Z homed. Movement-step selection is disabled when no usable motion axis is homed
+or the motion resource is occupied. UI availability has per-axis keys so open numeric dialogs disable Set
 when homing is lost. The service independently rechecks fresh homing state.
 Views rebuild when homing, axis-enable state or extrusion readiness changes.
 Extrusion retains its separate idle, temperature, distance and operation guards.
@@ -169,3 +173,22 @@ Only restart actions and their confirmation/cancellation are available; commands
 for navigation, movement, filament or temperature are rejected by the UI guard.
 If the backend socket is unavailable, a separate service-reconnection screen
 hides restart buttons until the service reconnects. Recovery returns to the previous route without issuing motion.
+
+## Live state and recoverable errors
+
+The first healthy connection schedules one background file-list read. Snapshots
+publish `files_ready`, `calibrate_before_print` and `tune_limits`; macro section
+lookup is case-insensitive because Klipper settings normalize section names.
+Do not infer macro capabilities from capitalization.
+
+G-code errors become notices even while an operation is active. Duplicate delivery
+of the same pending fault is suppressed briefly; an acknowledged fault may appear
+again on a new attempt. Calibration reserves the Home print selector, except for
+homing. Z tilt verifies capability and homes missing axes before adjustment.
+Restart requests retain the reserved interrupt channel during printing.
+
+Displayed heater integers use a 0.75-degree hysteresis around the shown value to
+avoid rounding flicker. Control decisions continue to use unmodified sensor values.
+USB eject publishes unavailable state immediately and retains it while the same
+drive remains unmounted. Network progress is page-level; password entry uses a
+neutral field, one-shot Shift and double-tap Caps Lock.

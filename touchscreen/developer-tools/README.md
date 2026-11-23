@@ -109,6 +109,10 @@ sh touchscreen/developer-tools/preview.sh --list
 | `wifi-password` | Secured network password keyboard |
 | `wifi-connected`, `wifi-failed` | Network result notices |
 | `homing`, `error` | Activity indicator and recoverable fault dialog |
+| `calibrating` | Calibration activity and blocked Home print selection |
+| `printing-long`, `dark-preview` | Hours/minutes remaining and dark model visibility |
+| `wifi-scanning`, `wifi-connecting` | Centered network progress states |
+| `usb-ejected` | Physically present but unavailable drive |
 | `starting`, `shutdown` | Initial loading screen and blocking connection recovery |
 | `service-lost` | Separate local touchscreen-service reconnecting screen |
 

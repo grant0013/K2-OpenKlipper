@@ -61,8 +61,9 @@ class Wifi:
             return {}
 
     def scan(self):
+        self.busy, self.message = True, "Scanning..."
+
         def run():
-            self.busy, self.message = True, "Scanning..."
             try:
                 self.cmd("SCAN")
                 time.sleep(4)

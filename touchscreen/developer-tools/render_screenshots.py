@@ -112,6 +112,12 @@ def main():
             ("connection-lost", "filament", "idle", []),
             ("shutdown", "home", "shutdown", []),
             ("service-lost", "filament", "idle", [{"transport_lost": True}]),
+            ("calibrating", "home", "calibrating", []),
+            ("wifi-scanning", "networks", "wifi-scanning", []),
+            ("wifi-connecting", "wifi", "wifi-connecting", []),
+            ("usb-ejected", "storage", "usb-ejected", []),
+            ("printing-long", "home", "printing-long", []),
+            ("dark-preview", "home", "dark-preview", []),
         ]
         for name, page, scenario, actions in cases:
             data = (

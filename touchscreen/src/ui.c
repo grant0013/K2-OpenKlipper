@@ -907,6 +907,8 @@ void ui_data(cJSON *data) {
         result_cursor = 0;
         app.last_notice = 0;
         app.last_fault[0] = 0;
+        memset(app.temperature_shown, 0, sizeof(app.temperature_shown));
+        app.wifi_joining = false;
     }
     if ((!old_print && !old_pause && (app.printing || app.paused)) ||
         strcmp(previous_file, S("status.print_stats.filename"))) {
@@ -926,8 +928,19 @@ void ui_data(cJSON *data) {
         if (seen)
             continue;
         result_ids[result_cursor++ % 32] = id;
+        const char *result_action = jstr(result, "action", "");
+        if (!strcmp(result_action, "wifi_join")) {
+            app.wifi_joining = false;
+            app.dirty = true;
+        }
         if (jbool(result, "success", false)) {
-            const char *action = jstr(result, "action", "");
+            const char *action = result_action;
+            if (!strcmp(action, "delete_file") || !strcmp(action, "delete_recording")) {
+                snprintf(app.sidebar_result, sizeof(app.sidebar_result), "Deleted\n%s",
+                         !strcmp(action, "delete_file") ? "file" : "recording");
+                app.sidebar_until = platform_millis() + 3000;
+                app.dirty = true;
+            }
             if (!strcmp(action, "slot_save")) {
                 const char *slot = jstr(result, "slot", "");
                 if (!*slot || !strcmp(slot, app.selected_slot)) {
@@ -948,8 +961,34 @@ void ui_data(cJSON *data) {
         views_overlay();
 }
 
+static cJSON *sidebar_operation(void) {
+    cJSON *op, *selected = NULL;
+    cJSON_ArrayForEach(op, J("operations")) {
+        const char *action = jstr(op, "action", "");
+        bool file_page = !strcmp(app.route, "files") || !strcmp(app.route, "file") ||
+                         !strncmp(app.route, "mapping", 7);
+        bool relevant = file_page && (!strcmp(action, "file") || !strcmp(action, "files") ||
+                                      !strcmp(action, "delete_file"));
+        relevant |= (!strcmp(app.route, "recordings") || !strcmp(app.route, "storage")) &&
+                    (!strcmp(action, "export") || !strcmp(action, "delete_recording") ||
+                     !strcmp(action, "usb_eject"));
+        if (relevant)
+            selected = op;
+    }
+    if (selected)
+        return selected;
+    op = J("operation");
+    const char *action = jstr(op, "action", "");
+    bool network_page = !strcmp(app.route, "wifi") || !strcmp(app.route, "networks") ||
+                        !strcmp(app.route, "network");
+    if ((network_page && (!strcmp(action, "wifi_join") || !strcmp(action, "wifi_scan"))) ||
+        !strcmp(action, "temperature") || !strcmp(action, "preference") ||
+        ((app.printing || app.paused) && !strcmp(action, "start")))
+        return NULL;
+    return op;
+}
 static const char *activity_caption(void) {
-    const char *action = S("operation.action");
+    const char *action = jstr(sidebar_operation(), "action", "");
     const char *captions[][2] = {{"home", "Homing"},
                                  {"jog", "Moving"},
                                  {"position", "Moving"},
@@ -1008,25 +1047,32 @@ static void navigation(void) {
         snprintf(nav_icon, sizeof(nav_icon), "nav-%s", names[i]);
         icon(b, nav_icon, 5, 6, 56, i == current ? app.accent : fg);
     }
-    if (cJSON_IsObject(J("operation"))) {
-        lv_obj_t *activity = button_fixed(app.nav, "", 4, 403, 76, 72, "route:history", false);
-        lv_obj_set_style_bg_opa(activity, 0, 0);
-        lv_obj_set_style_border_width(activity, 0, 0);
+    cJSON *operation = sidebar_operation();
+    lv_obj_t *activity =
+        button_fixed(app.nav, "", 4, 391, 76, 70, "route:history", !strcmp(app.route, "history"));
+    lv_obj_set_style_bg_opa(activity, 0, 0);
+    lv_obj_set_style_border_width(activity, 0, 0);
+    const char *caption = "History";
+    if (cJSON_IsObject(operation)) {
         lv_obj_t *spinner = lv_spinner_create(activity, 1000, 60);
-        lv_obj_set_pos(spinner, 26, 3);
+        lv_obj_set_pos(spinner, 26, 6);
         lv_obj_set_size(spinner, 24, 24);
         lv_obj_set_style_arc_width(spinner, 3, LV_PART_MAIN);
         lv_obj_set_style_arc_width(spinner, 3, LV_PART_INDICATOR);
         lv_obj_set_style_arc_color(spinner, edge, LV_PART_MAIN);
         lv_obj_set_style_arc_color(spinner, app.accent, LV_PART_INDICATOR);
-        lv_obj_set_style_arc_opa(spinner, 255, LV_PART_MAIN);
-        lv_obj_set_style_arc_opa(spinner, 255, LV_PART_INDICATOR);
         lv_obj_clear_flag(spinner, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_t *label = text(activity, activity_caption(), 2, 35, 72, &font_ui_12, false);
-        lv_obj_set_height(label, 32);
-        lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
-        lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+        caption = activity_caption();
+    } else {
+        bool recent = app.sidebar_until > platform_millis();
+        icon(activity, recent ? "check" : "history", 24, 6, 28, recent ? app.accent : muted);
+        if (recent)
+            caption = app.sidebar_result;
     }
+    lv_obj_t *label = text(activity, caption, 2, 36, 72, &font_ui_12, false);
+    lv_obj_set_height(label, 32);
+    lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
 }
 static void connection_center(lv_obj_t *label) {
     lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
@@ -1034,45 +1080,51 @@ static void connection_center(lv_obj_t *label) {
 static void connection_screen(ConnectionMode mode) {
     bool starting = mode == CONNECTION_STARTING;
     bool service_lost = mode == CONNECTION_SERVICE_LOST;
-    if (starting || service_lost) {
-        lv_obj_t *spinner = lv_spinner_create(app.content, 1000, 60);
-        lv_obj_set_pos(spinner, 376, 116);
-        lv_obj_set_size(spinner, 48, 48);
-        lv_obj_set_style_arc_width(spinner, 4, LV_PART_MAIN);
-        lv_obj_set_style_arc_width(spinner, 4, LV_PART_INDICATOR);
-        lv_obj_set_style_arc_color(spinner, edge, LV_PART_MAIN);
-        lv_obj_set_style_arc_color(spinner, app.accent, LV_PART_INDICATOR);
-        lv_obj_clear_flag(spinner, LV_OBJ_FLAG_CLICKABLE);
-    } else
-        icon(app.content, "printer-3d", 378, 118, 44, muted);
-    connection_center(text(app.content,
+    lv_obj_t *group = box(app.content, 0, 0, 720, 1, false);
+    lv_obj_clear_flag(group, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_opa(group, 0, 0);
+    lv_obj_set_style_border_width(group, 0, 0);
+    lv_obj_set_height(group, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(group, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(group, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(group, 20, 0);
+    lv_obj_t *spinner = lv_spinner_create(group, 1000, 60);
+    lv_obj_set_size(spinner, 64, 64);
+    lv_obj_set_style_arc_width(spinner, 5, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(spinner, 5, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(spinner, edge, LV_PART_MAIN);
+    lv_obj_set_style_arc_color(spinner, app.accent, LV_PART_INDICATOR);
+    lv_obj_clear_flag(spinner, LV_OBJ_FLAG_CLICKABLE);
+    connection_center(text(group,
                            starting       ? "Printer is starting up"
                            : service_lost ? "Cannot connect to touchscreen service"
                                           : "Printer connection lost",
-                           60, 190, 680, &font_ui_28, false));
+                           0, 0, 720, &font_ui_30, false));
     const char *state = S("status.webhooks.state");
     bool fatal = !strcmp(state, "error") || !strcmp(state, "shutdown");
     const char *detail =
         service_lost ? "Waiting for the local touchscreen service to reconnect…"
         : starting   ? "Waiting for printer control to become ready…"
         : fatal && *S("status.webhooks.state_message") ? S("status.webhooks.state_message")
-        : !app.service_link ? "Waiting for the touchscreen service to reconnect…"
-        : !app.connected    ? "Waiting for the connection to printer control to return."
-        : *S("error")       ? S("error")
-                            : "Printer control is restarting. Waiting for reconnection…";
+        : !app.connected ? "Waiting for the connection to printer control to return."
+        : *S("error")    ? S("error")
+                         : "Printer control is restarting. Waiting for reconnection…";
     const char *result_action = S("result.action");
     if (!starting && !service_lost && !B("result.success") && *S("result.error") &&
         (!strcmp(result_action, "restart") || !strcmp(result_action, "firmware_restart")))
         detail = S("result.error");
-    lv_obj_t *message = text(app.content, detail, 90, 240, 620, &font_ui_18, true);
+    lv_obj_t *message = text(group, detail, 0, 0, 680, &font_ui_20, true);
     connection_center(message);
-    lv_obj_set_height(message, 82);
+    lv_obj_set_style_max_height(message, 100, 0);
     lv_label_set_long_mode(message, LV_LABEL_LONG_DOT);
+    lv_obj_update_layout(group);
+    lv_obj_align(group, LV_ALIGN_CENTER, 0, starting || service_lost ? 0 : -45);
     if (starting || service_lost)
         return;
     button_fixed(app.content, "Restart Klipper", 74, 352, 312, 70, "restart:klipper", false);
     button_fixed(app.content, "Firmware restart", 414, 352, 312, 70, "restart:firmware", false);
 }
+
 void ui_render(void) {
     save_scroll();
     current_scroll = NULL;
@@ -1118,6 +1170,10 @@ void ui_update(void) {
         views_refresh();
 }
 void ui_tick(void) {
+    if (app.sidebar_until && platform_millis() >= app.sidebar_until) {
+        app.sidebar_until = 0;
+        app.dirty = true;
+    }
     bool pressing = platform_pressed();
     if ((app.dirty || rebuild) && !pressing && !app.overlay)
         ui_render();

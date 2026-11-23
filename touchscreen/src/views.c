@@ -219,30 +219,20 @@ void view_home(void) {
     bool printing = app.printing || app.paused || !strcmp(S("status.print_stats.state"), "error");
     const char *filename = S("status.print_stats.filename");
     if (printing) {
-        box(app.content, 0, 19, HOME_MAIN, 260, false);
-        home_image(S("platform.thumbnail"), 19, 260);
+        lv_obj_t *preview = box(app.content, 0, 19, HOME_MAIN, 260, false);
+        lv_obj_set_style_bg_color(preview, colour("30343c"), 0);
+        home_image(S("platform.thumbnail"), 19, 220);
         char display_name[1024];
         file_title(display_name, sizeof(display_name), filename);
         lv_obj_t *name = text(app.content, display_name, 14, 31, HOME_MAIN - 28, &font_ui_17, true);
         lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
         lv_obj_set_height(name, 26);
-        lv_obj_set_style_bg_opa(name, LV_OPA_TRANSP, 0);
-        lv_obj_t *summary = button(app.content, "", 0, 289, HOME_MAIN, 80, "home_history", false);
-        lv_obj_set_style_bg_opa(summary, 0, 0);
-        lv_obj_set_style_border_width(summary, 0, 0);
-        app.time_label = text(summary, "", 0, 13, 270, &font_ui_20, false);
-        app.status_label = text(summary, "", 290, 13, 180, &font_ui_20, false);
-        right(app.status_label);
-        app.layer_label = text(summary, "", 0, 46, 270, &font_ui_14, true);
-        icon(summary, "history", 343, 51, 16, colour("a4aebb"));
-        text(summary, "Status history", 367, 46, 86, &font_ui_14, true);
-        icon(summary, "chevron-right", 454, 51, 16, colour("a4aebb"));
-        app.status_dot = box(summary, 388, 21, 6, 6, false);
-        lv_obj_set_style_radius(app.status_dot, 3, 0);
-        lv_obj_set_style_border_width(app.status_dot, 0, 0);
-        lv_obj_set_style_bg_color(app.status_dot, app.accent, 0);
+        app.time_label = text(app.content, "", 14, 247, 270, &font_ui_17, false);
+        app.layer_label = text(app.content, "", 286, 249, 170, &font_ui_14, true);
+        right(app.layer_label);
+        app.status_label = text(app.content, "", 0, 297, HOME_MAIN, &font_ui_20, false);
         lv_label_set_long_mode(app.status_label, LV_LABEL_LONG_DOT);
-        lv_obj_set_height(app.status_label, 28);
+        lv_obj_set_height(app.status_label, 60);
         app.percent = text(app.content, "", 0, 416, 46, &font_ui_20, false);
         app.progress = lv_bar_create(app.content);
         lv_obj_set_pos(app.progress, 58, 426);
@@ -263,8 +253,9 @@ void view_home(void) {
             home_image(art, 19, 362);
         else
             icon(app.content, "printer-3d", (HOME_MAIN - 44) / 2, 178, 44, colour("a4aebb"));
-        button_with_icon(app.content, "folder-open", "Print a file", 0, 391, HOME_MAIN, 70,
-                         "open_files", true);
+        const char *blocked = ui_control_reason("open_files");
+        button_with_icon(app.content, "folder-open", *blocked ? blocked : "Print a file", 0, 391,
+                         HOME_MAIN, 70, "open_files", !*blocked);
     }
     int count = cJSON_GetArraySize(J("heaters"));
     if (count > 3)
@@ -292,14 +283,8 @@ void view_home(void) {
         home_cfs(19 + count * (height + 10), height);
     lv_obj_t *light =
         button(app.content, "", HOME_SIDE_X, 391, 90, 70, "{\"action\":\"light\"}", false);
-    const char *light_path =
-        S(B("status.output_pin chamber_led.value") ? "platform.icons.light_on"
-                                                   : "platform.icons.light_off");
-    if (*light_path)
-        image(light, light_path, 0, 0);
-    else
-        icon(light, B("status.output_pin chamber_led.value") ? "lightbulb" : "lightbulb-off", 0, 0,
-             28, colour("a4aebb"));
+    icon(light, B("status.output_pin chamber_led.value") ? "lightbulb" : "lightbulb-off", 0, 0, 28,
+         colour("a4aebb"));
     lv_obj_align(lv_obj_get_child(light, -1), LV_ALIGN_CENTER, 0, 0);
     lv_obj_t *fans = button(app.content, "", HOME_SIDE_X + 100, 391, 90, 70, "home_fans", false);
     if (*S("platform.icons.home_fan"))
@@ -318,7 +303,12 @@ void views_refresh(void) {
         cJSON *heater = cJSON_GetArrayItem(J("heaters"), i);
         double target = jnum(heater, "target", 0);
         if (app.current[i]) {
-            snprintf(value, sizeof(value), "%.0f°", jnum(heater, "current", 0));
+            double measured = jnum(heater, "current", 0);
+            if (!app.temperature_shown[i] || fabs(measured - app.shown_temperature[i]) >= .75) {
+                app.shown_temperature[i] = (int)floor(measured + .5);
+                app.temperature_shown[i] = true;
+            }
+            snprintf(value, sizeof(value), "%d°", app.shown_temperature[i]);
             lv_label_set_text(app.current[i], value);
         }
         if (app.target[i]) {
@@ -364,18 +354,17 @@ void views_refresh(void) {
                             : app.printing ? (*S("print_stage") ? S("print_stage") : "Printing")
                                            : "Stopped";
         lv_label_set_text(app.status_label, state);
-        lv_point_t metrics;
-        lv_txt_get_size(&metrics, state, &font_ui_20, 0, 0, 180, LV_TEXT_FLAG_NONE);
-        if (app.status_dot)
-            lv_obj_set_x(app.status_dot, HOME_MAIN - (metrics.x > 180 ? 180 : metrics.x) - 14);
     }
     if (app.time_label) {
         double estimated = N("platform.estimated_time"),
                elapsed = N("status.print_stats.print_duration");
-        if (estimated > 0)
-            snprintf(value, sizeof(value), "%.0f min remaining",
-                     fmax(0, (estimated - elapsed) / 60));
-        else
+        if (estimated > 0) {
+            int minutes = (int)ceil(fmax(0, estimated - elapsed) / 60);
+            if (minutes >= 60)
+                snprintf(value, sizeof(value), "%d h %d min remaining", minutes / 60, minutes % 60);
+            else
+                snprintf(value, sizeof(value), "%d min remaining", minutes);
+        } else
             snprintf(value, sizeof(value), "Time remaining unavailable");
         lv_label_set_text(app.time_label, value);
     }
@@ -882,7 +871,10 @@ static void tune_view(void) {
         double increment = i == 0 ? 10 : 1;
         text(app.content, labels[i], 0, y + 22, 260, &font_ui_18, false);
         char action[120], caption[50];
-        snprintf(action, sizeof(action), "tune:%s:%g", keys[i], value - increment);
+        char maximum_path[80];
+        snprintf(maximum_path, sizeof(maximum_path), "tune_limits.%s.maximum", keys[i]);
+        double maximum = jnum(app.data, maximum_path, 200);
+        snprintf(action, sizeof(action), "tune:%s:%g", keys[i], fmax(1, value - increment));
         button_fixed(app.content, "−", 310, y, 64, 64, action, false);
         snprintf(action, sizeof(action), "tune_input:%s", keys[i]);
         snprintf(caption, sizeof(caption), "%.0f%%", value);
@@ -892,7 +884,7 @@ static void tune_view(void) {
         lv_obj_align(value_text, LV_ALIGN_CENTER, 0, 0);
         lv_obj_set_style_bg_opa(input, 0, 0);
         lv_obj_set_style_border_width(input, 0, 0);
-        snprintf(action, sizeof(action), "tune:%s:%g", keys[i], value + increment);
+        snprintf(action, sizeof(action), "tune:%s:%g", keys[i], fmin(maximum, value + increment));
         button_fixed(app.content, "+", 560, y, 64, 64, action, false);
     }
     text(app.content, "Z offset", 0, 356, 90, &font_ui_18, false);
@@ -900,7 +892,13 @@ static void tune_view(void) {
     button(app.content, "−0.01", 310, 334, 64, 64, "tune:z:-0.01", false);
     char z[80];
     snprintf(z, sizeof(z), "%.3f mm", N("status.gcode_move.homing_origin.2"));
-    centered(text(app.content, z, 386, 352, 162, &font_ui_24, false));
+    lv_obj_t *offset =
+        button_fixed(app.content, "", 386, 334, 162, 64, "tune_input:z_offset", false);
+    lv_obj_set_style_bg_opa(offset, 0, 0);
+    lv_obj_set_style_border_width(offset, 0, 0);
+    lv_obj_t *offset_text = text(offset, z, 0, 0, 162, &font_ui_24, false);
+    centered(offset_text);
+    lv_obj_align(offset_text, LV_ALIGN_CENTER, 0, 0);
     button(app.content, "+0.01", 560, 334, 64, 64, "tune:z:0.01", false);
 }
 static void calibration_view(void) {
@@ -962,7 +960,14 @@ static void files_view(void) {
         lv_obj_set_style_border_width(b, 0, 0);
         cJSON *thumb = cJSON_GetObjectItemCaseSensitive(J("platform.file_thumbnails"), path);
         const char *thumbnail = cJSON_IsString(thumb) ? thumb->valuestring : "";
-        if (!image_fit(b, thumbnail, 12, 9, 96, 60))
+        if (image_fit(b, thumbnail, 12, 9, 96, 60)) {
+            lv_obj_t *image = lv_obj_get_child(b, -1);
+            lv_obj_t *well = box(b, 12, 9, 96, 60, false);
+            lv_obj_clear_flag(well, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_set_style_bg_color(well, colour("30343c"), 0);
+            lv_obj_set_style_border_width(well, 0, 0);
+            lv_obj_move_to_index(well, lv_obj_get_index(image));
+        } else
             icon(b, "folder-open", 48, 27, 24, colour("a4aebb"));
         const char *name = strrchr(path, '/');
         lv_obj_t *filename = text(b, name ? name + 1 : path, 120, 14, 450, &font_ui_18, false);
@@ -997,6 +1002,7 @@ static void file_view(void) {
     }
     snprintf(app.file, sizeof(app.file), "%s", path);
     lv_obj_t *art = box(app.content, 0, 19, 352, 361, false);
+    lv_obj_set_style_bg_color(art, colour("30343c"), 0);
     lv_obj_set_style_border_width(art, 0, 0);
     const char *thumbnail = S("platform.file_thumbnail");
     image_fit(app.content, thumbnail, 12, 31, 328, 337);
@@ -1019,7 +1025,9 @@ static void file_view(void) {
         lv_label_set_long_mode(value, LV_LABEL_LONG_DOT);
         lv_obj_set_height(value, 28);
     }
-    if (has("settings.gcode_macro START_PRINT.variable_screen_full_mesh")) {
+    if (B("calibrate_before_print") ||
+        has("settings.gcode_macro START_PRINT.variable_screen_full_mesh") ||
+        has("settings.gcode_macro start_print.variable_screen_full_mesh")) {
         lv_obj_t *toggle =
             button_fixed(app.content, "", 376, 300, 286, 64, "calibrate_before", false);
         lv_obj_set_style_bg_opa(toggle, 0, 0);
@@ -1101,10 +1109,12 @@ static bool mapping_ready(void) {
 static void mapping_view(void) {
     if (ui_unavailable("Filament selection", "starting another print"))
         return;
-    lv_obj_t *list = scroll_area(19, 388);
+    lv_obj_t *list = scroll_area(19, 379);
     cJSON *filament;
     int y = 0;
     int count = cJSON_GetArraySize(J("metadata.filaments"));
+    if (count > 3)
+        lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_ON);
     for (int i = 0; i < (count ? count : 1); i++) {
         filament = cJSON_GetArrayItem(J("metadata.filaments"), i);
         int tool = (int)jnum(filament, "tool", 0);
@@ -1160,7 +1170,7 @@ static void mapping_view(void) {
 }
 static void mapping_pick(void) {
     cJSON *filament = mapping_filament();
-    lv_obj_t *list = scroll_area(88, 462);
+    lv_obj_t *list = scroll_area(88, 368);
     int y = 0;
     cJSON *record;
     cJSON_ArrayForEach(record, J("slots")) {
@@ -1186,6 +1196,8 @@ static void mapping_pick(void) {
             icon(item, "check", 624, 29, 28, app.accent);
         y += 96;
     }
+    if (y > 280)
+        lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_ON);
     if (!y)
         text(list, "No available filaments with known material and color.", 18, 50, 620,
              &font_ui_20, true);
@@ -1337,13 +1349,54 @@ static void ethernet_view(void) {
             NULL);
     }
 }
+static cJSON *active_operation(const char *action) {
+    cJSON *op;
+    cJSON_ArrayForEach(op, J("operations")) if (!strcmp(jstr(op, "action", ""), action)) return op;
+    op = J("operation");
+    return !strcmp(jstr(op, "action", ""), action) ? op : NULL;
+}
+static void network_progress(const char *title, const char *detail) {
+    lv_obj_t *group = box(app.content, 0, 0, 674, 1, false);
+    lv_obj_clear_flag(group, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_opa(group, 0, 0);
+    lv_obj_set_style_border_width(group, 0, 0);
+    lv_obj_set_height(group, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(group, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(group, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(group, 20, 0);
+    lv_obj_t *spinner = lv_spinner_create(group, 1000, 60);
+    lv_obj_set_size(spinner, 56, 56);
+    lv_obj_set_style_arc_width(spinner, 4, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(spinner, 4, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(spinner, colour("343e4b"), LV_PART_MAIN);
+    lv_obj_set_style_arc_color(spinner, app.accent, LV_PART_INDICATOR);
+    lv_obj_clear_flag(spinner, LV_OBJ_FLAG_CLICKABLE);
+    centered(text(group, title, 0, 0, 640, &font_ui_24, false));
+    if (detail && *detail)
+        centered(text(group, detail, 0, 0, 640, &font_ui_18, true));
+    lv_obj_update_layout(group);
+    lv_obj_align(group, LV_ALIGN_CENTER, 0, 20);
+}
 static void wifi_view(void) {
+    cJSON *join = active_operation("wifi_join");
+    if (app.wifi_joining || join ||
+        (B("wifi.busy") && !strncmp(S("wifi.message"), "Connecting", 10))) {
+        char detail[180];
+        const char *ssid = *app.wifi_ssid ? app.wifi_ssid : jstr(join, "ssid", "selected network");
+        snprintf(detail, sizeof(detail), "Connecting to %s", ssid);
+        network_progress("Connecting to Wi-Fi", detail);
+        return;
+    }
     row(app.content, 90, "Network", *S("wifi.ssid") ? S("wifi.ssid") : "Not connected", "", NULL);
     row(app.content, 90 + SETTINGS_ROW_PITCH, "IP address", S("wifi.ip_address"), "", NULL);
     row(app.content, 90 + 2 * SETTINGS_ROW_PITCH, "Signal", S("wifi.rssi"), "", NULL);
     footer(NULL, NULL, "Connect to Wi-Fi", "scan_wifi");
 }
 static void wifi_networks(void) {
+    if (B("wifi.busy") || active_operation("wifi_scan")) {
+        network_progress("Scanning available networks", "Please wait…");
+        return;
+    }
     lv_obj_t *list = scroll_area(88, 388);
     cJSON *net;
     int y = 0;
@@ -1417,14 +1470,25 @@ static void storage_view(void) {
     if (ui_unavailable("Storage changes", "changing or formatting storage"))
         return;
     row(app.content, 100, "Printer storage", S("platform.free"), "", NULL);
-    row(app.content, 212, "USB drive", has("platform.usb") ? "›" : "Not connected",
-        S("platform.usb.model"), has("platform.usb") ? "route:usb" : NULL);
+    row(app.content, 212, "USB drive",
+        B("platform.usb.mounted") ? "›"
+        : has("platform.usb")     ? "Ejected"
+                                  : "Not connected",
+        S("platform.usb.model"), B("platform.usb.mounted") ? "route:usb" : NULL);
 }
 static void usb_view(void) {
     if (ui_unavailable("USB storage changes", "ejecting or formatting USB"))
         return;
     if (!has("platform.usb") || cJSON_IsNull(J("platform.usb"))) {
         center_message("USB drive not connected", "Connect a USB drive.", NULL, NULL);
+        return;
+    }
+    if (!B("platform.usb.mounted")) {
+        center_message(B("platform.usb.ejected") ? "USB drive ejected" : "USB drive not mounted",
+                       B("platform.usb.ejected")
+                           ? "You can remove the USB drive."
+                           : "Connect a mounted USB drive to use storage actions.",
+                       NULL, NULL);
         return;
     }
     row(app.content, 90, "Drive", S("platform.usb.model"), "", NULL);
@@ -1904,7 +1968,8 @@ static void temperature_sheet(void) {
     button(app.body, "Set temperature", 306, 282, 230, 56, "temp_set", true);
 }
 static lv_obj_t *keyboard_input;
-static bool keyboard_symbols, keyboard_shift;
+static bool keyboard_symbols, keyboard_shift, keyboard_caps;
+static uint64_t keyboard_shift_at;
 static lv_obj_t *keyboard_key(const char *label, const char *action, int x, int y, int width,
                               int height, bool selected) {
     lv_obj_t *key = button_fixed(app.body, "", x, y, width, height, action, selected);
@@ -1933,15 +1998,22 @@ static void keyboard_draw(void) {
     lv_obj_set_style_pad_right(keyboard_input, !strcmp(app.keyboard_kind, "wifi") ? 92 : 18, 0);
     lv_obj_set_style_pad_top(keyboard_input, 20, 0);
     lv_obj_set_style_pad_bottom(keyboard_input, 21, 0);
-    lv_obj_set_style_bg_color(keyboard_input, colour("202b3a"), 0);
+    lv_obj_set_style_bg_color(keyboard_input, colour("10151c"), 0);
     lv_obj_set_style_bg_opa(keyboard_input, LV_OPA_COVER, 0);
     lv_obj_set_style_text_color(keyboard_input, colour("f0f3f7"), 0);
-    lv_obj_set_style_border_color(keyboard_input, app.accent, 0);
-    lv_obj_set_style_border_width(keyboard_input, 2, 0);
+    lv_obj_set_style_border_color(keyboard_input, colour("596471"), 0);
+    lv_obj_set_style_border_width(keyboard_input, 1, 0);
     lv_obj_set_style_radius(keyboard_input, 12, 0);
     lv_obj_set_pos(keyboard_input, 16, 70);
     lv_obj_set_size(keyboard_input, 768, 76);
     lv_textarea_set_text(keyboard_input, app.keyboard_value);
+    lv_textarea_set_cursor_pos(keyboard_input, LV_TEXTAREA_CURSOR_LAST);
+    lv_obj_add_state(keyboard_input, LV_STATE_FOCUSED);
+    lv_obj_set_style_text_color(keyboard_input, colour("828b98"), LV_PART_TEXTAREA_PLACEHOLDER);
+    lv_obj_set_style_bg_color(keyboard_input, colour("f0f3f7"), LV_PART_CURSOR);
+    lv_obj_set_style_bg_opa(keyboard_input, LV_OPA_COVER, LV_PART_CURSOR);
+    lv_obj_set_style_width(keyboard_input, 2, LV_PART_CURSOR);
+
     lv_textarea_set_password_mode(keyboard_input,
                                   !strcmp(app.keyboard_kind, "wifi") && !app.password_visible);
     if (!strcmp(app.keyboard_kind, "wifi")) {
@@ -1969,8 +2041,16 @@ static void keyboard_draw(void) {
         }
     }
     keyboard_key(keyboard_symbols ? "ABC" : "?123", "key_symbols", 16, 344, 112, 56, false);
-    if (!keyboard_symbols)
-        keyboard_key("icon:arrow-big-up", "key_shift", 136, 344, 112, 56, keyboard_shift);
+    if (!keyboard_symbols) {
+        lv_obj_t *shift =
+            keyboard_key("icon:arrow-big-up", "key_shift", 136, 344, 112, 56, keyboard_shift);
+        if (keyboard_caps) {
+            lv_obj_t *line = box(shift, 42, 46, 28, 3, false);
+            lv_obj_clear_flag(line, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_set_style_border_width(line, 0, 0);
+            lv_obj_set_style_bg_color(line, app.accent, 0);
+        }
+    }
     keyboard_key("Space", "key: ", keyboard_symbols ? 136 : 256, 344, keyboard_symbols ? 524 : 404,
                  56, false);
     keyboard_key("icon:delete", "key_back", 668, 344, 116, 56, false);
@@ -1982,7 +2062,8 @@ void ui_keyboard(const char *title, const char *kind, const char *value) {
     snprintf(app.keyboard_title, sizeof(app.keyboard_title), "%s", title);
     snprintf(app.keyboard_kind, sizeof(app.keyboard_kind), "%s", kind);
     snprintf(app.keyboard_value, sizeof(app.keyboard_value), "%s", value);
-    keyboard_symbols = keyboard_shift = false;
+    keyboard_symbols = keyboard_shift = keyboard_caps = false;
+    keyboard_shift_at = 0;
     app.password_visible = false;
     keyboard_draw();
 }
@@ -2018,6 +2099,10 @@ bool views_control_key(const char *action, char *key, size_t size) {
             snprintf(key, size, "delete_file_current");
         cJSON_Delete(r);
         return *key != 0;
+    }
+    if (!strncmp(a, "step:", 5) || !strcmp(a, "open_files")) {
+        snprintf(key, size, "%s", !strcmp(a, "open_files") ? "home_files" : "move_step");
+        return true;
     }
     if (!strncmp(a, "jog:", 4) || !strncmp(a, "position:", 9)) {
         bool jog = !strncmp(a, "jog:", 4);
@@ -2285,13 +2370,20 @@ void views_action(const char *a) {
         ui_send(r);
     } else if (!strncmp(a, "tune_input:", 11)) {
         const char *key = a + 11;
-        ui_number(!strcmp(key, "speed") ? "Print speed" : "Flow ratio", "tune", key,
-                  jnum(app.data,
-                       !strcmp(key, "speed") ? "status.gcode_move.speed_factor"
-                                             : "status.gcode_move.extrude_factor",
-                       1) *
-                      100,
-                  1, 1000);
+        if (!strcmp(key, "z_offset")) {
+            double current = N("status.gcode_move.homing_origin.2");
+            ui_number("Z offset", "tune", key, current, current - .1, current + .1);
+        } else {
+            char max_path[80];
+            snprintf(max_path, sizeof(max_path), "tune_limits.%s.maximum", key);
+            ui_number(!strcmp(key, "speed") ? "Print speed" : "Flow ratio", "tune", key,
+                      jnum(app.data,
+                           !strcmp(key, "speed") ? "status.gcode_move.speed_factor"
+                                                 : "status.gcode_move.extrude_factor",
+                           1) *
+                          100,
+                      1, jnum(app.data, max_path, 200));
+        }
     } else if (!strncmp(a, "calibrate:", 10)) {
         if (!strcmp(a + 10, "save")) {
             ui_route("save", false);
@@ -2387,6 +2479,11 @@ void views_action(const char *a) {
         if (strlen(app.keyboard_value) + strlen(a + 4) <= limit)
             strcat(app.keyboard_value, a + 4);
         lv_textarea_set_text(keyboard_input, app.keyboard_value);
+        lv_textarea_set_cursor_pos(keyboard_input, LV_TEXTAREA_CURSOR_LAST);
+        if (!keyboard_symbols && keyboard_shift && !keyboard_caps && isalpha((unsigned char)a[4])) {
+            keyboard_shift = false;
+            keyboard_draw();
+        }
     } else if (!strcmp(a, "key_back")) {
         size_t n = strlen(app.keyboard_value);
         if (n)
@@ -2396,7 +2493,14 @@ void views_action(const char *a) {
         keyboard_symbols = !keyboard_symbols;
         keyboard_draw();
     } else if (!strcmp(a, "key_shift")) {
-        keyboard_shift = !keyboard_shift;
+        uint64_t now = platform_millis();
+        if (keyboard_caps)
+            keyboard_caps = keyboard_shift = false;
+        else if (keyboard_shift && now - keyboard_shift_at <= 400)
+            keyboard_caps = true;
+        else
+            keyboard_shift = !keyboard_shift;
+        keyboard_shift_at = now;
         keyboard_draw();
     } else if (!strcmp(a, "key_eye")) {
         app.password_visible = !app.password_visible;
@@ -2404,6 +2508,8 @@ void views_action(const char *a) {
     } else if (!strcmp(a, "key_done")) {
         close_modal();
         if (!strcmp(app.keyboard_kind, "wifi")) {
+            app.wifi_joining = true;
+            snprintf(app.wifi_ssid, sizeof(app.wifi_ssid), "%s", app.keyboard_title);
             cJSON *r = request("wifi_join");
             cJSON_AddStringToObject(r, "ssid", app.keyboard_title);
             cJSON_AddStringToObject(r, "password", app.keyboard_value);

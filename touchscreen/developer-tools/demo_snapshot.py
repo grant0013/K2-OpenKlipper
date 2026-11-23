@@ -151,6 +151,12 @@ SCENARIOS = (
     "recovery",
     "disconnected",
     "shutdown",
+    "calibrating",
+    "wifi-scanning",
+    "wifi-connecting",
+    "usb-ejected",
+    "printing-long",
+    "dark-preview",
     "wifi-connected",
     "wifi-failed",
 )
@@ -282,6 +288,39 @@ def preview_scenario(name="idle", printing=False):
         ]
         data["metadata"]["suggested_mapping"] = {"0": "1A", "1": "2B", "2": "3C"}
         data["availability"] = action_policy.availability(data["status"], True, [])
+    if name in ("printing-long", "dark-preview"):
+        data = preview_scenario("printing")
+        data["platform"]["estimated_time"] = (
+            data["status"]["print_stats"]["print_duration"] + 8100
+        )
+        if name == "dark-preview":
+            image = str(ROOT / "developer-tools/fixtures/assets/demo-part-dark.png")
+            data["platform"].update(thumbnail=image, file_thumbnail=image)
+    if name == "calibrating":
+        data["operation"] = {
+            "id": 1,
+            "action": "calibrate",
+            "kind": "tilt",
+            "label": "Calibrating",
+            "detail": "Adjusting bed tilt…",
+        }
+    if name in ("wifi-scanning", "wifi-connecting"):
+        data["platform"]["wifi"].update(
+            busy=True,
+            message="Scanning"
+            if name == "wifi-scanning"
+            else "Connecting to Demo network",
+        )
+        if name == "wifi-connecting":
+            data["operation"] = {
+                "id": 1,
+                "action": "wifi_join",
+                "ssid": "Demo network",
+                "label": "Connecting Wi-Fi",
+                "detail": "Connecting to Demo network",
+            }
+    if name == "usb-ejected":
+        data["platform"]["usb"].update(mounted=False, ejected=True)
     if name in operations:
         action, detail = operations[name]
         data["operation"] = {

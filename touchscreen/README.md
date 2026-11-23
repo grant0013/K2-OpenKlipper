@@ -22,9 +22,9 @@ its installed firmware components.
 
 ### Home: printing
 
-- See the model preview, remaining time, layer count and progress.
+- See the model preview, remaining hours/minutes, layer count and progress.
 - Pause or stop the print, or select failed objects to skip.
-- Open status history to review printer messages.
+- Tap the sidebar history icon to review printer messages; the Home status row shows print preparation.
 - Check spool colors and the feeding-filament marker in the CFS shortcut.
 
 ![Home during a print](screenshots/home.png)
@@ -34,6 +34,7 @@ its installed firmware components.
 - Tap the nozzle, bed or chamber tile to change its target.
 - Choose a preset or tap the target value for numeric entry.
 - Temperature limits follow the printer configuration.
+- Change a target again while heating; calibration and filament safety locks still apply.
 
 ![Nozzle temperature control](screenshots/temperature.png)
 
@@ -50,6 +51,13 @@ the sidebar. You can continue navigating; controls that conflict with the
 operation become unavailable.
 
 ![Operation in progress](screenshots/executing.png)
+
+Completed file deletions show a short result in the sidebar. Calibration failures
+appear immediately as error dialogs. During calibration, the Home file button
+shows **Calibration in progress** instead of offering another print. Homing alone
+does not block file browsing.
+
+![Calibration in progress](screenshots/calibrating.png)
 
 ### Startup and connection recovery
 
@@ -127,14 +135,15 @@ one unit's readings are available.
 
 ### Tune
 
-- Adjust print speed and flow ratio with buttons or direct numeric entry.
-- Adjust Z offset for the current print.
+- Adjust print speed and flow ratio with buttons or direct numeric entry, up to 200%.
+- Adjust Z offset for the current print with steps or direct entry; each change is limited to 0.1 mm.
 
 ![Live print tuning](screenshots/tune.png)
 
 ### Calibrate
 
 - Run homing, Z tilt, a full bed mesh or input shaping where supported.
+- Z tilt homes the axes first when needed.
 - Start belt-tension or cutter calibration where supported.
 - Save pending calibration changes with **Save configuration**.
 - During printing, see an explanation instead of calibration controls.
@@ -203,7 +212,7 @@ then choose **Start print**.
 ### Storage
 
 - Check available printer storage and connected USB drives.
-- Eject or format USB drives when available.
+- Eject or format USB drives when available. Ejected drives remain unavailable until remounted.
 - During printing, unavailable storage operations show an explanation.
 
 ![Storage settings](screenshots/storage.png)
@@ -308,3 +317,18 @@ See the [Native touchscreen developer guide](developer-tools/README.md) for
 architecture, Linux builds, local previews, testing and packaging. Portable
 [preview cases and artwork](developer-tools/fixtures/README.md) are included in
 the repository.
+
+### More workflow examples
+
+| Longer print and readable dark preview | Calibration activity |
+| --- | --- |
+| ![Hours and minutes remaining](screenshots/printing-long.png) | ![Calibration in progress](screenshots/calibrating.png) |
+| ![Dark model on a neutral preview background](screenshots/dark-preview.png) | ![Ejected USB drive](screenshots/usb-ejected.png) |
+
+| Finding networks | Connecting to the chosen network |
+| --- | --- |
+| ![Scanning for Wi-Fi](screenshots/wifi-scanning.png) | ![Connecting to Wi-Fi](screenshots/wifi-connecting.png) |
+
+The password keyboard uses one-shot Shift; double-tap Shift for capitals until
+you tap it again. Restart controls remain available during a print, with a warning
+that the print cannot continue.

@@ -46,7 +46,7 @@ class FlowTests(unittest.TestCase):
             if item["action"].startswith("route:"):
                 self.assertTrue(item["enabled"])
         self.assertTrue(
-            any(i["action"] == "route:history" and i["rect"][1] >= 400 for i in items)
+            any(i["action"] == "route:history" and i["rect"][1] >= 391 for i in items)
         )
         items, commands = self.render("move", [{"tap": [490, 48]}], data=data)
         self.assertTrue(any(i["action"] == "load" for i in items))
@@ -75,8 +75,8 @@ class FlowTests(unittest.TestCase):
         done["availability"] = action_policy.availability(done["status"], True, [])
         items, commands = self.render("move", [{"snapshot": done}], data=active)
         self.assertTrue(next(i for i in items if i["action"] == "jog:X:1")["enabled"])
-        self.assertFalse(
-            any(i["action"] == "route:history" and i["rect"][1] >= 400 for i in items)
+        self.assertTrue(
+            any(i["action"] == "route:history" and i["rect"][1] >= 391 for i in items)
         )
         self.assertEqual(commands, [])
         done["results"] = [

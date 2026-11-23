@@ -231,6 +231,9 @@ class Service:
         self.status, self.settings, self.materials = {}, {}, []
         self.events, self.notices, self.files, self.metadata = [], [], [], {}
         self.operations = {}
+        self.pending_temperatures = {}
+        self.files_preloaded = False
+        self.files_ready = False
         self.results = deque(maxlen=32)
         self.result = None
         self.operation_id = 0
@@ -269,6 +272,15 @@ class Service:
 
     def event(self, title, detail="", fault=False, timed=False):
         with self.lock:
+            if fault and any(
+                e.get("fault")
+                and e.get("detail") == str(detail).strip().lstrip("!").strip()
+                and time.time() - e["time"] < 3
+                for e in self.notices
+            ):
+                return
+            if fault:
+                detail = str(detail).strip().lstrip("!").strip()
             self.history_id += 1
             event = {
                 "id": self.history_id,
@@ -341,12 +353,29 @@ class Service:
             )
             if blocked:
                 raise action_policy.ActionBusy(blocked)
+            if action == "temperature":
+                limit = model.heater_limits(self.settings, request.get("heater"))
+                if not limit or not limit.contains(
+                    float(request.get("value", float("nan")))
+                ):
+                    raise ValueError("Temperature is outside configured limits")
+                if any(
+                    op.get("action") == "temperature"
+                    and op.get("heater") == request["heater"]
+                    for op in self.operations.values()
+                ):
+                    self.pending_temperatures[request["heater"]] = dict(request)
+                    self.sequence += 1
+                    return
             self.operation_id += 1
             token = self.operation_id
             self.operations[token] = {
                 "id": token,
                 "action": action,
                 "slot": request.get("slot", ""),
+                "heater": request.get("heater", ""),
+                "kind": request.get("kind", ""),
+                "ssid": request.get("ssid", ""),
                 "label": spec.label,
                 "resources": sorted(spec.resources),
                 "interrupt": spec.interrupt,
@@ -373,9 +402,19 @@ class Service:
             )
             return values[0] if values else None
 
+    def preload_files(self):
+        if (
+            self.connected
+            and self.status.get("webhooks", {}).get("state") == "ready"
+            and not self.files_preloaded
+        ):
+            self.files_preloaded = True
+            self.submit({"action": "files", "source": "gcodes"})
+
     def refresh_files(self):
         try:
             self.execute({"action": "files", "source": "gcodes"})
+            self.files_ready = True
         except Exception as error:
             with self.lock:
                 self.files_error = str(error)
@@ -396,7 +435,16 @@ class Service:
             self.execute(request)
             success = True
             if spec.report_completion:
-                self.event(spec.label + " complete")
+                title = {
+                    "delete_file": "File deleted",
+                    "delete_recording": "Recording deleted",
+                }.get(action, spec.label + " complete")
+                self.event(
+                    title,
+                    request.get("path", "")
+                    if action in ("delete_file", "delete_recording")
+                    else "",
+                )
         except Exception as error:
             failure = str(error)
             self.event(
@@ -419,6 +467,18 @@ class Service:
                 self.results.append(result)
                 self.operations.pop(token, None)
                 self.sequence += 1
+                pending = (
+                    self.pending_temperatures.pop(request.get("heater"), None)
+                    if action == "temperature"
+                    else None
+                )
+                if pending is not None:
+                    # Re-admit under the same RLock: a newer setter must not
+                    # overtake this queued target. All interlocks are rechecked.
+                    try:
+                        self.submit(pending)
+                    except (ValueError, action_policy.ActionBusy):
+                        pass  # A newly active interlock wins over a queued target.
 
     def snapshot(self):
         with self.lock:
@@ -496,6 +556,10 @@ class Service:
                 else 0,
                 "error": error,
                 "files": self.files,
+                "files_ready": self.files_ready,
+                "tune_limits": model.TUNE_LIMITS,
+                "calibrate_before_print": "variable_screen_full_mesh"
+                in model.macro_options(settings, "START_PRINT"),
                 "files_refresh": {
                     "busy": self.files_refreshing,
                     "error": self.files_error,
@@ -686,12 +750,23 @@ class Service:
             if not model.active(status):
                 raise ValueError("No print in progress")
             key, value = r["key"], float(r["value"])
-            if key == "z":
+            if key == "z_offset":
+                current = status.get("gcode_move", {}).get("homing_origin", [0, 0, 0])[
+                    2
+                ]
+                if not math.isfinite(value) or abs(value - current) > 0.100001:
+                    raise ValueError(
+                        "Z entry may change the current offset by at most 0.1 mm"
+                    )
+                self.gcode("SET_GCODE_OFFSET Z=%g MOVE=1" % value)
+            elif key == "z":
                 if not math.isfinite(value) or abs(value) > 0.1:
                     raise ValueError("Invalid Z adjustment")
                 self.gcode("SET_GCODE_OFFSET Z_ADJUST=%g MOVE=1" % value)
             else:
-                if not math.isfinite(value) or not 1 <= value <= 1000:
+                if not math.isfinite(value) or not model.TUNE_LIMITS.get(key, {}).get(
+                    "minimum", 1
+                ) <= value <= model.TUNE_LIMITS.get(key, {}).get("maximum", 0):
                     raise ValueError("Invalid ratio")
                 self.gcode({"speed": "M220 S%g", "flow": "M221 S%g"}[key] % value)
         elif action in ("load", "unload"):
@@ -718,6 +793,10 @@ class Service:
                 capability and capability not in settings
             ):
                 raise ValueError("Calibration unavailable or not confirmed")
+            if r["kind"] == "tilt" and not set("xyz") <= set(
+                status.get("toolhead", {}).get("homed_axes", "")
+            ):
+                command = "G28\n" + command
             self.gcode(command)
         elif action == "save_config":
             if r.get("confirm") is not True:
@@ -866,6 +945,13 @@ class Service:
                 raise RuntimeError("USB drive contains active printer directories")
             elif not platform.unmount_usb():
                 raise RuntimeError("USB drive is busy")
+            updated = platform.usb_disk()
+            if action == "usb_eject" and updated:
+                updated["mounted"] = False
+                updated["ejected"] = True
+            with self.lock:
+                self.platform["usb"] = updated
+                self.sequence += 1
             self.event(
                 "USB formatted" if action == "usb_format" else "USB ejected", timed=True
             )
@@ -1006,8 +1092,8 @@ class Service:
             raise ValueError(
                 "External spool cannot switch file filaments automatically"
             )
-        mesh = "variable_screen_full_mesh" in settings.get(
-            "gcode_macro START_PRINT", {}
+        mesh = "variable_screen_full_mesh" in model.macro_options(
+            settings, "START_PRINT"
         )
         try:
             if mesh:
@@ -1123,7 +1209,7 @@ class Service:
             self.stream_connected = True
         elif method == "notify_gcode_response":
             line = message.get("params", [""])[0]
-            if line.startswith("!!") and not self.operation:
+            if line.startswith("!!"):
                 self.event("Printer error", line[2:].strip(), fault=True)
         elif "result" in message and "status" in message["result"]:
             result = message["result"]
@@ -1341,6 +1427,14 @@ class Service:
     def refresh_platform(self):
         info = storage.system_identity()
         disk = platform.usb_disk()
+        previous_disk = self.platform.get("usb") or {}
+        if (
+            disk
+            and not disk.get("mounted")
+            and previous_disk.get("ejected")
+            and disk.get("id") == previous_disk.get("id")
+        ):
+            disk["ejected"] = True
         info["usb"] = disk
         info["free"] = storage.free_space(str(self.config_path.parent))
         info["wifi"] = self.wifi.status()
@@ -1425,6 +1519,7 @@ class Service:
                         self.platform.pop("timelapse", None)
                 self.update_screen_idle()
                 ready = self.status.get("webhooks", {}).get("state") == "ready"
+                self.preload_files()
                 if ready and not self.ready:
                     for key in ("idle", "light_off", "cfs_auto_refill"):
                         if key in self.prefs:

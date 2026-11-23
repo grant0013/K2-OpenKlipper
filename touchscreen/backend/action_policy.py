@@ -35,6 +35,8 @@ ACTIONS = {
     "home": rule("Homing", MACHINE | {"fan:part"}, idle=True, report=True),
     "jog": rule("Moving", {"motion"}, idle=True),
     "position": rule("Moving", {"motion"}, idle=True),
+    "home_files": rule("Choosing a print"),
+    "move_step": rule("Selecting movement distance", {"motion"}, idle=True),
     "motors": rule("Changing motor state", {"motion", "filament"}, idle=True),
     "extrude": rule("Moving filament", MACHINE, idle=True),
     "load": rule("Loading filament", MACHINE | {"fan:part"}, idle=True, report=True),
@@ -61,9 +63,9 @@ ACTIONS = {
     "exclude": rule("Skipping objects", {"objects"}),
     "files": rule("Reading files", ready=False),
     "delete_recording": rule(
-        "Deleting recording", {"recordings", "storage"}, ready=False
+        "Deleting recording", {"recordings", "storage"}, ready=False, report=True
     ),
-    "delete_file": rule("Deleting file", {"storage"}),
+    "delete_file": rule("Deleting file", {"storage"}, report=True),
     "file": rule("Reading file", {"file"}, ready=False),
     "recordings": rule("Reading recordings", {"recordings"}, ready=False),
     "export": rule("Exporting", {"storage"}, ready=False, report=True),
@@ -120,6 +122,40 @@ def describe(request):
 def reason(request, status, connected, operations):
     spec = describe(request)
     operations = tuple(operations)
+    if request.get("action") in ("restart", "firmware_restart"):
+        return (
+            "Restart in progress"
+            if any(
+                op.get("action") in ("restart", "firmware_restart") for op in operations
+            )
+            else ""
+        )
+    if request.get("action") == "temperature":
+        operations = tuple(
+            op
+            for op in operations
+            if not (
+                op.get("action") == "temperature"
+                and (
+                    op.get("heater") == request.get("heater")
+                    or set(op.get("resources", ())) == set(spec.resources)
+                )
+            )
+        )
+    if request.get("action") == "home_files":
+        for op in operations:
+            if (
+                op.get("action") in ("calibrate", "calibration_result", "save_config")
+                and op.get("kind") != "home"
+            ):
+                return "Calibration in progress"
+            if op.get("action") in ("load", "unload", "start"):
+                return op["label"] + " in progress"
+    homed = set(status.get("toolhead", {}).get("homed_axes", ""))
+    if request.get("action") == "move_step" and not (
+        "z" in homed or {"x", "y"} <= homed
+    ):
+        return "Home the printer first"
     if (
         not spec.interrupt
         and sum(not op.get("interrupt", False) for op in operations) >= MAX_ACTIONS

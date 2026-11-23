@@ -27,6 +27,7 @@ def render(source, destination):
 
 def main():
     render(ASSETS / "demo-part.svg", ASSETS / "demo-part.png")
+    render(ASSETS / "demo-part-dark.svg", ASSETS / "demo-part-dark.png")
     render(ASSETS.parents[2] / "assets/printer.svg", ASSETS / "demo-printer-combo.png")
     render(
         ASSETS.parents[2] / "assets/printer.svg",

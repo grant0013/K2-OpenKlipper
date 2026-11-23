@@ -200,3 +200,20 @@ def suggest_mapping(filaments, status):
         if ranked:
             result[str(filament["tool"])] = min(ranked)[1]
     return result
+
+
+TUNE_LIMITS = {
+    "speed": {"minimum": 1, "maximum": 200},
+    "flow": {"minimum": 1, "maximum": 200},
+}
+
+
+def macro_options(settings, name):
+    return next(
+        (
+            value
+            for key, value in settings.items()
+            if key.lower() == "gcode_macro " + name.lower()
+        ),
+        {},
+    )
