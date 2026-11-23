@@ -835,7 +835,7 @@ static void calibration_view(void) {
     }
 }
 static void files_view(void) {
-    button(app.content, "icon:refresh-cw", 629, 19, 44, 44, "refresh_files", false);
+    button_fixed(app.content, "icon:refresh-cw", 600, 9, 64, 64, "refresh_files", false);
     const char *refresh = *S("files_refresh.error") ? "Refresh failed — tap refresh to retry"
                           : B("files_refresh.busy") ? "Refreshing…"
                                                     : "";
