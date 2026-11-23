@@ -236,8 +236,8 @@ void view_home(void) {
     if (printing) {
         lv_obj_t *preview = box(app.content, 0, 19, HOME_MAIN, 260, false);
         lv_obj_set_style_bg_color(preview, colour("30343c"), 0);
-        if (!image_fit(app.content, S("platform.thumbnail"), 12, 31, HOME_MAIN - 24, 196))
-            preview_placeholder(app.content, 0, 19, HOME_MAIN, 220,
+        if (!image_fit(app.content, S("platform.thumbnail"), 12, 43, HOME_MAIN - 24, 196))
+            preview_placeholder(app.content, 12, 43, HOME_MAIN - 24, 196,
                                 B("platform.print_preview_busy"));
         app.time_label = text(app.content, "", 14, 247, 230, &font_ui_17, false);
         app.layer_label = text(app.content, "", 248, 249, 208, &font_ui_14, true);
