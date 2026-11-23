@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "built_from_commit": "5152150d1a25e3c433770d4187b9eb24bb553543",
+  "built_from_commit": "e381aa2bbf2e2e56ab7ab6f38e2ef115edc14cc3",
   "source_inputs": {
     "VERSION": "a12a1be3f3ee06a3159f695083ad52c3f3dc2ae1f071b7aece71cfe4c1f1e133",
     "install.sh": "2f47f109e1d906b94dbf6e4df29029537019ef7fb209d35689de61b10923084b",
@@ -39,17 +39,17 @@
     "touchscreen/runtime/native-screen.cfg.example": "1a2e0967364d6775c9c6562f9c14272a34e855331cd8aff2c06dd6cd729fa043",
     "touchscreen/runtime/start.sh": "92582b3c69004b0db391f83b866762f5e7b3223bcad48be696ebb91049077293",
     "touchscreen/src/json.c": "78986758cd5e2c91ff366341f3a35144163e8d646cce878abd2bae1105d22195",
-    "touchscreen/src/main.c": "64e706b4a3d2527895534af105b00d6cf080ef76eefa522cd09fa1e1749f766f",
-    "touchscreen/src/platform.c": "073cc61aa45d05a9003626c3d13d6577aa2ee4d287c376a6f732854ae9814f96",
-    "touchscreen/src/screen.h": "16ba1060ba3e236bbd906ab33b0d014f6635c72081c80d49a631ca26e4a40f5b",
-    "touchscreen/src/ui.c": "15b39f5a784363c3f8534b4e70d233956199b701d0ec5109dd3bbc90753bd982",
-    "touchscreen/src/view_inputs.c": "faca09c65c6547f67523cde4039ab5d745baead09e650aef463d2c7e45c38c29",
-    "touchscreen/src/views.c": "02f2936ba288a1700d329bf333b473db416faa88eaddf96f6a81b45406f76afb"
+    "touchscreen/src/main.c": "2066b9899d5bd1a919ff6acf031055e55a7fcba56f0e82b490150283fdd0672a",
+    "touchscreen/src/platform.c": "42ddda371a3e5d02841ea247d711d070356a04ee3e6f1ff4b7aef9fffa319911",
+    "touchscreen/src/screen.h": "ce71491d45c6c07ea142a66304026eb23af6113d9103d5ed3b6c21742783be54",
+    "touchscreen/src/ui.c": "b042fa46ca69427e79b7dcc825de2ebab700bea91d86acc098069fa0abb4589a",
+    "touchscreen/src/view_inputs.c": "dee7267ec1c569a81c2378855982465276b6b0eee8444a0b175c760a8372dc8e",
+    "touchscreen/src/views.c": "01a9f0b3b69746f446e471a18745ff11fc2c9fd71c00cc8d952b3a509c2cd512"
   },
-  "source_fingerprint": "b41d91b11f3d5fec6aa961012e2fac3669ca7c5ed8ab33f933aa010eb9e9a261",
+  "source_fingerprint": "8758e6709747e3c917a0d7b61dfd0bce1d46fa7ea586dbc0433ec1deec721b85",
   "target": "armv7-linux-gnueabihf",
   "files": {
-    "VERSION": "8f888ecc3b717121c7989ef2984a0637dcb978e9dc116c8d8f6568a3eefead2d",
+    "VERSION": "fa9cfba4161a51904b70d6676b6f0ef13a78a85bd3c0f7647b74750f38cd0232",
     "assets/activity-16.png": "c919d511ce9edcb9d429b0fd34c07992897427f344576e3d4205bdf884686734",
     "assets/activity-20.png": "992b40c4beea90f8f95d1e41f959c340754c47b8e16c69e13598e39af4a03222",
     "assets/activity-22.png": "c942aa5df3dcfc51374af5c9189d5de6ea824b3addebfb3f55c63de7e02538a7",
@@ -592,6 +592,6 @@
     "licenses/Lucide-LICENSE": "1e7290b35280a048667bbf0ebabac1c7fd52a75300e8b2946ac165715997f2bc",
     "licenses/Noto-LICENSE": "075f91382875da1c4b491f1facf2586f55448705133264d98ce15cab6211b125",
     "licenses/cJSON-LICENSE": "a36dda207c36db5818729c54e7ad4e8b0c6fba847491ba64f372c1a2037b6d5c",
-    "openklipper-screen": "601a590b3353c069e030125c5c61558f93635a9854d68bae5861667d0091a90a"
+    "openklipper-screen": "296a1c14b4b4557682c337c53b4d638bb2b2c34d13e78de7676bae11995cc628"
   }
 }
