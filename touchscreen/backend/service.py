@@ -807,7 +807,7 @@ class Service:
             )
             self.metadata[path] = meta
             try:
-                self.prepare_thumbnail(path, meta, "file_thumbnail", (210, 210))
+                self.prepare_thumbnail(path, meta, "file_thumbnail", (328, 337))
             except (OSError, ValueError):
                 self.platform.pop("file_thumbnail", None)
         elif action == "start":
@@ -1288,13 +1288,24 @@ class Service:
             try:
                 meta = self.mr.metadata(path)
                 key = "file-list-" + hashlib.sha256(path.encode()).hexdigest()[:12]
-                ready = self.prepare_thumbnail(path, meta, key, (56, 56))
+                ready = self.prepare_thumbnail(path, meta, key, (96, 60))
                 self.platform.pop(key, None)
-                if ready:
-                    self.platform.setdefault("file_thumbnails", {})[path] = ready
-                self.file_signatures[path] = signature
-                self.sequence += 1
+                with self.lock:
+                    if generation is not None and generation != self.file_generation:
+                        return
+                    previews = self.platform.setdefault("file_thumbnails", {})
+                    if ready:
+                        previews[path] = ready
+                    else:
+                        previews.pop(path, None)
+                    self.file_signatures[path] = signature
+                    self.sequence += 1
             except Exception:
+                with self.lock:
+                    if generation is not None and generation != self.file_generation:
+                        return
+                    self.platform.setdefault("file_thumbnails", {}).pop(path, None)
+                    self.sequence += 1
                 continue
 
     def prepare_thumbnail(self, path, meta, key, bounds):
@@ -1315,7 +1326,9 @@ class Service:
             data = response.read(8 * 1024 * 1024 + 1)
         if len(data) > 8 * 1024 * 1024:
             raise ValueError("Thumbnail is too large")
-        ready = storage.prepare_image(io.BytesIO(data), self.cache_path, key, bounds)
+        ready = storage.prepare_image(
+            io.BytesIO(data), self.cache_path, key, bounds, trim=True
+        )
         self.platform[key] = ready
         return ready
 
@@ -1424,7 +1437,7 @@ class Service:
                     try:
                         meta = self.mr.metadata(filename)
                         self.platform["estimated_time"] = meta.get("estimated_time", 0)
-                        self.prepare_thumbnail(filename, meta, "thumbnail", (500, 190))
+                        self.prepare_thumbnail(filename, meta, "thumbnail", (446, 236))
                     except Exception:
                         self.platform.pop("thumbnail", None)
                 if now - platform_at > 5:

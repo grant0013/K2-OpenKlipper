@@ -239,3 +239,22 @@ class FileDeleteUITests(unittest.TestCase):
                 {"action": "timelapse", "enabled": True},
             ],
         )
+
+    def test_file_thumbnail_is_fitted_and_invalid_image_uses_folder_fallback(self):
+        from PIL import Image, ImageChops
+
+        data = copy.deepcopy(self.data)
+        self.render("files", data=data)
+        baseline = Image.open(self.path / "screen.ppm").copy()
+        data["platform"]["file_thumbnails"] = {"part.gcode": "/missing/preview.png"}
+        self.render("files", data=data)
+        invalid = Image.open(self.path / "screen.ppm").copy()
+        self.assertIsNone(ImageChops.difference(baseline, invalid).getbbox())
+        data["platform"]["file_thumbnails"]["part.gcode"] = str(
+            test_native_ui.ROOT / "developer-tools/fixtures/demo-part.png"
+        )
+        self.render("files", data=data)
+        thumbnail = Image.open(self.path / "screen.ppm").copy()
+        difference = ImageChops.difference(baseline, thumbnail)
+        self.assertIsNotNone(difference.crop((111, 88, 167, 144)).getbbox())
+        self.assertIsNone(difference.crop((224, 80, 680, 150)).getbbox())

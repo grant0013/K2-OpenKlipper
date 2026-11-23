@@ -155,6 +155,10 @@ def preview_scenario(name="idle", printing=False):
     data["platform"].update(
         thumbnail=str(ROOT / "developer-tools/fixtures/demo-part.png"),
         file_thumbnail=str(ROOT / "developer-tools/fixtures/demo-part.png"),
+        file_thumbnails={
+            row["path"]: str(ROOT / "developer-tools/fixtures/demo-part.png")
+            for row in data["files"][:3]
+        },
     )
     data["status"]["exclude_object"] = {
         "objects": [

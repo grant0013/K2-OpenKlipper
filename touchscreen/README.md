@@ -58,13 +58,17 @@ material mismatches block Start print. Long lists scroll by touch.
 
 ## Files and recordings
 
-Browse printer files and review a file before printing. Each list row has a trash
+Browse printer files with embedded slicer thumbnails, using a fallback icon when
+no preview is available. Review the selected file in a larger preview beside its
+print details. Each list row has a trash
 icon with a filename-specific Cancel/OK confirmation. Other files can be deleted
 during printing; the active print file is protected. Saved time-lapse recordings
 use the same deletion flow and can be exported to USB when the time-lapse
 component and a USB drive are available.
 
 ![Print files](screenshots/files.png)
+
+![Print-file review](screenshots/file.png)
 
 ## Settings
 

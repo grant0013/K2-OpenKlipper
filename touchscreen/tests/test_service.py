@@ -1,19 +1,15 @@
 """Native service behavior: guard actual printer actions and retire operation state."""
 
 import copy
-import importlib.util
-import json
 from pathlib import Path
 import sys
 import tempfile
-import threading
 import unittest
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 from service import Service
-import model
 
 
 def status():
@@ -92,6 +88,53 @@ class ServiceTests(unittest.TestCase):
         self.config.pop("extruder")
         with self.assertRaises(ValueError):
             self.run_action("temperature", heater="extruder", value=200)
+
+    def test_transparent_thumbnail_padding_is_trimmed_without_stretching(self):
+        import io
+        import storage
+        from PIL import Image
+
+        image = Image.new("RGBA", (100, 100), (0, 0, 0, 0))
+        image.paste((255, 0, 0, 255), (20, 40, 80, 60))
+        source = io.BytesIO()
+        image.save(source, format="PNG")
+        ready = storage.prepare_image(
+            source, Path(self.tmp.name) / "images", "test", (120, 60), trim=True
+        )
+        with Image.open(ready) as fitted:
+            self.assertEqual(fitted.size, (120, 60))
+            self.assertEqual(fitted.getchannel("A").getbbox(), (0, 10, 120, 50))
+
+    def test_unreadable_changed_thumbnail_clears_old_preview_and_can_retry(self):
+        self.s.platform["file_thumbnails"] = {"part.gcode": "/tmp/old.png"}
+        self.s.prepare_thumbnail = mock.Mock(side_effect=OSError("Unreadable preview"))
+        self.mr.metadata.return_value = {}
+        self.s.file_thumbnails([{"path": "part.gcode", "modified": 2, "size": 100}])
+        self.assertNotIn("part.gcode", self.s.platform["file_thumbnails"])
+        self.assertNotIn("part.gcode", self.s.file_signatures)
+
+    def test_changed_file_without_thumbnail_clears_stale_preview(self):
+        self.s.platform["file_thumbnails"] = {"part.gcode": "/tmp/old.png"}
+        self.s.prepare_thumbnail = mock.Mock(return_value=None)
+        self.mr.metadata.return_value = {}
+        self.s.file_thumbnails([{"path": "part.gcode", "modified": 2, "size": 100}])
+        self.assertNotIn("part.gcode", self.s.platform["file_thumbnails"])
+
+    def test_old_thumbnail_worker_cannot_overwrite_new_generation(self):
+        self.s.file_generation = 1
+        self.s.platform["file_thumbnails"] = {"part.gcode": "/tmp/new.png"}
+
+        def metadata(path):
+            self.s.file_generation = 2
+            return {}
+
+        self.mr.metadata.side_effect = metadata
+        self.s.prepare_thumbnail = mock.Mock(return_value="/tmp/old.png")
+        self.s.file_thumbnails([{"path": "part.gcode", "modified": 1, "size": 100}], 1)
+        self.assertEqual(
+            self.s.platform["file_thumbnails"]["part.gcode"], "/tmp/new.png"
+        )
+        self.assertNotIn("part.gcode", self.s.file_signatures)
 
     def test_nan_and_unknown_heaters_never_reach_gcode(self):
         for heater, value in [

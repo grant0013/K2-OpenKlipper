@@ -29,6 +29,8 @@ def main():
                 "-background",
                 "none",
                 str(Path(__file__).parent / "fixtures/demo-part.svg"),
+                "-trim",
+                "+repage",
                 "PNG32:" + str(preview),
             ],
             check=True,
@@ -39,6 +41,7 @@ def main():
             ("filament", "filament", "idle", []),
             ("mapping", "file", "idle", ["review_mapping", "mapping_pick:0"]),
             ("files", "files", "idle", []),
+            ("file", "file", "idle", []),
             ("timers", "timers", "idle", []),
         ]
         for name, page, scenario, actions in cases:

@@ -429,7 +429,7 @@ def import_usb_file(mr, name):
         connection.close()
 
 
-def prepare_image(source, cache, name, bounds, lighten=False):
+def prepare_image(source, cache, name, bounds, lighten=False, trim=False):
     """Decode and scale once in a service worker, never in the UI frame loop."""
     from PIL import Image, ImageChops
 
@@ -448,6 +448,8 @@ def prepare_image(source, cache, name, bounds, lighten=False):
         signature = (
             hashlib.sha256(source.getvalue()).hexdigest() + str(bounds) + str(lighten)
         )
+    if trim:
+        signature += ":trim-alpha"
     digest = hashlib.sha256(signature.encode()).hexdigest()[:16]
     target = Path(cache) / (name + "-" + digest + ".png")
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -460,6 +462,11 @@ def prepare_image(source, cache, name, bounds, lighten=False):
         image = Image.open(source)
     with image:
         image = image.convert("RGBA")
+        if trim:
+            visible = image.getchannel("A").getbbox()
+            if not visible:
+                raise ValueError("Thumbnail contains no visible pixels")
+            image = image.crop(visible)
         factor = min(bounds[0] / image.width, bounds[1] / image.height)
         image = image.resize(
             (max(1, round(image.width * factor)), max(1, round(image.height * factor))),

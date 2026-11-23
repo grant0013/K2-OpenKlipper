@@ -199,7 +199,7 @@ void row(lv_obj_t *parent, int y, const char *label, const char *value, const ch
          const char *action) {
     /* List rows use a consistent touch-sized pitch, including scrolled lists.
      * Their callers own the spacing so adjacent rows cannot overlap. */
-    int x = 0, w = 673, h = ui_section_root() && parent == app.content ? 96 : 78;
+    int x = 0, w = 673, h = ui_section_root() && parent == app.content ? 96 : SETTINGS_ROW_HEIGHT;
     lv_obj_t *o = lv_obj_create(parent);
     lv_obj_remove_style_all(o);
     lv_obj_set_pos(o, x, y);
@@ -223,7 +223,8 @@ void row(lv_obj_t *parent, int y, const char *label, const char *value, const ch
     if (value && !strcmp(value, "›"))
         icon(o, "chevron-right", w - 34, (h - 28) / 2, 28, fg);
     else {
-        lv_obj_t *v = text(o, value, 460, (h - 23) / 2, w - 466, &font_ui_18, true);
+        lv_obj_t *v =
+            text(o, value, 460, (h - 23) / 2, w - 460 - SETTINGS_CARD_GAP, &font_ui_18, true);
         lv_obj_set_style_text_align(v, LV_TEXT_ALIGN_RIGHT, 0);
     }
     lv_obj_set_style_bg_color(o, panel, 0);
@@ -254,10 +255,6 @@ void ui_header(const char *title) {
 }
 
 void footer(const char *left, const char *la, const char *right, const char *ra) {
-    int x = 0, y = 400, w = 678;
-    lv_obj_t *line = box(app.content, x, y, w, 1, false);
-    lv_obj_set_style_radius(line, 0, 0);
-    lv_obj_set_style_bg_color(line, edge, 0);
     if (left)
         button_fixed(app.content, left, 0, 402, 296, 64, la, false);
     if (right)
@@ -444,6 +441,18 @@ static void fixture_action(const char *command) {
         for (int i = cJSON_GetArraySize(rows) - 1; i >= 0; i--)
             if (!strcmp(jstr(cJSON_GetArrayItem(rows, i), "path", ""), path))
                 cJSON_DeleteItemFromArray(rows, i);
+        app.dirty = true;
+    } else if (!strcmp(action, "preference") &&
+               (!strcmp(jstr(request, "key", ""), "cfs_insertion_read") ||
+                !strcmp(jstr(request, "key", ""), "cfs_startup_read") ||
+                !strcmp(jstr(request, "key", ""), "cfs_auto_refill")) &&
+               cJSON_IsBool(cJSON_GetObjectItemCaseSensitive(request, "value"))) {
+        const char *key = jstr(request, "key", "");
+        cJSON *prefs = J("prefs");
+        if (cJSON_IsObject(prefs)) {
+            cJSON_DeleteItemFromObjectCaseSensitive(prefs, key);
+            cJSON_AddBoolToObject(prefs, key, jbool(request, "value", false));
+        }
         app.dirty = true;
     } else if (!strcmp(action, "timelapse") &&
                cJSON_IsBool(cJSON_GetObjectItemCaseSensitive(request, "enabled"))) {

@@ -53,24 +53,30 @@ static void image(lv_obj_t *parent, const char *path, int x, int y) {
     lv_img_set_src(o, source);
     lv_obj_set_pos(o, x, y);
 }
-/* Fit artwork without cropping or stretching; the original is decoded once by LVGL. */
-static void home_image(const char *path, int top, int height) {
+/* Fit cached artwork without stretching; invalid files use the caller's fallback. */
+static bool image_fit(lv_obj_t *parent, const char *path, int x, int y, int width, int height) {
     if (!path || !*path)
-        return;
+        return false;
     char source[1400];
     snprintf(source, sizeof(source), "A:%s", path);
     lv_img_header_t info;
     if (lv_img_decoder_get_info(source, &info) != LV_RES_OK || !info.w || !info.h)
-        return;
+        return false;
     int zoom = height * 256 / info.h;
-    if (zoom > HOME_MAIN * 256 / info.w)
-        zoom = HOME_MAIN * 256 / info.w;
-    lv_obj_t *preview = lv_img_create(app.content);
+    if (zoom > width * 256 / info.w)
+        zoom = width * 256 / info.w;
+    if (zoom < 1)
+        return false;
+    lv_obj_t *preview = lv_img_create(parent);
     lv_img_set_src(preview, source);
     lv_img_set_pivot(preview, 0, 0);
     lv_img_set_zoom(preview, zoom);
-    lv_obj_set_pos(preview, (HOME_MAIN - info.w * zoom / 256) / 2,
-                   top + (height - info.h * zoom / 256) / 2);
+    lv_obj_set_pos(preview, x + (width - info.w * zoom / 256) / 2,
+                   y + (height - info.h * zoom / 256) / 2);
+    return true;
+}
+static void home_image(const char *path, int top, int height) {
+    image_fit(app.content, path, 12, top + 12, HOME_MAIN - 24, height - 24);
 }
 cJSON *slot_record(const char *slot) {
     cJSON *rec;
@@ -201,19 +207,22 @@ static void home_cfs(int top, int height) {
     if (!total)
         text(tile, "No slots", 62, (height - 20) / 2, 116, &font_ui_18, true);
 }
+static void file_title(char *out, size_t size, const char *path) {
+    const char *base = strrchr(path, '/');
+    snprintf(out, size, "%s", base ? base + 1 : path);
+    char *extension = strrchr(out, '.');
+    if (extension && (!strcasecmp(extension, ".gcode") || !strcasecmp(extension, ".gco") ||
+                      !strcasecmp(extension, ".g")))
+        *extension = '\0';
+}
 void view_home(void) {
     bool printing = app.printing || app.paused || !strcmp(S("status.print_stats.state"), "error");
     const char *filename = S("status.print_stats.filename");
-    const char *base = strrchr(filename, '/');
     if (printing) {
         box(app.content, 0, 19, HOME_MAIN, 260, false);
         home_image(S("platform.thumbnail"), 19, 260);
         char display_name[1024];
-        snprintf(display_name, sizeof(display_name), "%s", base ? base + 1 : filename);
-        char *extension = strrchr(display_name, '.');
-        if (extension && (!strcasecmp(extension, ".gcode") || !strcasecmp(extension, ".gco") ||
-                          !strcasecmp(extension, ".g")))
-            *extension = '\0';
+        file_title(display_name, sizeof(display_name), filename);
         lv_obj_t *name = text(app.content, display_name, 14, 31, HOME_MAIN - 28, &font_ui_17, true);
         lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
         lv_obj_set_height(name, 26);
@@ -602,9 +611,6 @@ static void filament_view(void) {
         icon(tile, "chevron-right", start + group_width - 16, 115, 16, colour("a4aebb"));
         if (feeding_slot("E"))
             icon(tile, "nozzle", (673 - 24) / 2, 200, 24, colour("f0f3f7"));
-        lv_obj_t *line = box(app.content, 0, 388, 678, 1, false);
-        lv_obj_set_style_radius(line, 0, 0);
-        lv_obj_set_style_bg_color(line, colour("343e4b"), 0);
         button_fixed(app.content, "Edit", 82, 398, 110, 68, "edit_slot", false);
         button_fixed(app.content, "Load", 204, 398, 190, 68, "load", false);
         button_fixed(app.content, "Unload", 406, 398, 190, 68, "unload", false);
@@ -727,9 +733,6 @@ static void filament_view(void) {
         lv_obj_update_layout(environment);
         lv_obj_align(environment, LV_ALIGN_TOP_MID, 0, 330);
     }
-    lv_obj_t *separator = box(app.content, 0, 388, 678, 1, false);
-    lv_obj_set_style_radius(separator, 0, 0);
-    lv_obj_set_style_bg_color(separator, colour("343e4b"), 0);
     button_fixed(app.content, "Edit", 44, 398, 110, 68, "edit_slot", false);
     cJSON *selected = slot_record(app.selected_slot);
     bool can_load = !strcmp(app.selected_slot, "E") || jbool(selected, "loaded", false);
@@ -793,7 +796,7 @@ static void materials_view(void) {
         row(list, y, jstr(m, "name", ""), "›", type, a);
         free(payload);
         free(a);
-        y += 82;
+        y += SETTINGS_ROW_PITCH;
     }
     if (!y)
         text(list, "No matching materials", 20, 50, 600, &font_ui_20, true);
@@ -908,12 +911,10 @@ static void files_view(void) {
         lv_obj_set_style_border_width(b, 0, 0);
         cJSON *thumb = cJSON_GetObjectItemCaseSensitive(J("platform.file_thumbnails"), path);
         const char *thumbnail = cJSON_IsString(thumb) ? thumb->valuestring : "";
-        if (*thumbnail)
-            image(b, thumbnail, 8, 10);
-        else
-            icon(b, "folder-open", 24, 26, 24, colour("a4aebb"));
+        if (!image_fit(b, thumbnail, 12, 9, 96, 60))
+            icon(b, "folder-open", 48, 27, 24, colour("a4aebb"));
         const char *name = strrchr(path, '/');
-        lv_obj_t *filename = text(b, name ? name + 1 : path, 80, 14, 490, &font_ui_18, false);
+        lv_obj_t *filename = text(b, name ? name + 1 : path, 120, 14, 450, &font_ui_18, false);
         lv_label_set_long_mode(filename, LV_LABEL_LONG_DOT);
         lv_obj_set_height(filename, 26);
         time_t stamp = (time_t)jnum(f, "modified", 0);
@@ -921,7 +922,7 @@ static void files_view(void) {
         localtime_r(&stamp, &tm);
         char modified[80];
         strftime(modified, sizeof(modified), "%d %b %Y · %H:%M", &tm);
-        text(b, modified, 80, 44, 490, &font_ui_13, true);
+        text(b, modified, 120, 44, 450, &font_ui_13, true);
         snprintf(a, n, "file_delete:%s", payload);
         list_action(list, "trash-2", 600, y + 7, a);
         free(a);
@@ -944,49 +945,43 @@ static void file_view(void) {
         return;
     }
     snprintf(app.file, sizeof(app.file), "%s", path);
-    box(app.content, 0, 19, 320, 361, false);
+    lv_obj_t *art = box(app.content, 0, 19, 352, 361, false);
+    lv_obj_set_style_border_width(art, 0, 0);
     const char *thumbnail = S("platform.file_thumbnail");
-    char source[1400];
-    snprintf(source, sizeof(source), "A:%s", thumbnail);
-    lv_img_header_t info;
-    if (*thumbnail && lv_img_decoder_get_info(source, &info) == LV_RES_OK && info.w && info.h) {
-        int zoom = 312 * 256 / info.w;
-        if (zoom > 353 * 256 / info.h)
-            zoom = 353 * 256 / info.h;
-        lv_obj_t *preview = lv_img_create(app.content);
-        lv_img_set_src(preview, source);
-        lv_img_set_pivot(preview, 0, 0);
-        lv_img_set_zoom(preview, zoom);
-        lv_obj_set_pos(preview, (320 - info.w * zoom / 256) / 2,
-                       19 + (361 - info.h * zoom / 256) / 2);
-    }
-    lv_obj_t *name = text(app.content, strrchr(path, '/') ? strrchr(path, '/') + 1 : path, 344, 94,
-                          330, &font_ui_24, false);
+    image_fit(app.content, thumbnail, 12, 31, 328, 337);
+    lv_obj_t *details = box(app.content, 368, 19, 306, 361, false);
+    lv_obj_set_style_border_width(details, 0, 0);
+    char title[1024];
+    file_title(title, sizeof(title), path);
+    lv_obj_t *name = text(app.content, title, 384, 39, 274, &font_ui_24, false);
     lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
-    lv_obj_set_height(name, 32);
+    lv_obj_set_height(name, 56);
     const char *labels[] = {"Estimated time", "Filament", "Layers"};
     char values[3][80];
     snprintf(values[0], sizeof(values[0]), "%.0f min", N("metadata.estimated_time") / 60);
     snprintf(values[1], sizeof(values[1]), "%.1f g", N("metadata.filament_weight_total"));
     snprintf(values[2], sizeof(values[2]), "%.0f", N("metadata.layer_count"));
     for (int i = 0; i < 3; i++) {
-        text(app.content, labels[i], 344, 154 + i * 42, 210, &font_ui_18, true);
-        right(text(app.content, values[i], 556, 154 + i * 42, 118, &font_ui_18, false));
+        text(app.content, labels[i], 384, 125 + i * 50, 160, &font_ui_16, true);
+        lv_obj_t *value = text(app.content, values[i], 548, 123 + i * 50, 110, &font_ui_20, false);
+        right(value);
+        lv_label_set_long_mode(value, LV_LABEL_LONG_DOT);
+        lv_obj_set_height(value, 28);
     }
     if (has("settings.gcode_macro START_PRINT.variable_screen_full_mesh")) {
         lv_obj_t *toggle =
-            button_fixed(app.content, "", 340, 300, 334, 64, "calibrate_before", false);
+            button_fixed(app.content, "", 376, 300, 286, 64, "calibrate_before", false);
         lv_obj_set_style_bg_opa(toggle, 0, 0);
         lv_obj_set_style_border_width(toggle, 0, 0);
         lv_obj_t *check = box(toggle, 8, 16, 32, 32, calibrate_before);
         lv_obj_clear_flag(check, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_set_style_radius(check, 6, 0);
         if (calibrate_before)
-            centered(text(check, "✓", 0, 5, 30, &font_ui_18, false));
-        text(toggle, "Calibrate before printing", 52, 20, 278, &font_ui_18, false);
+            icon(check, "check", 4, 4, 24, colour("f0f3f7"));
+        text(toggle, "Calibrate before printing", 52, 20, 224, &font_ui_17, false);
     }
-    button_fixed(app.content, "Back", 0, 402, 296, 64, "back", false);
-    button_fixed(app.content, "Start printing", 378, 402, 296, 64, "review_mapping", true);
+    button_fixed(app.content, "Back", 0, 402, 352, 64, "back", false);
+    button_fixed(app.content, "Start printing", 368, 402, 306, 64, "review_mapping", true);
 }
 static void colour_swatch(lv_obj_t *parent, int x, int y, const char *hex, int size) {
     lv_obj_t *swatch = box(parent, x, y, size, size, false);
@@ -1196,6 +1191,28 @@ static void timers_view(void) {
     choices(318, "Idle shutdown", "idle", idle, il, 4, (int)jnum(app.data, "prefs.idle", 1800));
 }
 
+static void toggle_card(int y, int height, const char *title, const char *detail, bool enabled,
+                        const char *action) {
+    lv_obj_t *setting = button_fixed(app.content, "", 0, y, 674, height, action, false);
+    lv_obj_set_style_border_width(setting, 0, 0);
+    int top = (height - 46) / 2;
+    text(setting, title, 16, top, 530, &font_ui_20, false);
+    text(setting,
+         detail && *detail ? detail
+         : enabled         ? "On"
+                           : "Off",
+         16, top + 28, 530, &font_ui_14, true);
+    lv_obj_t *track = box(setting, 582, (height - 40) / 2, 76, 40, false);
+    lv_obj_clear_flag(track, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_radius(track, 20, 0);
+    lv_obj_set_style_border_width(track, 0, 0);
+    lv_obj_set_style_bg_color(track, enabled ? app.accent : colour("596371"), 0);
+    lv_obj_t *thumb = box(track, enabled ? 39 : 5, 5, 30, 30, false);
+    lv_obj_clear_flag(thumb, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_radius(thumb, 15, 0);
+    lv_obj_set_style_border_width(thumb, 0, 0);
+    lv_obj_set_style_bg_color(thumb, colour("f0f3f7"), 0);
+}
 static void refill_view(void) {
     if (ui_unavailable("CFS preferences", "changing CFS preferences"))
         return;
@@ -1211,15 +1228,16 @@ static void refill_view(void) {
         char path[80];
         snprintf(path, sizeof(path), "prefs.%s", keys[i]);
         bool enabled = jbool(app.data, path, i != 1);
-        row(app.content, 90 + i * 82, labels[i], "", details[i], NULL);
         cJSON *r = request("preference");
         cJSON_AddStringToObject(r, "key", keys[i]);
         cJSON_AddBoolToObject(r, "value", !enabled);
         char *a = encode(r);
-        button_fixed(app.content, enabled ? "On" : "Off", 558, 99 + i * 82, 116, 60, a, enabled);
+        toggle_card(90 + i * SETTINGS_ROW_PITCH, SETTINGS_ROW_HEIGHT, labels[i], details[i],
+                    enabled, a);
         free(a);
     }
-    row(app.content, 348, "Auto refill sequence", "›", "", "route:refill_sequence");
+    row(app.content, 90 + 3 * SETTINGS_ROW_PITCH, "Auto refill sequence", "›", "",
+        "route:refill_sequence");
 }
 static void refill_sequence(void) {
     lv_obj_t *list = scroll_area(88, 462);
@@ -1234,7 +1252,7 @@ static void refill_sequence(void) {
             strncat(line, slot_label(slot->valuestring), sizeof(line) - strlen(line) - 1);
         }
         row(list, y, line, "", "Matching material and colour", NULL);
-        y += 82;
+        y += SETTINGS_ROW_PITCH;
     }
     if (!y)
         text(list,
@@ -1253,14 +1271,16 @@ static void ethernet_view(void) {
     row(app.content, 90, "Connection",
         *S("platform.interfaces.ethernet.address") ? "Connected" : "Cable disconnected", "", NULL);
     if (*S("platform.interfaces.ethernet.address")) {
-        row(app.content, 168, "IP address", S("platform.interfaces.ethernet.address"), "", NULL);
-        row(app.content, 246, "Address assignment", "Automatic (DHCP)", "", NULL);
+        row(app.content, 90 + SETTINGS_ROW_PITCH, "IP address",
+            S("platform.interfaces.ethernet.address"), "", NULL);
+        row(app.content, 90 + 2 * SETTINGS_ROW_PITCH, "Address assignment", "Automatic (DHCP)", "",
+            NULL);
     }
 }
 static void wifi_view(void) {
     row(app.content, 90, "Network", *S("wifi.ssid") ? S("wifi.ssid") : "Not connected", "", NULL);
-    row(app.content, 168, "IP address", S("wifi.ip_address"), "", NULL);
-    row(app.content, 246, "Signal", S("wifi.rssi"), "", NULL);
+    row(app.content, 90 + SETTINGS_ROW_PITCH, "IP address", S("wifi.ip_address"), "", NULL);
+    row(app.content, 90 + 2 * SETTINGS_ROW_PITCH, "Signal", S("wifi.rssi"), "", NULL);
     footer(NULL, NULL, "Connect to Wi-Fi", "scan_wifi");
 }
 static void wifi_networks(void) {
@@ -1284,7 +1304,7 @@ static void wifi_networks(void) {
         row(list, y, ssid->valuestring, "›", detail, action);
         free(action);
         free(json);
-        y += 82;
+        y += SETTINGS_ROW_PITCH;
     }
     if (!y)
         text(list, B("wifi.busy") ? "Scanning available networks…" : "No networks found", 20, 60,
@@ -1298,21 +1318,7 @@ static void timelapse_view(void) {
                        "The Moonraker time-lapse component is not installed.", NULL, NULL);
         return;
     }
-    bool enabled = B("platform.timelapse.enabled");
-    lv_obj_t *setting = button_fixed(app.content, "", 0, 100, 674, 96, "toggle_timelapse", false);
-    lv_obj_set_style_border_width(setting, 0, 0);
-    text(setting, "Time-lapse", 18, 23, 430, &font_ui_20, false);
-    text(setting, enabled ? "On" : "Off", 18, 55, 430, &font_ui_14, true);
-    lv_obj_t *track = box(setting, 576, 28, 76, 40, false);
-    lv_obj_clear_flag(track, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_radius(track, 20, 0);
-    lv_obj_set_style_border_width(track, 0, 0);
-    lv_obj_set_style_bg_color(track, enabled ? app.accent : colour("596371"), 0);
-    lv_obj_t *thumb = box(track, enabled ? 39 : 5, 5, 30, 30, false);
-    lv_obj_clear_flag(thumb, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_radius(thumb, 15, 0);
-    lv_obj_set_style_border_width(thumb, 0, 0);
-    lv_obj_set_style_bg_color(thumb, colour("f0f3f7"), 0);
+    toggle_card(100, 96, "Time-lapse", NULL, B("platform.timelapse.enabled"), "toggle_timelapse");
     row(app.content, 212, "Recordings", "›", "Saved time-lapse videos", "recordings");
 }
 static void recordings_view(void) {
@@ -1362,7 +1368,7 @@ static void usb_view(void) {
         return;
     }
     row(app.content, 90, "Drive", S("platform.usb.model"), "", NULL);
-    row(app.content, 168, "Available space", S("platform.usb_free"), "", NULL);
+    row(app.content, 90 + SETTINGS_ROW_PITCH, "Available space", S("platform.usb_free"), "", NULL);
     footer("Eject USB", "{\"action\":\"usb_eject\"}", "Format USB…", "usb_format");
 }
 static void system_view(void) {
@@ -1370,10 +1376,18 @@ static void system_view(void) {
     const char *labels[] = {"Machine information", "Software version", "Time zone", "Help & logs",
                             "Restart"};
     const char *routes[] = {"machine", "software", "timezone", "help", "restart"};
+    int width = (674 - SETTINGS_CARD_GAP) / 2;
     for (int i = 0; i < 5; i++) {
         char action[80];
         snprintf(action, sizeof(action), "route:%s", routes[i]);
-        button(app.content, labels[i], (i % 2) * 342, 100 + (i / 2) * 116, 330, 100, action, false);
+        lv_obj_t *card =
+            button(app.content, "", (i % 2) * (width + SETTINGS_CARD_GAP),
+                   100 + (i / 2) * (100 + SETTINGS_CARD_GAP), width, 100, action, false);
+        lv_obj_set_style_border_width(card, 0, 0);
+        lv_obj_t *label = text(card, labels[i], 16, 38, 262, &font_ui_20, false);
+        lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
+        lv_obj_set_height(label, 28);
+        icon(card, "chevron-right", width - 34, 36, 28, colour("a4aebb"));
     }
 }
 static void machine_view(void) {
@@ -1383,7 +1397,7 @@ static void machine_view(void) {
 #define INFO(label, value)                                                                         \
     do {                                                                                           \
         row(list, y, label, value, "", NULL);                                                      \
-        y += 82;                                                                                   \
+        y += SETTINGS_ROW_PITCH;                                                                   \
     } while (0)
     INFO("Model", S("model"));
     INFO("Language", "English");
@@ -1492,7 +1506,7 @@ static void history_view(bool errors) {
         cJSON_ArrayForEach(operation, J("operations")) {
             row(list, y, jstr(operation, "label", "Operation"), "In progress",
                 jstr(operation, "detail", ""), NULL);
-            y += 82;
+            y += SETTINGS_ROW_PITCH;
         }
     }
     for (int i = cJSON_GetArraySize(events) - 1; i >= 0; i--) {
@@ -1506,7 +1520,7 @@ static void history_view(bool errors) {
         strftime(when, sizeof(when), "%H:%M", &tm);
         snprintf(title, sizeof(title), "%s  %s", when, jstr(e, "title", ""));
         row(list, y, title, "", jstr(e, "detail", ""), NULL);
-        y += 82;
+        y += SETTINGS_ROW_PITCH;
     }
     if (!y)
         text(list, errors ? "No errors recorded" : "No status messages yet", 20, 60, 620,
@@ -1768,19 +1782,19 @@ void views_render(void) {
         history_view(true);
     else if (!strcmp(p, "restart")) {
         row(app.content, 90, "Restart Klipper", "›", "", "restart:klipper");
-        row(app.content, 168, "Firmware restart", "›", "", "restart:firmware");
+        row(app.content, 90 + SETTINGS_ROW_PITCH, "Firmware restart", "›", "", "restart:firmware");
     } else if (!strcmp(p, "software")) {
         row(app.content, 90, "OpenKlipper",
             *S("platform.version") ? S("platform.version") : "Installed custom fork", "", NULL);
-        row(app.content, 168, "Touchscreen", "Native LVGL", "", NULL);
-        row(app.content, 246, "Build",
+        row(app.content, 90 + SETTINGS_ROW_PITCH, "Touchscreen", "Native LVGL", "", NULL);
+        row(app.content, 90 + 2 * SETTINGS_ROW_PITCH, "Build",
             *S("platform.screen_version") ? S("platform.screen_version") : "Development", "", NULL);
     } else if (!strcmp(p, "language")) {
         row(app.content, 90, "Language", "English", "", NULL);
     } else if (!strcmp(p, "help")) {
         row(app.content, 90, "Recent errors", "›", "Messages and recovery details", "route:errors");
-        row(app.content, 168, "Status history", "›", "", "route:history");
-        row(app.content, 246, "Export logs to USB", "›", "", "export_logs");
+        row(app.content, 90 + SETTINGS_ROW_PITCH, "Status history", "›", "", "route:history");
+        row(app.content, 90 + 2 * SETTINGS_ROW_PITCH, "Export logs to USB", "›", "", "export_logs");
     } else if (!strcmp(p, "save")) {
         if (!ui_unavailable("Saving configuration", "saving configuration and restarting"))
             center_message("Save configuration?",

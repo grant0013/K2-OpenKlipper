@@ -245,7 +245,17 @@ class FlowTests(unittest.TestCase):
                 and json.loads(i["action"]).get("key") == key
             )
             r = item["rect"]
-            self.assertEqual(r[1] + r[3] / 2, 129 + index * 82)
+            self.assertEqual(r[1] + r[3] / 2, 129 + index * 94)
+
+    def test_cfs_switches_update_local_preview_like_timelapse(self):
+        _, commands = self.render("refill", [{"tap": [700, 130]}, {"tap": [700, 130]}])
+        self.assertEqual(
+            commands,
+            [
+                {"action": "preference", "key": "cfs_insertion_read", "value": False},
+                {"action": "preference", "key": "cfs_insertion_read", "value": True},
+            ],
+        )
 
     def test_existing_editor_locks_save_fields_while_filament_is_busy(self):
         active = self.active("load")
