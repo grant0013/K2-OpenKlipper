@@ -750,9 +750,9 @@ static void filament_view(void) {
                       : !strcmp(slot, "E") ? "Spool"
                       : present            ? "Unknown"
                                            : "Empty",
-                      4, content_y + 113, tile_width - 8, &font_ui_16, false));
+                      4, content_y + 109, tile_width - 8, &font_ui_16, false));
         if (feeding_slot(slot))
-            icon(tile, "nozzle", (tile_width - 24) / 2, content_y + 144, 24, colour("f0f3f7"));
+            icon(tile, "nozzle", (tile_width - 24) / 2, content_y + 134, 24, colour("f0f3f7"));
     }
 
     if (fitted()) {
