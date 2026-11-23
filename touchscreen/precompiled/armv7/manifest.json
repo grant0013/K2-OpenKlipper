@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "built_from_commit": "e6268a93a5de76d705f574c79b075a8710d95252",
+  "built_from_commit": "bfa5b5e869b50bf6e0a1116fdd8cac19b4a77ae5",
   "source_inputs": {
     "VERSION": "a12a1be3f3ee06a3159f695083ad52c3f3dc2ae1f071b7aece71cfe4c1f1e133",
     "install.sh": "2f47f109e1d906b94dbf6e4df29029537019ef7fb209d35689de61b10923084b",
@@ -39,14 +39,14 @@
     "touchscreen/src/main.c": "64e706b4a3d2527895534af105b00d6cf080ef76eefa522cd09fa1e1749f766f",
     "touchscreen/src/platform.c": "073cc61aa45d05a9003626c3d13d6577aa2ee4d287c376a6f732854ae9814f96",
     "touchscreen/src/screen.h": "471ba6844ced357c47669fac55d921594943c723fcbe8bf52d7d025d060805ad",
-    "touchscreen/src/ui.c": "1a1cab9fb767ec8542439a3c159e501081cbfb42b91e309c67162e0865fcadb9",
+    "touchscreen/src/ui.c": "000f52237e30a547958780613bec4feefcf6d68755348c57bc9d5157855269a8",
     "touchscreen/src/view_inputs.c": "faca09c65c6547f67523cde4039ab5d745baead09e650aef463d2c7e45c38c29",
-    "touchscreen/src/views.c": "c200cad21a7d0020b6c8c4912603d7444c6dbae6e74ee2b952f3fb1af7758955"
+    "touchscreen/src/views.c": "ae023d1cb2b5103bf13bc4109c82bf51abf11d4a3ecd65356259ece4f5e6a63a"
   },
-  "source_fingerprint": "7a0f6a8d1e75305a8057d01c201d4172d3d7ccb200c4aa83823c00fc4f636fce",
+  "source_fingerprint": "fa9d3550095d4b6000465f1403ed254a6d215de73c6d2887fc52c0cb9d5a01ae",
   "target": "armv7-linux-gnueabihf",
   "files": {
-    "VERSION": "20cf415440a7e8b8c7bde7b0c0fe7588c2e7655d2843ce5b71bda81d0f9d41d6",
+    "VERSION": "454f0956822ef7ced0ae73bfaa43df21e1482fd502694eca4c1621fd1ce8a769",
     "assets/activity-16.png": "c919d511ce9edcb9d429b0fd34c07992897427f344576e3d4205bdf884686734",
     "assets/activity-20.png": "992b40c4beea90f8f95d1e41f959c340754c47b8e16c69e13598e39af4a03222",
     "assets/activity-22.png": "c942aa5df3dcfc51374af5c9189d5de6ea824b3addebfb3f55c63de7e02538a7",
@@ -578,6 +578,6 @@
     "licenses/Lucide-LICENSE": "1e7290b35280a048667bbf0ebabac1c7fd52a75300e8b2946ac165715997f2bc",
     "licenses/Noto-LICENSE": "075f91382875da1c4b491f1facf2586f55448705133264d98ce15cab6211b125",
     "licenses/cJSON-LICENSE": "a36dda207c36db5818729c54e7ad4e8b0c6fba847491ba64f372c1a2037b6d5c",
-    "openklipper-screen": "56c469c11f0d6b2d56cb6eef28febc746c0f1c6630572fc2ff65085f5d1253b4"
+    "openklipper-screen": "91ea60d756709a2c9d294af65c15ad5d5ba64be221a9bced0104d7ce0744826c"
   }
 }
