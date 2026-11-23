@@ -226,8 +226,7 @@ void view_home(void) {
         lv_obj_t *name = text(app.content, display_name, 14, 31, HOME_MAIN - 28, &font_ui_17, true);
         lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
         lv_obj_set_height(name, 26);
-        lv_obj_set_style_bg_color(name, colour("151a22"), 0);
-        lv_obj_set_style_bg_opa(name, LV_OPA_80, 0);
+        lv_obj_set_style_bg_opa(name, LV_OPA_TRANSP, 0);
         lv_obj_t *summary = button(app.content, "", 0, 289, HOME_MAIN, 80, "home_history", false);
         lv_obj_set_style_bg_opa(summary, 0, 0);
         lv_obj_set_style_border_width(summary, 0, 0);
