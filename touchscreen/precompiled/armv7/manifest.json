@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "built_from_commit": "f68d12a28c7114acc362b4ac2493b35bd0e68c43",
+  "built_from_commit": "700d37fc04e74d280c54d4a6c9049d4e2015636f",
   "source_inputs": {
     "VERSION": "a12a1be3f3ee06a3159f695083ad52c3f3dc2ae1f071b7aece71cfe4c1f1e133",
     "install.sh": "2f47f109e1d906b94dbf6e4df29029537019ef7fb209d35689de61b10923084b",
@@ -15,9 +15,9 @@
     "touchscreen/assets/extruder.svg": "f0ef8a4d6f832b25684acebf58ccb3836c49463b569b1f4e3f0d8773fcabf2eb",
     "touchscreen/assets/nozzle.svg": "96e86035950466873fdf5cf960d29ce82c5e1c1c851c7d004aabfae6d78f7b6f",
     "touchscreen/assets/printer-3d.svg": "27785d5448e03dc2fb9a95c76ab86ab3a42d8201b051c9f32721cf7af44fb248",
-    "touchscreen/assets/printer-with-cfs.png": "b589264c0ab392823efc6bbcb09c9de20b1b59047684dda9daef6d8e7021f834",
-    "touchscreen/assets/printer-without-cfs.png": "9fdf903c7c9e9e0f0a55458fbffda151234a0073901d4cf136d04b43531e1275",
-    "touchscreen/assets/printer.svg": "0da7d0052b85e6ae02bdb565e4201662303e7449afdfd2c68fe6d92b2a9f897c",
+    "touchscreen/assets/printer-with-cfs.png": "35abcce8727b4cc14d4d0101cd84ea30c5f77bf291f2c0d072d7ac82d5215431",
+    "touchscreen/assets/printer-without-cfs.png": "702e71756683031446ad35da6f27751dfdb546505d901b06557dac3dd14753e5",
+    "touchscreen/assets/printer.svg": "0b5245f8637013ea4fea4e4e6f1b61595af63cffadf7b4d9129f9b3cbfe06004",
     "touchscreen/assets/skip-object.svg": "29c065e8a63a2ebac8e8528bfa490c672a158d091497b2efc73ef39437d071bc",
     "touchscreen/backend/action_policy.py": "f9a4d39485cc9a54be01642057ffefa616a5ad9f514a011482cacbc276e55035",
     "touchscreen/backend/model.py": "cf583f164af6cfb0b24e04d12df8cc3a7241aeaefd8969bf33b3e078bbc8c013",
@@ -42,14 +42,14 @@
     "touchscreen/src/main.c": "2066b9899d5bd1a919ff6acf031055e55a7fcba56f0e82b490150283fdd0672a",
     "touchscreen/src/platform.c": "42ddda371a3e5d02841ea247d711d070356a04ee3e6f1ff4b7aef9fffa319911",
     "touchscreen/src/screen.h": "d9398e7a8e4b442671a9d3bbdee715f0f896ad7e474395984271194a56aaa623",
-    "touchscreen/src/ui.c": "ff4c6b9d1043c054cbb213efe71b6de3e8b0b286008ec9a314b5b5ef5f5c425b",
+    "touchscreen/src/ui.c": "90f3656d9fe14e07650a610c2fe83ed3beff90079672d265eb1f26d40c336770",
     "touchscreen/src/view_inputs.c": "dee7267ec1c569a81c2378855982465276b6b0eee8444a0b175c760a8372dc8e",
-    "touchscreen/src/views.c": "7f9fcf55c23838ce3975aeff1c4e6676f9238146ba52bd61e2e7376e0455620b"
+    "touchscreen/src/views.c": "e04dfbb8248caa2f25a29eb0614e7c141f8265df32b389396ec33a897b3ee918"
   },
-  "source_fingerprint": "5b274e296e487bc416393ea08644d9bec5eec491c698477cfc9bfea0c30eacb9",
+  "source_fingerprint": "99e7f25d91f9363621a882fef6f2fbbd611db4fff74527f8693669c99bd64170",
   "target": "armv7-linux-gnueabihf",
   "files": {
-    "VERSION": "e07ea5e060dd894d6a33bf9ca6808721bcdf029fef46a76a99fff723256553db",
+    "VERSION": "70a436859ff41671514f58dac8eb49885a9d62b5e5cf0eae916d9fdbaaaef7d7",
     "assets/activity-16.png": "c919d511ce9edcb9d429b0fd34c07992897427f344576e3d4205bdf884686734",
     "assets/activity-20.png": "992b40c4beea90f8f95d1e41f959c340754c47b8e16c69e13598e39af4a03222",
     "assets/activity-22.png": "c942aa5df3dcfc51374af5c9189d5de6ea824b3addebfb3f55c63de7e02538a7",
@@ -432,8 +432,8 @@
     "assets/printer-3d-36.png": "f3457e04911196d7b234e5d57c84e4a652e2e3386dc9019be4896f42a48d60d8",
     "assets/printer-3d-42.png": "94542d6b2ed3b5d6b959305be1bff2332ca0563c9803a93890a801df32963356",
     "assets/printer-3d-44.png": "ad1253e04e5ef793efbb8460f4edba6df1aa5c41d35782351e5293702e150a03",
-    "assets/printer-with-cfs.png": "b589264c0ab392823efc6bbcb09c9de20b1b59047684dda9daef6d8e7021f834",
-    "assets/printer-without-cfs.png": "9fdf903c7c9e9e0f0a55458fbffda151234a0073901d4cf136d04b43531e1275",
+    "assets/printer-with-cfs.png": "35abcce8727b4cc14d4d0101cd84ea30c5f77bf291f2c0d072d7ac82d5215431",
+    "assets/printer-without-cfs.png": "702e71756683031446ad35da6f27751dfdb546505d901b06557dac3dd14753e5",
     "assets/refresh-cw-16.png": "9dc4fe5965f0bdd75824eeeeb7854c96551d8bc86365a9a9c2999ee13dce3099",
     "assets/refresh-cw-20.png": "5443a9fcd16e73fdf5912fbd34888a3ef55b83e640313e2034e129466d5512ab",
     "assets/refresh-cw-22.png": "065eada377a5dff2c85f7cb37278a91f139becbdabc11964dc0e9697f811c60b",
@@ -592,6 +592,6 @@
     "licenses/Lucide-LICENSE": "1e7290b35280a048667bbf0ebabac1c7fd52a75300e8b2946ac165715997f2bc",
     "licenses/Noto-LICENSE": "075f91382875da1c4b491f1facf2586f55448705133264d98ce15cab6211b125",
     "licenses/cJSON-LICENSE": "a36dda207c36db5818729c54e7ad4e8b0c6fba847491ba64f372c1a2037b6d5c",
-    "openklipper-screen": "02ade8bc67e63ca0d51e13cab659500fa73cd95e49cc13c69e140bc9c121b0ad"
+    "openklipper-screen": "da385cb88a6d92157dbfd814ff765844d1184da0c66d0b699ccd7a5555256268"
   }
 }
