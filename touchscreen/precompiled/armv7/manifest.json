@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "built_from_commit": "cc2d05c8d14c70af9d6c185f42fb88e681db6981",
+  "built_from_commit": "c7e271b3e3d47d9f5bf0d0bef55687004d965fc5",
   "source_inputs": {
     "VERSION": "a12a1be3f3ee06a3159f695083ad52c3f3dc2ae1f071b7aece71cfe4c1f1e133",
     "install.sh": "2f47f109e1d906b94dbf6e4df29029537019ef7fb209d35689de61b10923084b",
@@ -41,12 +41,12 @@
     "touchscreen/src/screen.h": "16ba1060ba3e236bbd906ab33b0d014f6635c72081c80d49a631ca26e4a40f5b",
     "touchscreen/src/ui.c": "15b39f5a784363c3f8534b4e70d233956199b701d0ec5109dd3bbc90753bd982",
     "touchscreen/src/view_inputs.c": "faca09c65c6547f67523cde4039ab5d745baead09e650aef463d2c7e45c38c29",
-    "touchscreen/src/views.c": "99a041cd18bba38a857acbe4a0ef5fbc6899b9cb0121fd40cd64b27cbc7f151a"
+    "touchscreen/src/views.c": "87b6fce02d95c88316c7ae3ca68a672cc3a4430be6320f0c6a11857604b6bf05"
   },
-  "source_fingerprint": "0ce6e5913d71c8f94c844b63ff3bd8096869f7b3a26947c0f0dbec2cad5f2a7f",
+  "source_fingerprint": "c09f6829486a02a764e27f36111c2bfad99c2ad3cd41a13418281e76445d3268",
   "target": "armv7-linux-gnueabihf",
   "files": {
-    "VERSION": "1492e05686e2ed81e1716395b0d003282233f527da0778812f7954a4e4504ec3",
+    "VERSION": "c53f9a178e52f53731da4417a1fb3b37079b31a954f99a8fe2aa96d2fa565247",
     "assets/activity-16.png": "c919d511ce9edcb9d429b0fd34c07992897427f344576e3d4205bdf884686734",
     "assets/activity-20.png": "992b40c4beea90f8f95d1e41f959c340754c47b8e16c69e13598e39af4a03222",
     "assets/activity-22.png": "c942aa5df3dcfc51374af5c9189d5de6ea824b3addebfb3f55c63de7e02538a7",
@@ -587,6 +587,6 @@
     "licenses/Lucide-LICENSE": "1e7290b35280a048667bbf0ebabac1c7fd52a75300e8b2946ac165715997f2bc",
     "licenses/Noto-LICENSE": "075f91382875da1c4b491f1facf2586f55448705133264d98ce15cab6211b125",
     "licenses/cJSON-LICENSE": "a36dda207c36db5818729c54e7ad4e8b0c6fba847491ba64f372c1a2037b6d5c",
-    "openklipper-screen": "5a1b508d3d86b8a3e0d6decdf31f2aa5f45bf6aa1d0f727b20f5889bc8497598"
+    "openklipper-screen": "e0249686e514154396d110feb1f2410ec01a0017975848fbbc259a34cb381a5b"
   }
 }
