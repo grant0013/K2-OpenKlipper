@@ -20,6 +20,10 @@ The screenshots below are rendered by the native application with example data.
 
 ### During a print
 
+- After Start Print is accepted, the selected preview and known layer count appear
+  immediately with **Starting print…**. Klipper then supplies the preparation and
+  printing status. Unknown time and layer values stay hidden.
+- The home preview stays clear of filenames; full names remain in file details.
 - See the model preview, progress, remaining hours/minutes and `Layer current / total`.
 - Pause, stop or open the plate view to skip failed objects.
 - Tap the status text or history icon to open **Status history**. One or two lines
@@ -27,6 +31,8 @@ The screenshots below are rendered by the native application with example data.
 - CFS colors and the nozzle marker show available and feeding filament.
 - The light icon shows its current state: rays when on, a crossed bulb when off.
   Light and fan shortcuts remain available; filament colors do not follow the UI accent.
+
+![Starting a print](screenshots/print-starting.png)
 
 | Printing | Heating toward targets |
 | --- | --- |

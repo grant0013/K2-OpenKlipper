@@ -1241,6 +1241,16 @@ class Service:
         mesh = "variable_screen_full_mesh" in model.macro_options(
             settings, "START_PRINT"
         )
+        with self.lock:
+            self.platform["starting_file"] = path
+            self.platform["preview_file"] = path
+            self.platform["estimated_time"] = meta.get("estimated_time", 0)
+            self.platform["layer_count"] = meta.get("layer_count", 0)
+            self.platform.pop("thumbnail", None)
+            if self.selected_file == path and self.platform.get("file_thumbnail"):
+                self.platform["thumbnail"] = self.platform["file_thumbnail"]
+            self.platform["print_preview_busy"] = False
+            self.sequence += 1
         try:
             if mesh:
                 self.gcode(
@@ -1250,6 +1260,9 @@ class Service:
             self.gcode(platform.tool_map_script(path, mapping))
             self.mr.request("/printer/print/start", {"filename": path})
         except Exception:
+            with self.lock:
+                self.platform.pop("starting_file", None)
+                self.sequence += 1
             for command in ["CFS_TOOL_MAP RESET=1 QUIET=1"] + (
                 [
                     "SET_GCODE_VARIABLE MACRO=START_PRINT VARIABLE=screen_full_mesh VALUE=0"
@@ -1355,11 +1368,19 @@ class Service:
             elif "k2_cfs" in delta:
                 self.cfs_slot_notices()
             filename = self.status.get("print_stats", {}).get("filename", "")
-            if filename != previous_file:
+            if filename != previous_file and filename != self.platform.get(
+                "preview_file"
+            ):
                 self.platform.pop("thumbnail", None)
                 self.platform.pop("estimated_time", None)
+                self.platform.pop("layer_count", None)
                 self.platform["print_preview_busy"] = bool(filename)
             state = self.status.get("print_stats", {}).get("state", "")
+            if (
+                state in ("printing", "paused", "error", "cancelled")
+                or self.status.get("webhooks", {}).get("state") != "ready"
+            ):
+                self.platform.pop("starting_file", None)
             stage = self.status.get("gcode_macro _STAGE", {}).get("text", "")
             if state != self.last_state:
                 self.print_stage = ""
@@ -1577,6 +1598,8 @@ class Service:
         with self.lock:
             if self.status.get("print_stats", {}).get("filename") != filename:
                 return
+            self.platform["preview_file"] = filename
+            self.platform["layer_count"] = meta.get("layer_count", 0)
             self.platform.pop("thumbnail", None)
             if preview:
                 self.platform["thumbnail"] = preview
@@ -1707,6 +1730,9 @@ class Service:
                 "icons",
                 "file_thumbnails",
                 "print_preview_busy",
+                "starting_file",
+                "preview_file",
+                "layer_count",
                 "stock_firmware",
             ):
                 if key in self.platform:

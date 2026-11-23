@@ -37,6 +37,7 @@ def main():
         )
         cases = [
             ("home", "home", "printing", []),
+            ("print-starting", "home", "idle", []),
             ("move", "move", "heated", []),
             ("filament", "filament", "idle", []),
             ("mapping", "file", "idle", ["review_mapping", "mapping_pick:0"]),
@@ -152,6 +153,13 @@ def main():
             data["status"]["stepper_enable"] = {
                 "steppers": {"stepper_x": True, "stepper_y": True, "stepper_z": True}
             }
+            if name == "print-starting":
+                data["platform"].update(
+                    starting_file="Demo print.gcode",
+                    thumbnail=str(preview),
+                    layer_count=250,
+                    estimated_time=4500,
+                )
             if name == "home":
                 data["status"]["print_stats"].update(
                     info={"current_layer": 100, "total_layer": 250}

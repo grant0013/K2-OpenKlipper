@@ -230,19 +230,15 @@ static void preview_placeholder(lv_obj_t *parent, int x, int y, int width, int h
              colour("a4aebb"));
 }
 void view_home(void) {
-    bool printing = app.printing || app.paused || !strcmp(S("status.print_stats.state"), "error");
-    const char *filename = S("status.print_stats.filename");
+    bool starting = *S("platform.starting_file") != 0;
+    bool printing =
+        starting || app.printing || app.paused || !strcmp(S("status.print_stats.state"), "error");
     if (printing) {
         lv_obj_t *preview = box(app.content, 0, 19, HOME_MAIN, 260, false);
         lv_obj_set_style_bg_color(preview, colour("30343c"), 0);
         if (!image_fit(app.content, S("platform.thumbnail"), 12, 31, HOME_MAIN - 24, 196))
             preview_placeholder(app.content, 0, 19, HOME_MAIN, 220,
                                 B("platform.print_preview_busy"));
-        char display_name[1024];
-        file_title(display_name, sizeof(display_name), filename);
-        lv_obj_t *name = text(app.content, display_name, 14, 31, HOME_MAIN - 28, &font_ui_17, true);
-        lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
-        lv_obj_set_height(name, 26);
         app.time_label = text(app.content, "", 14, 247, 230, &font_ui_17, false);
         app.layer_label = text(app.content, "", 248, 249, 208, &font_ui_14, true);
         right(app.layer_label);
@@ -264,9 +260,14 @@ void view_home(void) {
         lv_obj_set_style_radius(app.progress, 4, LV_PART_MAIN);
         lv_obj_set_style_radius(app.progress, 4, LV_PART_INDICATOR);
         button(app.content, app.paused ? "icon:play" : "icon:pause", 294, 391, 52, 70,
-               app.paused ? "{\"action\":\"resume\"}" : "{\"action\":\"pause\"}", true);
-        button(app.content, "icon:skip-object", 356, 391, 52, 70, "route:objects", false);
-        button(app.content, "icon:square", 418, 391, 52, 70, "cancel_print", false);
+               starting     ? NULL
+               : app.paused ? "{\"action\":\"resume\"}"
+                            : "{\"action\":\"pause\"}",
+               true);
+        button(app.content, "icon:skip-object", 356, 391, 52, 70, starting ? NULL : "route:objects",
+               false);
+        button(app.content, "icon:square", 418, 391, 52, 70, starting ? NULL : "cancel_print",
+               false);
     } else {
         const char *art = S("platform.printer_image");
         if (*art)
@@ -369,7 +370,8 @@ void views_refresh(void) {
         }
     }
     if (app.status_label) {
-        const char *state = app.paused     ? "Paused"
+        const char *state = *S("platform.starting_file") ? "Starting print…"
+                            : app.paused                 ? "Paused"
                             : app.printing ? (*S("print_stage") ? S("print_stage") : "Printing")
                                            : "Stopped";
         lv_point_t size;
@@ -382,24 +384,33 @@ void views_refresh(void) {
     if (app.time_label) {
         double estimated = N("platform.estimated_time"),
                elapsed = N("status.print_stats.print_duration");
-        if (estimated > 0) {
+        if (estimated > 0 && !*S("platform.starting_file")) {
             int minutes = (int)ceil(fmax(0, estimated - elapsed) / 60);
             if (minutes >= 60)
                 snprintf(value, sizeof(value), "%d h %d min remaining", minutes / 60, minutes % 60);
             else
                 snprintf(value, sizeof(value), "%d min remaining", minutes);
         } else
-            snprintf(value, sizeof(value), "— remaining");
+            value[0] = 0;
         lv_label_set_text(app.time_label, value);
     }
     if (app.layer_label) {
-        snprintf(value, sizeof(value), "Layer %.0f / %.0f",
-                 N("status.print_stats.info.current_layer"),
-                 N("status.print_stats.info.total_layer"));
+        double total = N("status.print_stats.info.total_layer");
+        double current = N("status.print_stats.info.current_layer");
+        if (*S("platform.starting_file") || total <= 0)
+            total = N("platform.layer_count");
+        if (*S("platform.starting_file"))
+            current = 0;
+        if (total > 0 && current > 0)
+            snprintf(value, sizeof(value), "Layer %.0f / %.0f", current, total);
+        else if (total > 0)
+            snprintf(value, sizeof(value), "%.0f layers", total);
+        else
+            value[0] = 0;
         lv_label_set_text(app.layer_label, value);
     }
     if (app.progress) {
-        double p = N("status.virtual_sdcard.progress") * 100;
+        double p = *S("platform.starting_file") ? 0 : N("status.virtual_sdcard.progress") * 100;
         lv_bar_set_value(app.progress, (int)p, LV_ANIM_OFF);
         snprintf(value, sizeof(value), "%.0f%%", p);
         lv_label_set_text(app.percent, value);

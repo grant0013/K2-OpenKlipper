@@ -67,7 +67,10 @@ class ServiceTests(unittest.TestCase):
         self.state = status()
         self.config = settings()
         self.mr.query.side_effect = lambda: copy.deepcopy(self.state)
-        self.mr.status_snapshot.side_effect = lambda: {"status": self.mr.query(), "eventtime": time.monotonic()}
+        self.mr.status_snapshot.side_effect = lambda: {
+            "status": self.mr.query(),
+            "eventtime": time.monotonic(),
+        }
         self.mr.settings.side_effect = lambda: copy.deepcopy(self.config)
         self.s = Service(config, self.mr)
         self.s.status = copy.deepcopy(self.state)
@@ -101,7 +104,9 @@ class ServiceTests(unittest.TestCase):
         self.s.platform["timelapse"] = {"enabled": False}
         for value in (True, False):
             self.run_action("timelapse", enabled=value)
-            self.mr.request.assert_called_with("/machine/timelapse/settings", {"enabled": value})
+            self.mr.request.assert_called_with(
+                "/machine/timelapse/settings", {"enabled": value}
+            )
             self.assertEqual(self.s.platform["timelapse"]["enabled"], value)
 
     def test_limits_change_without_model_assumptions(self):
@@ -395,6 +400,29 @@ class ServiceTests(unittest.TestCase):
                 record={"name": "PLA", "color": "ABCDEF", "nozzle_temp": 351},
             )
 
+    def test_start_reuses_selected_preview_until_klipper_reports_printing(self):
+        self.s.metadata["part.gcode"] = {
+            "filaments": [{"tool": 0}],
+            "estimated_time": 1200,
+            "layer_count": 250,
+        }
+        self.s.selected_file = "part.gcode"
+        self.s.platform["file_thumbnail"] = "selected.png"
+
+        def accepted(*args):
+            self.assertEqual(self.s.platform["starting_file"], "part.gcode")
+            self.assertEqual(self.s.platform["thumbnail"], "selected.png")
+
+        self.mr.request.side_effect = accepted
+        self.run_action("start", path="part.gcode", mapping={"0": "A"})
+        self.assertEqual(self.s.platform["layer_count"], 250)
+        self.s.merge_status(
+            {"print_stats": {"filename": "part.gcode", "state": "printing"}}
+        )
+        self.assertNotIn("starting_file", self.s.platform)
+        self.assertEqual(self.s.platform["thumbnail"], "selected.png")
+        self.assertEqual(self.s.platform["estimated_time"], 1200)
+
     def test_print_start_validates_mapping_and_rolls_back(self):
         self.s.metadata["part.gcode"] = {"filaments": [{"tool": 0}]}
         self.mr.request.side_effect = RuntimeError("cannot start")
@@ -402,6 +430,7 @@ class ServiceTests(unittest.TestCase):
             self.run_action(
                 "start", path="part.gcode", mapping={"0": "A"}, calibrate=True
             )
+        self.assertNotIn("starting_file", self.s.platform)
         calls = [c.args[0] for c in self.mr.run_gcode.call_args_list]
         self.assertIn("CFS_TOOL_MAP RESET=1 QUIET=1", calls)
         self.assertIn(
