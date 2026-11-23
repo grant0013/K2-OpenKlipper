@@ -49,7 +49,7 @@ https://github.com/mainsail-crew/mainsail.
 ## Native touchscreen
 
 The C application builds against LVGL 8.4.0 (MIT) and cJSON 1.7.19 (MIT),
-with pinned archive hashes in `touchscreen/CMakeLists.txt`. Their licence
+with pinned archive hashes in `touchscreen/build/CMakeLists.txt`. Their licence
 files are copied into the printer package by `touchscreen/developer-tools/build.sh`.
 Lucide icons use ISC with the retained Feather notices in
 `touchscreen/assets/Lucide-LICENSE`. Liberation Sans and Noto Sans source

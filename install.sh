@@ -272,17 +272,20 @@ fi
 # ever get versions that were tested and tagged; main is not installed by
 # default.
 if [ -z "$REF" ]; then
-    REF=$(python3 - "$REPO" <<'PY'
+    REF=$(python3 - "$REPO" <<'PY_RELEASE'
 import json, sys, urllib.request
 try:
     req = urllib.request.Request("https://api.github.com/repos/%s/releases?per_page=10" % sys.argv[1],
                                  headers={"Accept": "application/vnd.github+json", "User-Agent": "k2-openklipper"})
-    rel = [r for r in json.load(urllib.request.urlopen(req, timeout=30)) if not r.get("draft")]
-    print(rel[0]["tag_name"] if rel else "main")
-except Exception:
-    print("main")
-PY
-)
+    releases = [r for r in json.load(urllib.request.urlopen(req, timeout=30)) if not r.get("draft")]
+    if not releases:
+        raise ValueError("No published releases were found")
+    print(releases[0]["tag_name"])
+except Exception as error:
+    print("Cannot select the newest published release: %s" % error, file=sys.stderr)
+    sys.exit(1)
+PY_RELEASE
+) || die "release lookup failed; retry later or explicitly set OKL_REF to a tag or development branch"
 fi
 echo "    version to install: $REF"
 if [ "$MODE" = update ] && [ -z "${OKL_REF:-}" ]; then
@@ -352,8 +355,9 @@ fi
 [ ! -d "$SRC/harkscreen" ] || die "source contains the superseded renderer; unpack the native bundle into a fresh directory"
 case "${OKL_TOUCHSCREEN:-native}" in
     native)
-        SCREEN_PACKAGE=${OKL_SCREEN_PACKAGE:-$SRC/touchscreen/package-arm}
-        [ -x "$SCREEN_PACKAGE/openklipper-screen" ] && [ -d "$SCREEN_PACKAGE/assets" ]             || die "native touchscreen package missing; build touchscreen/developer-tools/build.sh arm first, or explicitly select OKL_TOUCHSCREEN=none"
+        SCREEN_PACKAGE=${OKL_SCREEN_PACKAGE:-$SRC/touchscreen/precompiled/armv7}
+        python3 "$SRC/touchscreen/installation/validate_package.py" --source "$SRC/touchscreen" --package "$SCREEN_PACKAGE" \
+            || die "precompiled touchscreen does not match this source; use a version with an updated precompiled package"
         ;;
     none) ;;
     *) die "OKL_TOUCHSCREEN must be native or none" ;;
@@ -531,7 +535,7 @@ esac
 # Native touchscreen is an explicit installation choice on this branch.
 # Source builds and release packages are handled by its own installer.
 if [ "${OKL_TOUCHSCREEN:-native}" = native ]; then
-    sh "$BUILD/touchscreen/install.sh" "$CONF" "$MODEL"
+    sh "$BUILD/touchscreen/installation/install.sh" "$CONF" "$MODEL"
     for f in harkscreen.cfg harkscreen-settings.json; do
         [ ! -f "$CONF/$f" ] || mv "$CONF/$f" "$BACKUP/$f.previous"
     done

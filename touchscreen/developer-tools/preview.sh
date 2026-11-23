@@ -9,7 +9,7 @@ usage() {
 }
 if [ "$#" -eq 0 ]; then usage; exit 2; fi
 if [ "$1" = "--help" ]; then usage; exit 0; fi
-if [ ! -x "$SRC/build-host/openklipper-screen" ]; then
+if [ ! -x "$SRC/out/host/openklipper-screen" ]; then
     echo "Build the PC target first: $SRC/developer-tools/build.sh host" >&2
     exit 1
 fi
@@ -32,4 +32,4 @@ if [ ! -r "$DEMO" ]; then
     echo "Cannot read snapshot: $DEMO" >&2
     exit 1
 fi
-"$SRC/build-host/openklipper-screen" --assets "$SRC/assets/generated" --fixture "$DEMO" --page "$PAGE"
+"$SRC/out/host/openklipper-screen" --assets "$SRC/assets/generated" --fixture "$DEMO" --page "$PAGE"

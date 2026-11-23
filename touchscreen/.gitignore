@@ -1,4 +1,7 @@
-/build*/
+/build-host/
+/build-arm/
+/build-asan/
+/out/
 /.cache/
 /__pycache__/
 /backend/__pycache__/

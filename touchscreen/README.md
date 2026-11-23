@@ -4,35 +4,23 @@ A native LVGL interface for K2 OpenKlipper, with touch controls for printing,
 filament, calibration and everyday printer settings. Printer identity, temperature
 limits, travel limits and available features come from the printer configuration.
 
-## Use the precompiled bundle
+## Installation
 
-The full precompiled bundle includes the touchscreen executable, assets, Python
-service and matching OpenKlipper source. You do not need a compiler, Node.js or
-font tools on the printer. Use a bundle built from the version you want to test;
-the installer checks its files and preserves your printer-specific overrides.
+The native touchscreen is installed and updated by the **normal K2 OpenKlipper
+installer**. Use the [project installation guide](../docs/INSTALL.md) with the
+installer from the version you are installing. When testing a fork or branch,
+select that repository and ref through the installer's existing `OKL_REPO` and
+`OKL_REF` options.
 
-Get `k2-openklipper-native-armv7.tar.gz` and its `.sha256` file from the maintainer
-of that build. On your PC:
+The small `main/install.sh` download is the installer entry point. Unless you
+set `OKL_REF`, it selects the newest published release tag, including alpha
+releases. A failed release lookup stops installation instead of selecting `main`.
 
-```sh
-sha256sum -c k2-openklipper-native-armv7.tar.gz.sha256
-scp -O k2-openklipper-native-armv7.tar.gz root@PRINTER-IP:/mnt/UDISK/
-```
-
-Connect with `ssh root@PRINTER-IP`, then install while the printer is idle:
-
-```sh
-cd /mnt/UDISK
-tar -xzf k2-openklipper-native-armv7.tar.gz
-cd K2-OpenKlipper-native
-sh install.sh --check
-sh install.sh
-```
-
-The installer starts the full stack and retains a rollback copy. The original
-Creality firmware remains available. This branch supplies the native touchscreen;
-there is no automatic download of its compiled package. For general printer
-setup and supported hardware, see the [installation guide](../docs/INSTALL.md).
+The ready-built ARM executable, icons and licenses ship in `precompiled/armv7/`.
+No separate touchscreen download, compilation or font generation is needed on
+the printer. The installer checks that the compiled package matches its source,
+preserves local printer settings, and retains the normal rollback path to stock
+firmware.
 
 ## Printing at a glance
 

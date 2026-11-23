@@ -45,17 +45,16 @@ policy, required widget bindings, view inputs and extension rules.
 | `backend/storage.py` | Image preparation, file/export helpers, time-zone choices and filament-reading policy |
 | `assets/` | Editable SVG icons, source fonts and their licences |
 | `assets/generated/` | Build output: raster icons and LVGL font C files; ignored by Git |
-| `CMakeLists.txt`, `lv_conf.h` | Native build and LVGL configuration |
-| `cmake/arm-linux.cmake` | ARMv7 hard-float cross-compilation and static linking |
-| `native-screen.cfg.example` | Installation identity, panel/touch settings and optional local artwork |
-| `migrate.py` | One-time display preference migration; leaves hardware calibration alone |
-| `launch.py`, `start.sh` | Printer process startup, display settings, PID files and logs |
-| `install.sh` | Staged installation of the prepared package, assets and Python backend |
+| `build/` | CMake build definition, ARM toolchain and compile-time LVGL configuration |
+| `runtime/` | Printer startup, launcher and example display configuration |
+| `installation/` | Package validation, installation and display preference migration |
+| `precompiled/armv7/` | Shipped executable, assets, licenses and integrity manifest |
+| `out/` | Ignored local host/ARM build outputs |
 | `tests/` | Backend guards and actual LVGL touch/layout integration tests |
 
 The layout is defined directly in `src/ui.c` and `src/views.c`.
 
-The installer at the repository root invokes `touchscreen/install.sh`. The
+The installer at the repository root invokes `touchscreen/installation/install.sh`. The
 Python service does not draw frames. Pillow is used for cached image preparation,
 not for the rendering loop. Fonts and icons are generated at build time.
 
@@ -63,13 +62,14 @@ not for the rendering loop. Fonts and icons are generated at build time.
 
 | File | Purpose | Output |
 | --- | --- | --- |
-| `build.sh host` | Install pinned build dependencies, generate assets and build the desktop app | `build-host/`, `assets/generated/` |
-| `build.sh arm` | Generate the same assets and cross-compile/package the printer app | `build-arm/`, `package-arm/` |
+| `build.sh host` | Install pinned build dependencies, generate assets and build the desktop app | `out/host/`, `assets/generated/` |
+| `build.sh arm` | Generate the same assets and cross-compile/package the printer app | `out/arm/`, `precompiled/armv7/` |
+| `format.sh` | Check or apply the native C style from this folder | C source formatting |
 | `build_assets.py` | Convert the bundled fonts and SVG icons using pinned tools | `assets/generated/` |
 | `render_screenshots.py` | Render the user README screenshots from synthetic states and the bundled example part | `screenshots/` |
 | `demo_snapshot.py` | Generate synthetic printer states for safe UI previews | A JSON snapshot at the requested path |
 | `preview.sh` | Run the native desktop application using a snapshot/scenario | An interactive window; no printer commands |
-| `package_arm.py` | Assemble an already-built ARM executable, assets, licenses and revision manifest | `package-arm/` |
+| `package_arm.py` | Assemble an already-built ARM executable, assets, licenses and revision manifest | `precompiled/armv7/` |
 | `package.json`, `package-lock.json` | Pin `lv_font_conv` and `lucide-static` used during asset generation | Installed build dependencies in `node_modules/` |
 
 
@@ -83,14 +83,21 @@ Wayland desktop. This is a native Linux preview, not a CPU or firmware emulator.
 For a Debian/Ubuntu development machine, the relevant packages are:
 
 ```sh
-sudo apt install build-essential cmake python3 nodejs npm imagemagick libx11-dev
+sudo apt install build-essential cmake python3 nodejs npm imagemagick libx11-dev clang-format
 sh touchscreen/developer-tools/build.sh host
 ```
 
 The build downloads pinned LVGL 8.4.0 and cJSON 1.7.19 archives with SHA-256
 checks, installs the locked asset tools, generates fonts/icons, and produces
-`touchscreen/build-host/openklipper-screen`. Source fonts are bundled with their
+`touchscreen/out/host/openklipper-screen`. Source fonts are bundled with their
 licences. Node/npm and font tools are not runtime requirements on the printer.
+
+## Source formatting and build configuration
+
+Run `sh touchscreen/developer-tools/format.sh --check` to check C formatting,
+or omit `--check` to apply it. The style file lives beside the developer tools.
+CMake, its ARM toolchain and `lv_conf.h` live together in `build/`. Build artifacts
+are written to `out/host/` and `out/arm/`; do not commit those directories.
 
 ## Preview without a printer
 
@@ -136,7 +143,7 @@ not defaults applied to a real printer.
 For offscreen rendering, without a desktop display:
 
 ```sh
-touchscreen/build-host/openklipper-screen \
+touchscreen/out/host/openklipper-screen \
   --assets touchscreen/assets/generated \
   --fixture /tmp/screen-demo.json --page home \
   --snapshot /tmp/screen-home.ppm
@@ -173,35 +180,61 @@ The ARM target is statically linked for ARMv7 with NEON and hard-float ABI. Conf
 that target compatibility before using it on another controller architecture.
 No display server or X11 runtime is required on the printer.
 
-The build creates `touchscreen/package-arm/` containing the executable, generated
-assets, dependency licences and a source revision identifier. The touchscreen
-installer copies the Python backend and startup files from the matching source
-checkout. Therefore this package currently accompanies that checkout; it is not
-a standalone firmware updater. Never mix a binary/assets package with unrelated
-backend sources.
+The build creates `touchscreen/out/arm/` and assembles the ready-built runtime in
+`touchscreen/precompiled/armv7/`. Commit this package with the source so GitHub's
+normal source archive contains everything the project installer needs. Users run
+the normal installer; they do not download a separate touchscreen bundle.
 
-Build release packages from a clean, committed checkout so the recorded revision
-identifies the included source.
+### Publishing a source change
 
-To produce the complete installable archive from that same committed checkout:
+1. Commit the source/build/runtime input changes.
+2. Build the ARM target and assemble the package with `build.sh arm`.
+3. Validate it and commit the updated `precompiled/armv7/` files.
 
 ```sh
-python3 tools/release/make_native_bundle.py k2-openklipper-native-armv7.tar.gz
+python3 touchscreen/installation/validate_package.py \
+  --source touchscreen --package touchscreen/precompiled/armv7
 ```
 
-The tool rejects mismatched source/package revisions or changed package files.
-It includes source, the compiled runtime package, `SOURCE_REVISION`, per-file
-checksums and an archive checksum. It excludes local settings and build caches.
+The manifest records hashes of runtime/build inputs and all compiled package
+files. Source fingerprints are used instead of requiring the package commit to
+match its own Git hash: committing compiled files necessarily creates a new
+commit. The build-source commit is retained as provenance. Documentation-only
+changes do not require rebuilding; changing an input without updating the package
+is rejected before installation changes the printer.
 
-For distribution, a maintainer can build this package manually and include it
-with the full versioned OpenKlipper bundle. Include the source revision,
-checksums, licence notices and corresponding source. Do not require compilation
-on the printer. GitHub Actions is optional for this process.
+The root installer copies startup scripts and the backend into their existing
+printer locations. Moving source folders does not change the printer's boot
+commands or configuration paths. `installation/install.sh` is an internal step,
+not a second user installation procedure.
 
-The current root installer checks that the native package exists before changing
-the installation. It does not automatically download missing native packages.
-Use the documented project installation procedure for full-system installation;
-`touchscreen/install.sh` alone changes only the screen application.
+### External-host release automation
+
+`.github/workflows/host-release-asset.yml` checks out the selected release tag,
+installs the ARM cross-compiler, and runs the same `build.sh arm` command before
+creating `k2-openklipper-host.zip`. The release packer includes that freshly built
+panel runtime and omits the K2-specific Klipper C helper, which the external host
+builds itself. The ZIP is uploaded to the GitHub release; it is not deployed to
+a testing machine. Earlier tags without native UI keep their original packer.
+
+This is separate from normal printer installation. The printer installer selects
+the newest published release tag (or an explicit `OKL_REF`) and downloads its
+source archive, which already includes the committed precompiled runtime.
+Maintainers must update those committed files for runtime/build source changes.
+
+### Touchscreen-only installation for developers
+
+For isolated screen testing, copy the matching project checkout to an idle
+printer and run the internal installer from that checkout:
+
+```sh
+sh touchscreen/installation/install.sh /mnt/UDISK/printer_data_mainline/config F008
+sh /mnt/UDISK/openklipper-screen/start.sh /mnt/UDISK/printer_data_mainline/config/native-screen.cfg
+```
+
+The optional profile argument should match the printer (F008 is only an example).
+This updates and restarts the touchscreen/service without reinstalling Klipper.
+Use the full project installer for normal printer installations and updates.
 
 Keep model-specific hotend, extruder, cutter and Z-reference settings in the
 printer's configuration or its separate integration branch. They are not part of

@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location("native_migration", ROOT / "migrate.py")
+spec = importlib.util.spec_from_file_location("native_migration", ROOT / "installation/migrate.py")
 migration = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(migration)
 
@@ -24,7 +24,7 @@ class MigrationTest(unittest.TestCase):
             overrides.write_text("[extruder]\nmax_temp: 350\n")
             target = path / "native-screen.cfg"
             migration.migrate(
-                target, ROOT / "native-screen.cfg.example", legacy, "Detected model"
+                target, ROOT / "runtime/native-screen.cfg.example", legacy, "Detected model"
             )
             config = migration.configparser.ConfigParser()
             config.read(target)
@@ -39,7 +39,7 @@ class MigrationTest(unittest.TestCase):
                 "#d9434a",
             )
             target.write_text("[brand]\nmodel: Existing native settings\n")
-            migration.migrate(target, ROOT / "native-screen.cfg.example", legacy)
+            migration.migrate(target, ROOT / "runtime/native-screen.cfg.example", legacy)
             self.assertEqual(
                 target.read_text(), "[brand]\nmodel: Existing native settings\n"
             )

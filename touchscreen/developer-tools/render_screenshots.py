@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--binary", type=Path, default=ROOT / "build-host/openklipper-screen"
+        "--binary", type=Path, default=ROOT / "out/host/openklipper-screen"
     )
     parser.add_argument("--output", type=Path, default=ROOT / "screenshots")
     args = parser.parse_args()

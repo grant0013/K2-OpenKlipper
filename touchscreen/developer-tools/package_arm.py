@@ -7,15 +7,18 @@ import json
 import shutil
 import struct
 import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 REPO = ROOT.parent
+sys.path.insert(0, str(ROOT / "installation"))
+from validate_package import fingerprint, source_inputs, validate
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--build", type=Path, default=ROOT / "build-arm")
+    parser.add_argument("--build", type=Path, default=ROOT / "out/arm")
     args = parser.parse_args()
     binary = args.build / "openklipper-screen"
     header = binary.read_bytes()[:20]
@@ -27,9 +30,16 @@ def main():
     revision = subprocess.check_output(
         ["git", "-C", str(REPO), "rev-parse", "HEAD"], text=True
     ).strip()
-    if subprocess.run(["git", "-C", str(REPO), "diff", "--quiet", "HEAD"]).returncode:
-        raise SystemExit("Commit tracked source changes before packaging")
-    package = ROOT / "package-arm"
+    inputs = source_inputs(ROOT)
+    for name, digest in inputs.items():
+        recorded = subprocess.run(
+            ["git", "-C", str(REPO), "show", "HEAD:" + name], capture_output=True
+        )
+        if recorded.returncode or hashlib.sha256(recorded.stdout).hexdigest() != digest:
+            raise SystemExit(
+                "Commit build/runtime source inputs before packaging: " + name
+            )
+    package = ROOT / "precompiled/armv7"
     if package.exists():
         shutil.rmtree(package)
     (package / "assets").mkdir(parents=True)
@@ -49,9 +59,14 @@ def main():
         raise SystemExit(
             "Dependency licences missing; reconfigure CMake before packaging"
         )
-    (package / "VERSION").write_text(revision + "\n")
+    digest = fingerprint(inputs)
+    version = (REPO / "VERSION").read_text().strip() + "+native." + digest[:12]
+    (package / "VERSION").write_text(version + "\n")
     manifest = {
-        "source_commit": revision,
+        "format": 1,
+        "built_from_commit": revision,
+        "source_inputs": inputs,
+        "source_fingerprint": digest,
         "target": "armv7-linux-gnueabihf",
         "files": {},
     }
@@ -61,6 +76,7 @@ def main():
                 source.read_bytes()
             ).hexdigest()
     (package / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    validate(ROOT, package)
     print(package)
 
 

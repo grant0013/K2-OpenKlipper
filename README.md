@@ -19,10 +19,11 @@ Optionally, Klipper can run on a separate PC over one USB cable
 
 **Install: [step-by-step guide](docs/INSTALL.md)**.
 
-**Native touchscreen development branch.** Install the complete precompiled
-bundle using [these instructions](touchscreen/README.md#use-the-precompiled-bundle).
-No compilation is required on the printer. The bundle contains the complete
-OpenKlipper source and matching native touchscreen executable, assets and service.
+**Native touchscreen development branch.** The normal installer includes the
+ready-built touchscreen supplied with this version; there is no separate UI
+bundle or printer-side compilation. See [touchscreen features](touchscreen/README.md).
+When testing this fork, use its installer and select the matching repository/ref
+with `OKL_REPO` and `OKL_REF` instead of installing the upstream default version.
 The replacement UI remains under hardware validation.
 
 > **Status: alpha (v0.4.2-alpha.1).** It is in daily use on one K2 (F021,

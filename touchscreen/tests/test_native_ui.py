@@ -11,7 +11,7 @@ from unittest import mock
 from test_service import Service, status, settings
 
 ROOT=Path(__file__).resolve().parents[1]
-BINARY=Path(os.environ.get('SCREEN_BINARY',ROOT/'build-host/openklipper-screen'))
+BINARY=Path(os.environ.get('SCREEN_BINARY',ROOT/'out/host/openklipper-screen'))
 ASSETS=ROOT/'assets/generated'
 
 
