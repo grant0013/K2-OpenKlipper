@@ -37,6 +37,7 @@ typedef struct {
         *status_label, *status_dot, *time_label, *layer_label, *progress, *percent;
     char route[48], control_tab[24], settings_tab[24], history[80][48];
     int history_count;
+    bool select_feeding_cfs;
     char assets[1024], socket[108], selected_slot[16], cfs_unit[16], file[1024], mapping_file[1024];
     char timezone_draft[128];
     char filter[20], number_text[32], number_title[100], number_kind[24], number_key[64];

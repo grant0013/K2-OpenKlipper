@@ -632,6 +632,8 @@ void ui_route(const char *route, bool back) {
         ui_confirm("Discard unsaved filament changes?", "discard");
         return;
     }
+    if (!strcmp(route, "filament") && strcmp(app.route, "filament") && !editing)
+        app.select_feeding_cfs = true;
     close_modal();
     if (!back && strcmp(route, app.route) && app.history_count < 80)
         snprintf(app.history[app.history_count++], 48, "%s", app.route);

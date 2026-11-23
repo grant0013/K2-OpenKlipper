@@ -636,7 +636,20 @@ static void filament_view(void) {
         if (!seen && boxes < 16)
             snprintf(groups[boxes++], 16, "%s", group);
     }
-    int top = boxes > 1 ? 105 : 117;
+    const int top = 154;
+    if (app.select_feeding_cfs) {
+        cJSON_ArrayForEach(r, J("slots")) {
+            const char *slot = jstr(r, "slot", "");
+            if (strcmp(slot, "E") && feeding_slot(slot)) {
+                size_t n = strlen(slot);
+                snprintf(app.cfs_unit, sizeof(app.cfs_unit), "%.*s", n > 1 ? (int)n - 1 : 1,
+                         n > 1 ? slot : "1");
+                snprintf(app.selected_slot, sizeof(app.selected_slot), "%s", slot);
+                break;
+            }
+        }
+        app.select_feeding_cfs = false;
+    }
     bool selected_unit = false;
     for (int i = 0; i < boxes; i++)
         if (!strcmp(app.cfs_unit, groups[i]))
@@ -644,9 +657,38 @@ static void filament_view(void) {
     if (!selected_unit && boxes)
         snprintf(app.cfs_unit, sizeof(app.cfs_unit), "%s", groups[0]);
     if (boxes > 1) {
-        char label[50];
-        snprintf(label, sizeof(label), "CFS %s  ▾", app.cfs_unit);
-        button(app.content, label, 0, 316, 114, 56, "units", false);
+        /* Unit navigation belongs to the CFS group, never the spool holder. */
+        int tab_width = (524 - 8 * (boxes - 1)) / boxes;
+        for (int i = 0; i < boxes; i++) {
+            char label[32], action[32];
+            snprintf(label, sizeof(label), "CFS %s", groups[i]);
+            snprintf(action, sizeof(action), "unit:%s", groups[i]);
+            lv_obj_t *tab = button(app.content, "", i * (tab_width + 8), 88, tab_width, 56, action,
+                                   !strcmp(app.cfs_unit, groups[i]));
+            centered(text(tab, label, 2, 5, tab_width - 4, &font_ui_16, false));
+            int dot_index = 0;
+            cJSON *record;
+            cJSON_ArrayForEach(record, J("slots")) {
+                const char *slot = jstr(record, "slot", "");
+                size_t n = strlen(slot);
+                if (!n || !strcmp(slot, "E"))
+                    continue;
+                char group[16];
+                snprintf(group, sizeof(group), "%.*s", n > 1 ? (int)n - 1 : 1, n > 1 ? slot : "1");
+                if (strcmp(group, groups[i]) || dot_index >= 4)
+                    continue;
+                lv_obj_t *dot =
+                    box(tab, (tab_width - 66) / 2 + dot_index++ * 18, 33, 12, 12, false);
+                lv_obj_clear_flag(dot, LV_OBJ_FLAG_CLICKABLE);
+                lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
+                lv_obj_set_style_bg_color(dot,
+                                          colour(jbool(record, "loaded", false)
+                                                     ? jstr(record, "color", "828b98")
+                                                     : "343e4b"),
+                                          0);
+                lv_obj_set_style_border_width(dot, 0, 0);
+            }
+        }
     }
 
     cJSON *records[16];
@@ -666,26 +708,31 @@ static void filament_view(void) {
         }
     int cfs_count = count;
     records[count++] = slot_record("E");
-    int width = cfs_count ? (673 - 28 - 10 * (count - 1)) / count : 150;
+    int width = cfs_count ? (524 - 10 * (cfs_count - 1)) / cfs_count : 150;
     int start = cfs_count ? 0 : (674 - width) / 2;
     for (int i = 0; i < count; i++) {
         r = records[i];
         const char *slot = i == cfs_count ? "E" : jstr(r, "slot", "");
-        int x = start + i * (width + 10) + (i == cfs_count && cfs_count ? 28 : 0);
+        bool external = i == cfs_count;
+        int x = external ? 548 : start + i * (width + 10);
+        int tile_width = external ? 126 : width;
+        int tile_top = external ? 88 : top;
+        int tile_height = external ? 288 : 174;
         char action[50];
         snprintf(action, sizeof(action), "slot:%s", slot);
-        lv_obj_t *tile =
-            button(app.content, "", x, top, width, 202, action, !strcmp(slot, app.selected_slot));
+        lv_obj_t *tile = button(app.content, "", x, tile_top, tile_width, tile_height, action,
+                                !strcmp(slot, app.selected_slot));
+        int content_y = external ? 57 : 0;
         char display_slot[64];
         snprintf(display_slot, sizeof(display_slot), "%s",
                  !strcmp(slot, "E") ? "Spool holder" : slot_label(slot));
-        centered(text(tile, display_slot, 4, 15, width - 8, &font_ui_17, false));
+        centered(text(tile, display_slot, 4, content_y + 12, tile_width - 8, &font_ui_17, false));
         bool present = !strcmp(slot, "E") ? feeding_slot("E") : jbool(r, "loaded", false);
         const char *hex = present ? jstr(r, "color", "828b98") : "343e4b";
         lv_color_t ring = colour(hex);
         if (ring.ch.red < 25 && ring.ch.green < 25 && ring.ch.blue < 25)
             ring = colour("2d3238");
-        lv_obj_t *spool = box(tile, (width - 58) / 2, 53, 58, 58, false);
+        lv_obj_t *spool = box(tile, (tile_width - 58) / 2, content_y + 43, 58, 58, false);
         lv_obj_set_style_bg_opa(spool, 0, 0);
         lv_obj_clear_flag(spool, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_set_style_radius(spool, 29, 0);
@@ -703,15 +750,22 @@ static void filament_view(void) {
                       : !strcmp(slot, "E") ? "Spool"
                       : present            ? "Unknown"
                                            : "Empty",
-                      4, 126, width - 8, &font_ui_16, false));
+                      4, content_y + 113, tile_width - 8, &font_ui_16, false));
         if (feeding_slot(slot))
-            icon(tile, "nozzle", (width - 24) / 2, 165, 24, colour("f0f3f7"));
+            icon(tile, "nozzle", (tile_width - 24) / 2, content_y + 144, 24, colour("f0f3f7"));
     }
 
     if (fitted()) {
         char temp[40], humidity[40];
-        snprintf(temp, sizeof(temp), "%.0f°C", N("status.k2_cfs.temperature"));
-        snprintf(humidity, sizeof(humidity), "%.0f%% RH", N("status.k2_cfs.humidity"));
+        /* The legacy driver publishes one unit's readings only. */
+        bool environment_known = boxes == 1 || !strcmp(app.cfs_unit, "1");
+        if (environment_known) {
+            snprintf(temp, sizeof(temp), "%.0f°C", N("status.k2_cfs.temperature"));
+            snprintf(humidity, sizeof(humidity), "%.0f%% RH", N("status.k2_cfs.humidity"));
+        } else {
+            snprintf(temp, sizeof(temp), "—°C");
+            snprintf(humidity, sizeof(humidity), "—%% RH");
+        }
         lv_obj_t *environment = box(app.content, 0, 330, 1, 46, false);
         lv_obj_clear_flag(environment, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_set_style_bg_opa(environment, LV_OPA_50, 0);
@@ -731,7 +785,7 @@ static void filament_view(void) {
         lv_obj_t *relative_humidity = text(environment, humidity, 0, 0, 1, &font_ui_20, false);
         lv_obj_set_width(relative_humidity, LV_SIZE_CONTENT);
         lv_obj_update_layout(environment);
-        lv_obj_align(environment, LV_ALIGN_TOP_MID, 0, 330);
+        lv_obj_set_pos(environment, (524 - lv_obj_get_width(environment)) / 2, 334);
     }
     button_fixed(app.content, "Edit", 44, 398, 110, 68, "edit_slot", false);
     cJSON *selected = slot_record(app.selected_slot);
@@ -2393,38 +2447,21 @@ void views_action(const char *a) {
         ui_send(r);
     } else if (!strcmp(a, "usb_format"))
         confirmed("Erase every file on the connected USB drive?", request("usb_format"));
-    else if (!strcmp(a, "units")) {
-        modal_frame("Choose CFS", 120, 60, 560, 360, false);
-        cJSON *r;
-        char seen[16][16];
-        int n = 0;
-        cJSON_ArrayForEach(r, J("slots")) {
-            const char *slot = jstr(r, "slot", "");
-            size_t length = strlen(slot);
-            if (!length || !strcmp(slot, "E"))
-                continue;
-            char group[16];
-            if (length == 1)
-                snprintf(group, sizeof(group), "1");
-            else
-                snprintf(group, sizeof(group), "%.*s", (int)length - 1, slot);
-            bool duplicate = false;
-            for (int i = 0; i < n; i++)
-                if (!strcmp(group, seen[i]))
-                    duplicate = true;
-            if (duplicate || n >= 12)
-                continue;
-            snprintf(seen[n], 16, "%s", group);
-            char label[40], action[60];
-            snprintf(label, sizeof(label), "CFS %s", group);
-            snprintf(action, sizeof(action), "unit:%s", group);
-            button(app.body, label, 24 + (n % 3) * 174, 90 + (n / 3) * 64, 162, 56, action,
-                   !strcmp(group, app.cfs_unit));
-            n++;
-        }
-    } else if (!strncmp(a, "unit:", 5)) {
+    else if (!strncmp(a, "unit:", 5)) {
         snprintf(app.cfs_unit, sizeof(app.cfs_unit), "%s", a + 5);
-        close_modal();
+        cJSON *record;
+        cJSON_ArrayForEach(record, J("slots")) {
+            const char *slot = jstr(record, "slot", "");
+            size_t n = strlen(slot);
+            char group[16];
+            if (!n || !strcmp(slot, "E"))
+                continue;
+            snprintf(group, sizeof(group), "%.*s", n > 1 ? (int)n - 1 : 1, n > 1 ? slot : "1");
+            if (!strcmp(group, app.cfs_unit)) {
+                snprintf(app.selected_slot, sizeof(app.selected_slot), "%s", slot);
+                break;
+            }
+        }
         app.dirty = true;
     } else if (!strncmp(a, "zoom:", 5)) {
         if (!strcmp(a + 5, "fit")) {

@@ -80,8 +80,8 @@ class NativeUI(unittest.TestCase):
 
  def test_filament_slots_and_footer_use_current_native_geometry(self):
   items,_=self.render('filament')
-  expected={'slot:A':[103,117,121,202],'slot:D':[496,117,121,202],
-            'slot:E':[655,117,121,202],'edit_slot':[147,398,110,68],
+  expected={'slot:A':[103,154,123,174],'slot:D':[502,154,123,174],
+            'slot:E':[651,88,126,288],'edit_slot':[147,398,110,68],
             'load':[269,398,190,68],'unload':[471,398,190,68],
             'route:refill':[673,398,64,68]}
   for action,rect in expected.items():self.assert_rect(items,action,rect)
@@ -264,7 +264,17 @@ class NativeUI(unittest.TestCase):
    for letter in 'ABCD':data['slots'].append(dict(data['slots'][0],slot=str(unit)+letter))
   data['cfs_units']=3
   items,_=self.render('filament',data=data)
-  self.assert_rect(items,'units',[103,314.44,114.19,60])
+  self.assertFalse(any(item['action']=='units' for item in items))
+  self.assert_rect(items,'unit:1',[103,86,169,60])
+  self.assert_rect(items,'unit:3',[457,86,169,60])
+  items,commands=self.render('filament',['unit:2'],data)
+  self.assertTrue(any(item['action']=='slot:2A' for item in items))
+  self.assertFalse(any(item['action']=='slot:A' for item in items))
+  self.assert_rect(items,'slot:E',[651,88,126,288])
+  self.assertEqual(commands,[])
+  items,commands=self.render('filament',['unit:2','edit_slot'],data)
+  self.assertTrue(any(item.get('text')=='Slot CFS 2 · A' for item in items) or
+                  any(item['action']=='draft_temperature' for item in items))
 
  def test_sidebar_files_refreshes_printer_storage(self):
   data=copy.deepcopy(self.data);data['source']='usb';data['platform']['usb']={'mounted':True}
