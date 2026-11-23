@@ -1587,7 +1587,11 @@ class Service:
     def read_metadata(self, path):
         meta = self.mr.metadata(path)
         embedded = None
-        if not meta.get("filament_type") or not meta.get("thumbnails"):
+        if (
+            not meta.get("filament_type")
+            or not (meta.get("filament_colors") or meta.get("extruder_colors"))
+            or not meta.get("thumbnails")
+        ):
             try:
                 extra, embedded = gcode_metadata.read(self.mr.base, path)
                 for key, value in extra.items():
@@ -1606,9 +1610,14 @@ class Service:
             if self.file_signatures.get(path) == signature:
                 continue
             try:
-                meta = self.mr.metadata(path)
+                meta, embedded = self.read_metadata(path)
                 key = "file-list-" + hashlib.sha256(path.encode()).hexdigest()[:12]
-                ready = self.prepare_thumbnail(path, meta, key, (96, 60))
+                if embedded:
+                    ready = storage.prepare_image(
+                        io.BytesIO(embedded), self.cache_path, key, (96, 60), trim=True
+                    )
+                else:
+                    ready = self.prepare_thumbnail(path, meta, key, (96, 60))
                 self.platform.pop(key, None)
                 with self.lock:
                     if generation is not None and generation != self.file_generation:

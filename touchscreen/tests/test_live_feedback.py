@@ -20,6 +20,36 @@ from PIL import Image
 class BackendFeedback(unittest.TestCase):
     setUp = test_service.ServiceTests.setUp
 
+    def test_orca_colors_are_recovered_when_types_and_thumbnails_exist(self):
+        self.mr.metadata.return_value = {
+            "filament_type": "PETG-CF;PLA",
+            "thumbnails": [{"relative_path": "preview.png"}],
+        }
+        with mock.patch(
+            "gcode_metadata.read",
+            return_value=(
+                {
+                    "filament_colors": "#000000;#FF6A14",
+                },
+                None,
+            ),
+        ):
+            meta, _ = self.s.read_metadata("orca.gcode")
+        self.assertEqual(
+            [f["colour"] for f in platform_services.file_filaments(meta)],
+            ["000000", "FF6A14"],
+        )
+
+    def test_file_list_uses_embedded_preview_without_moonraker_thumbnail(self):
+        with (
+            mock.patch.object(self.s, "read_metadata", return_value=({}, b"png")),
+            mock.patch("service.storage.prepare_image", return_value="benchy.png"),
+        ):
+            self.s.file_thumbnails([{"path": "benchy.gcode", "size": 42}])
+        self.assertEqual(
+            self.s.platform["file_thumbnails"]["benchy.gcode"], "benchy.png"
+        )
+
     def test_slow_query_cannot_overwrite_newer_homing_subscription(self):
         self.s.merge_status({"toolhead": {"homed_axes": "xyz"}}, 20)
         stale = copy.deepcopy(self.state)
