@@ -215,20 +215,22 @@ void row(lv_obj_t *parent, int y, const char *label, const char *value, const ch
     }
     bool two = detail && *detail;
     int top = (h - (two ? 46 : 23)) / 2;
-    lv_obj_t *title = text(o, label, 2, top, 460, &font_ui_20, false);
+    lv_obj_t *title = text(o, label, 16, top, 430, &font_ui_20, false);
     lv_obj_set_height(title, 26);
     lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
     if (two)
-        text(o, detail, 2, top + 28, 600, &font_ui_14, true);
+        text(o, detail, 16, top + 28, 584, &font_ui_14, true);
     if (value && !strcmp(value, "›"))
         icon(o, "chevron-right", w - 34, (h - 28) / 2, 28, fg);
     else {
         lv_obj_t *v = text(o, value, 460, (h - 23) / 2, w - 466, &font_ui_18, true);
         lv_obj_set_style_text_align(v, LV_TEXT_ALIGN_RIGHT, 0);
     }
-    lv_obj_set_style_border_side(o, LV_BORDER_SIDE_BOTTOM, 0);
-    lv_obj_set_style_border_width(o, 1, 0);
-    lv_obj_set_style_border_color(o, edge, 0);
+    lv_obj_set_style_bg_color(o, panel, 0);
+    lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(o, 12, 0);
+    lv_obj_set_style_border_width(o, 0, 0);
+    lv_obj_set_style_bg_color(o, lv_color_mix(app.accent, panel, 55), LV_STATE_PRESSED);
 }
 
 bool ui_section_root(void) {

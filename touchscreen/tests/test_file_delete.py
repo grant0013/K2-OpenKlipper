@@ -223,10 +223,19 @@ class FileDeleteUITests(unittest.TestCase):
         _, commands = self.render("recordings", [{"tap": [650, 125]}], data=data)
         self.assertEqual(commands, [])
 
-    def test_timelapse_has_explicit_on_off_controls_in_preview(self):
+    def test_timelapse_switch_changes_preview_state(self):
         data = copy.deepcopy(self.data)
         data["platform"]["timelapse"] = {"enabled": True}
-        items, commands = self.render("timelapse", ["timelapse_off"], data=data)
-        self.assertTrue(any(i["action"] == "timelapse_on" for i in items))
-        self.assertTrue(any(i["action"] == "timelapse_off" for i in items))
+        items, commands = self.render("timelapse", ["toggle_timelapse"], data=data)
+        self.assertTrue(any(i["action"] == "toggle_timelapse" for i in items))
         self.assertEqual(commands, [{"action": "timelapse", "enabled": False}])
+        _, commands = self.render(
+            "timelapse", ["toggle_timelapse", "toggle_timelapse"], data=data
+        )
+        self.assertEqual(
+            commands,
+            [
+                {"action": "timelapse", "enabled": False},
+                {"action": "timelapse", "enabled": True},
+            ],
+        )

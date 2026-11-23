@@ -28,6 +28,7 @@ def snapshot(printing=False):
             "stepper_y": {"position_min": 0, "position_max": 300},
             "stepper_z": {"position_min": 0, "position_max": 300},
             "bed_mesh": {"mesh_min": [10, 10], "mesh_max": [290, 290]},
+            "gcode_macro START_PRINT": {"variable_screen_full_mesh": 0},
             "z_tilt": {},
             "resonance_tester": {},
             "k2_belt_tension": {},

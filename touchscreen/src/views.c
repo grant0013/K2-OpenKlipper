@@ -483,12 +483,16 @@ static void heat_view(void) {
         char action[100];
         snprintf(action, sizeof(action), "temperature:%s", key);
         lv_obj_t *tile = button(app.content, "", i * (width + 12), 100, width, 280, action, false);
-        centered(text(tile, jstr(heater, "label", ""), 8, 52, width - 16, &font_ui_20, false));
+        const char *title = jstr(heater, "label", "");
+        lv_point_t title_size;
+        lv_txt_get_size(&title_size, title, &font_ui_20, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+        int start = (width - 28 - 10 - title_size.x) / 2;
         icon(tile,
              !strcmp(key, "extruder")     ? "nozzle"
              : !strcmp(key, "heater_bed") ? "bed"
                                           : "chamber",
-             10, 126, 28, colour("a4aebb"));
+             start, 49, 28, colour("a4aebb"));
+        text(tile, title, start + 38, 52, title_size.x + 2, &font_ui_20, false);
         app.current[i] = text(tile, "", 0, 122, 100, &font_ui_30, false);
         app.target[i] = text(tile, "", 0, 122, 100, &font_ui_30, true);
         icon(tile, "arrow-right", 0, 132, 16, colour("a4aebb"));
@@ -535,7 +539,7 @@ static void fans_view(void) {
         cJSON *settings = J("settings");
         if (!cJSON_GetObjectItemCaseSensitive(settings, objects[i]))
             continue;
-        int y = 110 + rowno++ * 92;
+        int y = 116 + rowno++ * 124;
         text(app.content, labels[i], 0, y, 480, &font_ui_18, false);
         char path[150], value[30];
         snprintf(path, sizeof(path), "status.%s.speed", objects[i]);
@@ -896,10 +900,12 @@ static void files_view(void) {
         size_t n = strlen(payload) + 16;
         char *a = malloc(n);
         snprintf(a, n, "file_open:%s", payload);
+        lv_obj_t *card = box(list, 0, y, 673, 78, false);
+        lv_obj_clear_flag(card, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_border_width(card, 0, 0);
         lv_obj_t *b = button(list, "", 0, y, 586, 78, a, false);
         lv_obj_set_style_bg_opa(b, 0, 0);
-        lv_obj_set_style_border_side(b, LV_BORDER_SIDE_BOTTOM, 0);
-        lv_obj_set_style_radius(b, 0, 0);
+        lv_obj_set_style_border_width(b, 0, 0);
         cJSON *thumb = cJSON_GetObjectItemCaseSensitive(J("platform.file_thumbnails"), path);
         const char *thumbnail = cJSON_IsString(thumb) ? thumb->valuestring : "";
         if (*thumbnail)
@@ -918,13 +924,9 @@ static void files_view(void) {
         text(b, modified, 80, 44, 490, &font_ui_13, true);
         snprintf(a, n, "file_delete:%s", payload);
         list_action(list, "trash-2", 600, y + 7, a);
-        lv_obj_t *separator = box(list, 0, y + 77, 673, 1, false);
-        lv_obj_clear_flag(separator, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_set_style_border_width(separator, 0, 0);
-        lv_obj_set_style_bg_color(separator, colour("343e4b"), 0);
         free(a);
         free(payload);
-        y += 82;
+        y += 88;
     }
     if (!y) {
         const char *empty = *S("files_refresh.error") ? S("files_refresh.error")
@@ -942,32 +944,49 @@ static void file_view(void) {
         return;
     }
     snprintf(app.file, sizeof(app.file), "%s", path);
-    box(app.content, 0, 82, 210, 210, false);
-    image(app.content, S("platform.file_thumbnail"), 0, 82);
-    text(app.content, strrchr(path, '/') ? strrchr(path, '/') + 1 : path, 234, 90, 440, &font_ui_24,
-         false);
-    char value[80];
-    text(app.content, "Estimated time", 234, 169, 240, &font_ui_18, true);
-    snprintf(value, sizeof(value), "%.0f min", N("metadata.estimated_time") / 60);
-    right(text(app.content, value, 490, 169, 184, &font_ui_18, false));
-    text(app.content, "Filament", 234, 212, 240, &font_ui_18, true);
-    snprintf(value, sizeof(value), "%.1f g", N("metadata.filament_weight_total"));
-    right(text(app.content, value, 490, 212, 184, &font_ui_18, false));
-    text(app.content, "Layers", 234, 255, 240, &font_ui_18, true);
-    snprintf(value, sizeof(value), "%.0f", N("metadata.layer_count"));
-    right(text(app.content, value, 490, 255, 184, &font_ui_18, false));
+    box(app.content, 0, 19, 320, 361, false);
+    const char *thumbnail = S("platform.file_thumbnail");
+    char source[1400];
+    snprintf(source, sizeof(source), "A:%s", thumbnail);
+    lv_img_header_t info;
+    if (*thumbnail && lv_img_decoder_get_info(source, &info) == LV_RES_OK && info.w && info.h) {
+        int zoom = 312 * 256 / info.w;
+        if (zoom > 353 * 256 / info.h)
+            zoom = 353 * 256 / info.h;
+        lv_obj_t *preview = lv_img_create(app.content);
+        lv_img_set_src(preview, source);
+        lv_img_set_pivot(preview, 0, 0);
+        lv_img_set_zoom(preview, zoom);
+        lv_obj_set_pos(preview, (320 - info.w * zoom / 256) / 2,
+                       19 + (361 - info.h * zoom / 256) / 2);
+    }
+    lv_obj_t *name = text(app.content, strrchr(path, '/') ? strrchr(path, '/') + 1 : path, 344, 94,
+                          330, &font_ui_24, false);
+    lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
+    lv_obj_set_height(name, 32);
+    const char *labels[] = {"Estimated time", "Filament", "Layers"};
+    char values[3][80];
+    snprintf(values[0], sizeof(values[0]), "%.0f min", N("metadata.estimated_time") / 60);
+    snprintf(values[1], sizeof(values[1]), "%.1f g", N("metadata.filament_weight_total"));
+    snprintf(values[2], sizeof(values[2]), "%.0f", N("metadata.layer_count"));
+    for (int i = 0; i < 3; i++) {
+        text(app.content, labels[i], 344, 154 + i * 42, 210, &font_ui_18, true);
+        right(text(app.content, values[i], 556, 154 + i * 42, 118, &font_ui_18, false));
+    }
     if (has("settings.gcode_macro START_PRINT.variable_screen_full_mesh")) {
-        lv_obj_t *toggle = button(app.content, "", 234, 299, 439, 56, "calibrate_before", false);
+        lv_obj_t *toggle =
+            button_fixed(app.content, "", 340, 300, 334, 64, "calibrate_before", false);
         lv_obj_set_style_bg_opa(toggle, 0, 0);
         lv_obj_set_style_border_width(toggle, 0, 0);
-        lv_obj_t *check = box(toggle, 8, 12, 32, 32, calibrate_before);
+        lv_obj_t *check = box(toggle, 8, 16, 32, 32, calibrate_before);
         lv_obj_clear_flag(check, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_set_style_radius(check, 6, 0);
         if (calibrate_before)
             centered(text(check, "✓", 0, 5, 30, &font_ui_18, false));
-        text(toggle, "Calibrate before printing", 52, 17, 375, &font_ui_18, false);
+        text(toggle, "Calibrate before printing", 52, 20, 278, &font_ui_18, false);
     }
-    footer("Back", "back", "Start printing", "review_mapping");
+    button_fixed(app.content, "Back", 0, 402, 296, 64, "back", false);
+    button_fixed(app.content, "Start printing", 378, 402, 296, 64, "review_mapping", true);
 }
 static void colour_swatch(lv_obj_t *parent, int x, int y, const char *hex, int size) {
     lv_obj_t *swatch = box(parent, x, y, size, size, false);
@@ -1279,10 +1298,21 @@ static void timelapse_view(void) {
                        "The Moonraker time-lapse component is not installed.", NULL, NULL);
         return;
     }
-    text(app.content, "Time-lapse", 0, 130, 330, &font_ui_20, false);
     bool enabled = B("platform.timelapse.enabled");
-    button_fixed(app.content, "On", 420, 110, 114, 64, "timelapse_on", enabled);
-    button_fixed(app.content, "Off", 546, 110, 114, 64, "timelapse_off", !enabled);
+    lv_obj_t *setting = button_fixed(app.content, "", 0, 100, 674, 96, "toggle_timelapse", false);
+    lv_obj_set_style_border_width(setting, 0, 0);
+    text(setting, "Time-lapse", 18, 23, 430, &font_ui_20, false);
+    text(setting, enabled ? "On" : "Off", 18, 55, 430, &font_ui_14, true);
+    lv_obj_t *track = box(setting, 576, 28, 76, 40, false);
+    lv_obj_clear_flag(track, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_radius(track, 20, 0);
+    lv_obj_set_style_border_width(track, 0, 0);
+    lv_obj_set_style_bg_color(track, enabled ? app.accent : colour("596371"), 0);
+    lv_obj_t *thumb = box(track, enabled ? 39 : 5, 5, 30, 30, false);
+    lv_obj_clear_flag(thumb, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_radius(thumb, 15, 0);
+    lv_obj_set_style_border_width(thumb, 0, 0);
+    lv_obj_set_style_bg_color(thumb, colour("f0f3f7"), 0);
     row(app.content, 212, "Recordings", "›", "Saved time-lapse videos", "recordings");
 }
 static void recordings_view(void) {
@@ -1296,9 +1326,7 @@ static void recordings_view(void) {
         char *a = encode(r);
         lv_obj_t *item = box(list, 0, y, 673, 78, false);
         lv_obj_clear_flag(item, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_set_style_bg_opa(item, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_border_side(item, LV_BORDER_SIDE_BOTTOM, 0);
-        lv_obj_set_style_radius(item, 0, 0);
+        lv_obj_set_style_border_width(item, 0, 0);
         lv_obj_t *name = text(item, path, 16, 26, 482, &font_ui_18, false);
         lv_obj_set_height(name, 26);
         lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
@@ -1313,7 +1341,7 @@ static void recordings_view(void) {
         list_action(list, "trash-2", 600, y + 7, a);
         free(a);
         free(payload);
-        y += 82;
+        y += 88;
     }
     if (!y)
         text(list, "No recordings available", 20, 60, 620, &font_ui_20, true);
@@ -1672,7 +1700,7 @@ void views_render(void) {
         snprintf(edit_title, sizeof(edit_title), "Slot %s", slot_label(app.selected_slot));
         title = edit_title;
     }
-    if (strcmp(p, "objects"))
+    if (strcmp(p, "objects") && strcmp(p, "file"))
         ui_header(title);
     if (!strcmp(p, "move"))
         move_view();

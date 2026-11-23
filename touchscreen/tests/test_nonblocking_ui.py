@@ -63,7 +63,7 @@ class FlowTests(unittest.TestCase):
         self.assertTrue(by_action["temperature:heater_bed"]["enabled"])
         _, commands = self.render("fans", [{"tap": [500, 150]}], data=data)
         self.assertEqual(commands, [])
-        _, commands = self.render("fans", [{"tap": [500, 242]}], data=data)
+        _, commands = self.render("fans", [{"tap": [500, 276]}], data=data)
         self.assertEqual(len(commands), 1)
         self.assertEqual(commands[0]["fan"], "side")
 
