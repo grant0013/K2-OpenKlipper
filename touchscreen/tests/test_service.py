@@ -400,6 +400,22 @@ class ServiceTests(unittest.TestCase):
                 record={"name": "PLA", "color": "ABCDEF", "nozzle_temp": 351},
             )
 
+    def test_starting_survives_previous_terminal_job_telemetry(self):
+        for previous in ("cancelled", "error"):
+            with self.subTest(previous=previous):
+                self.s.status["print_stats"] = {
+                    "state": previous,
+                    "filename": "old.gcode",
+                }
+                self.s.platform["starting_file"] = "next.gcode"
+                self.s.merge_status({"extruder": {"temperature": 25}})
+                self.s.merge_status({"print_stats": {"state": previous}}, full=True)
+                self.assertEqual(self.s.platform["starting_file"], "next.gcode")
+                self.s.merge_status(
+                    {"print_stats": {"state": "printing", "filename": "next.gcode"}}
+                )
+                self.assertNotIn("starting_file", self.s.platform)
+
     def test_start_reuses_selected_preview_until_klipper_reports_printing(self):
         self.s.metadata["part.gcode"] = {
             "filaments": [{"tool": 0}],

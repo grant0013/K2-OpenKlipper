@@ -213,6 +213,39 @@ class BackendFeedback(unittest.TestCase):
                     {"action": "slot_clear", "slot": slot, "confirm": confirmed}
                 )
 
+    def test_embedded_preview_fetch_failure_remains_retryable(self):
+        self.s.status["print_stats"] = {"state": "printing", "filename": "benchy.gcode"}
+        self.mr.metadata.return_value = {}
+        with mock.patch("gcode_metadata.read", side_effect=OSError("temporary")):
+            self.assertFalse(self.s.refresh_print_preview("benchy.gcode"))
+        with mock.patch("gcode_metadata.read", return_value=({}, None)):
+            self.assertTrue(self.s.refresh_print_preview("benchy.gcode"))
+
+    def test_transient_print_preview_failure_is_retryable_and_keeps_seeded_image(self):
+        self.s.status["print_stats"] = {"state": "printing", "filename": "part.gcode"}
+        self.s.platform.update(thumbnail="selected.png", estimated_time=1200)
+        with mock.patch.object(
+            self.s, "read_metadata", side_effect=OSError("temporary")
+        ):
+            self.assertFalse(self.s.refresh_print_preview("part.gcode"))
+        self.assertEqual(self.s.platform["thumbnail"], "selected.png")
+        self.assertEqual(self.s.platform["estimated_time"], 1200)
+        with mock.patch.object(
+            self.s, "read_metadata", return_value=({"estimated_time": 1300}, None)
+        ):
+            self.assertTrue(self.s.refresh_print_preview("part.gcode"))
+        self.assertEqual(self.s.platform["estimated_time"], 1300)
+
+    def test_same_filename_new_print_refreshes_but_resume_does_not(self):
+        self.s.status["print_stats"] = {"state": "complete", "filename": "part.gcode"}
+        self.s.print_file = "part.gcode"
+        self.s.merge_status({"print_stats": {"state": "printing"}})
+        self.assertEqual(self.s.print_file, "")
+        self.s.print_file = "part.gcode"
+        self.s.merge_status({"print_stats": {"state": "paused"}})
+        self.s.merge_status({"print_stats": {"state": "printing"}})
+        self.assertEqual(self.s.print_file, "part.gcode")
+
     def test_print_file_change_clears_old_preview_and_handles_missing_image(self):
         self.s.platform["thumbnail"] = "old.png"
         self.s.merge_status({"print_stats": {"filename": "new.gcode"}})

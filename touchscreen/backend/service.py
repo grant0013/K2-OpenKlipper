@@ -1350,6 +1350,7 @@ class Service:
         with self.lock:
             initialized = bool(self.status)
             previous_file = self.status.get("print_stats", {}).get("filename", "")
+            previous_state = self.status.get("print_stats", {}).get("state", "")
             for name, values in delta.items():
                 if eventtime is not None:
                     if eventtime < self.status_times.get(name, float("-inf")):
@@ -1377,11 +1378,14 @@ class Service:
                 self.platform["print_preview_busy"] = bool(filename)
             state = self.status.get("print_stats", {}).get("state", "")
             if (
-                state in ("printing", "paused", "error", "cancelled")
+                state in ("printing", "paused")
+                or (state in ("error", "cancelled") and state != previous_state)
                 or self.status.get("webhooks", {}).get("state") != "ready"
             ):
                 self.platform.pop("starting_file", None)
             stage = self.status.get("gcode_macro _STAGE", {}).get("text", "")
+            if state == "printing" and previous_state not in ("printing", "paused"):
+                self.print_file = ""
             if state != self.last_state:
                 self.print_stage = ""
                 self.last_state = state
@@ -1580,7 +1584,7 @@ class Service:
         preview = None
         meta = {}
         try:
-            meta, embedded = self.read_metadata(filename)
+            meta, embedded = self.read_metadata(filename, retry_errors=True)
             if embedded:
                 preview = storage.prepare_image(
                     io.BytesIO(embedded),
@@ -1594,10 +1598,14 @@ class Service:
                     filename, meta, "print-preview", (446, 236), publish=False
                 )
         except (OSError, ValueError, RuntimeError):
-            pass
+            with self.lock:
+                if self.status.get("print_stats", {}).get("filename") == filename:
+                    self.platform["print_preview_busy"] = False
+                    self.sequence += 1
+            return False
         with self.lock:
             if self.status.get("print_stats", {}).get("filename") != filename:
-                return
+                return False
             self.platform["preview_file"] = filename
             self.platform["layer_count"] = meta.get("layer_count", 0)
             self.platform.pop("thumbnail", None)
@@ -1606,8 +1614,9 @@ class Service:
             self.platform["estimated_time"] = meta.get("estimated_time", 0)
             self.platform["print_preview_busy"] = False
             self.sequence += 1
+        return True
 
-    def read_metadata(self, path):
+    def read_metadata(self, path, retry_errors=False):
         meta = self.mr.metadata(path)
         embedded = None
         if (
@@ -1621,7 +1630,8 @@ class Service:
                     if not meta.get(key):
                         meta[key] = value
             except (OSError, ValueError, TypeError):
-                pass
+                if retry_errors and not meta.get("thumbnails"):
+                    raise
         return meta, embedded
 
     def file_thumbnails(self, files, generation=None):
@@ -1802,8 +1812,8 @@ class Service:
                 self.ready = ready
                 filename = self.status.get("print_stats", {}).get("filename", "")
                 if filename and filename != self.print_file:
-                    self.print_file = filename
-                    self.refresh_print_preview(filename)
+                    if self.refresh_print_preview(filename):
+                        self.print_file = filename
                 if now - platform_at > 5:
                     self.refresh_platform()
                     platform_at = now
