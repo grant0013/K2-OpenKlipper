@@ -597,25 +597,6 @@ static void filament_view(void) {
                        "route:home");
         return;
     }
-    if (!fitted()) {
-        cJSON *record = slot_record("E");
-        lv_obj_t *tile = button(app.content, "", 0, 110, 673, 247, "slot:E", false);
-        const char *name = jstr(record, "name", "Spool holder");
-        lv_point_t metrics;
-        lv_txt_get_size(&metrics, name, &font_ui_24, 0, 0, 250, LV_TEXT_FLAG_NONE);
-        int group_width = 62 + 28 + metrics.x + 28 + 16;
-        int start = (lv_obj_get_width(tile) - group_width) / 2;
-        spool_widget(tile, start, 92, 62, jstr(record, "color", "828b98"));
-        text(tile, name, start + 90, 93, metrics.x + 2, &font_ui_24, false);
-        centered(text(tile, "Spool holder", start + 90, 135, metrics.x + 2, &font_ui_14, true));
-        icon(tile, "chevron-right", start + group_width - 16, 115, 16, colour("a4aebb"));
-        if (feeding_slot("E"))
-            icon(tile, "nozzle", (673 - 24) / 2, 200, 24, colour("f0f3f7"));
-        button_fixed(app.content, "Edit", 82, 398, 110, 68, "edit_slot", false);
-        button_fixed(app.content, "Load", 204, 398, 190, 68, "load", false);
-        button_fixed(app.content, "Unload", 406, 398, 190, 68, "unload", false);
-        return;
-    }
     int boxes = 0;
     char groups[16][16] = {{0}};
     cJSON *r;
@@ -714,15 +695,15 @@ static void filament_view(void) {
         r = records[i];
         const char *slot = i == cfs_count ? "E" : jstr(r, "slot", "");
         bool external = i == cfs_count;
-        int x = external ? 548 : start + i * (width + 10);
+        int x = external ? (fitted() ? 548 : (674 - 126) / 2) : start + i * (width + 10);
         int tile_width = external ? 126 : width;
-        int tile_top = external ? 88 : top;
-        int tile_height = external ? 288 : 328 - top;
+        int tile_top = top;
+        int tile_height = 328 - top;
         char action[50];
         snprintf(action, sizeof(action), "slot:%s", slot);
         lv_obj_t *tile = button(app.content, "", x, tile_top, tile_width, tile_height, action,
                                 !strcmp(slot, app.selected_slot));
-        int content_y = external ? 57 : (tile_height - 166) / 2;
+        int content_y = (tile_height - 166) / 2;
         char display_slot[64];
         snprintf(display_slot, sizeof(display_slot), "%s",
                  !strcmp(slot, "E") ? "Spool holder" : slot_label(slot));

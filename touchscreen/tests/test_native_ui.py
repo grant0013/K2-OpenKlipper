@@ -81,7 +81,7 @@ class NativeUI(unittest.TestCase):
  def test_filament_slots_and_footer_use_current_native_geometry(self):
   items,_=self.render('filament')
   expected={'slot:A':[103,88,123,240],'slot:D':[502,88,123,240],
-            'slot:E':[651,88,126,288],'edit_slot':[147,398,110,68],
+            'slot:E':[651,88,126,240],'edit_slot':[147,398,110,68],
             'load':[269,398,190,68],'unload':[471,398,190,68],
             'route:refill':[673,398,64,68]}
   for action,rect in expected.items():self.assert_rect(items,action,rect)
@@ -256,6 +256,7 @@ class NativeUI(unittest.TestCase):
   data=copy.deepcopy(self.data);data['status']['k2_cfs'].update(fitted=False,active_slot=None)
   data['cfs_units']=0
   items,_=self.render('filament',data=data)
+  self.assert_rect(items,'slot:E',[377,88,126,240])
   self.assertFalse(any(item['action']=='units' for item in items))
   self.assertFalse(any(item['action']=='route:refill' for item in items))
   self.assertTrue(any(item['action']=='slot:E' for item in items))
@@ -270,7 +271,7 @@ class NativeUI(unittest.TestCase):
   items,commands=self.render('filament',['unit:2'],data)
   self.assertTrue(any(item['action']=='slot:2A' for item in items))
   self.assertFalse(any(item['action']=='slot:A' for item in items))
-  self.assert_rect(items,'slot:E',[651,88,126,288])
+  self.assert_rect(items,'slot:E',[651,162,126,166])
   self.assertEqual(commands,[])
   items,commands=self.render('filament',['unit:2','edit_slot'],data)
   self.assertTrue(any(item.get('text')=='Slot CFS 2 · A' for item in items) or
