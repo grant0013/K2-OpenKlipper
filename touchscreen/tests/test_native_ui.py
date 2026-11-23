@@ -81,7 +81,7 @@ class NativeUI(unittest.TestCase):
  def test_filament_slots_and_footer_use_current_native_geometry(self):
   items,_=self.render('filament')
   expected={'slot:A':[103,88,123,240],'slot:D':[502,88,123,240],
-            'slot:E':[651,88,126,292],'edit_slot':[147,398,110,68],
+            'slot:E':[651,88,126,240],'edit_slot':[147,398,110,68],
             'load':[269,398,190,68],'unload':[471,398,190,68],
             'route:refill':[673,398,64,68]}
   for action,rect in expected.items():self.assert_rect(items,action,rect)

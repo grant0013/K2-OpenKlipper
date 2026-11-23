@@ -743,16 +743,12 @@ static void filament_view(void) {
         int x = external ? (fitted() ? 548 : (674 - 126) / 2) : start + i * (width + 10);
         int tile_width = external ? 126 : width;
         int tile_top = external ? 88 : top;
-        int tile_height = external ? 292 : 328 - top;
+        int tile_height = external && boxes != 1 ? 292 : 328 - top;
         char action[50];
         snprintf(action, sizeof(action), "slot:%s", slot);
         lv_obj_t *tile = button(app.content, "", x, tile_top, tile_width, tile_height, action,
                                 !strcmp(slot, app.selected_slot));
         int content_y = (tile_height - 166) / 2;
-        /* With one CFS, all five spool contents share the same baselines.
-         * Keep the holder frame and the multi-unit layout unchanged. */
-        if (external && boxes == 1)
-            content_y = (328 - top - 166) / 2;
         char display_slot[64];
         snprintf(display_slot, sizeof(display_slot), "%s",
                  !strcmp(slot, "E") ? "Spool holder" : slot_label(slot));
@@ -815,7 +811,8 @@ static void filament_view(void) {
         lv_obj_t *relative_humidity = text(environment, humidity, 0, 0, 1, &font_ui_20, false);
         lv_obj_set_width(relative_humidity, LV_SIZE_CONTENT);
         lv_obj_update_layout(environment);
-        lv_obj_set_pos(environment, (524 - lv_obj_get_width(environment)) / 2, 334);
+        int environment_width = boxes == 1 ? 674 : 524;
+        lv_obj_set_pos(environment, (environment_width - lv_obj_get_width(environment)) / 2, 334);
     }
     button_fixed(app.content, "Edit", 44, 398, 110, 68, "edit_slot", false);
     cJSON *selected = slot_record(app.selected_slot);
