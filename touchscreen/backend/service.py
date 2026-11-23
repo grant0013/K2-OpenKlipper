@@ -1335,12 +1335,12 @@ class Service:
             "nozzle": (24, 24),
             "bed": (24, 24),
             "chamber": (24, 24),
-            "light_on": (34, 40),
-            "light_off": (34, 40),
+            "lightbulb": (28, 28),
+            "lightbulb-off": (28, 28),
             "home_fan": (30, 30),
             "pause": (24, 24),
             "play": (24, 24),
-            "skip-forward": (24, 24),
+            "skip-object": (28, 28),
         }
         icons = {}
         for key, bounds in sizes.items():

@@ -1,82 +1,93 @@
 # Native touchscreen
 
-A fast, responsive native LVGL interface for **K2 OpenKlipper**, with touch
-controls for printing, filament and everyday printer settings. It installs and
-updates as part of K2 OpenKlipper—no separate touchscreen installation is needed.
-Printer identity, temperature limits, travel limits and available controls follow
-the printer configuration.
+A fast, responsive native LVGL interface for **K2 OpenKlipper**. It installs and
+updates with K2 OpenKlipper using the included precompiled package; no separate
+installation or compilation on the printer is needed.
 
-## Interface examples
+Printer identity, heater and travel limits, homing state and available features
+come from the printer configuration. The interface is currently in English.
+The screenshots below are rendered by the native application with example data.
 
-These screenshots come from the native application using example data. The
-interface is currently in English. Available features depend on the printer and
-its installed firmware components.
+## Home
 
-### Home: ready to print
+- Idle Home shows the printer illustration, automatically with or without CFS.
+- Tap temperature tiles to change targets; open files, filament controls or fans,
+  and switch the light.
 
-- See the original printer illustration when idle, with or without CFS automatically.
-- Tap a temperature tile to set its target.
-- Open files, filament controls or fans, and switch the light.
+| Idle with CFS | Idle without CFS |
+| --- | --- |
+| ![Idle with CFS](screenshots/idle.png) | ![Idle without CFS](screenshots/idle-no-cfs.png) |
 
-![Idle Home screen](screenshots/idle.png)
+### During a print
 
-### Home: printing
+- See the model preview, progress, remaining hours/minutes and `Layer current / total`.
+- Pause, stop or open the plate view to skip failed objects.
+- Tap the status text or history icon to open **Status history**. One or two lines
+  are centered beside CFS; longer messages end with an ellipsis.
+- CFS colors and the nozzle marker show available and feeding filament.
+- Light and fan shortcuts remain available; filament colors do not follow the UI accent.
 
-- See the model preview, remaining hours/minutes, layer count and progress.
-- Pause or stop the print, or select failed objects to skip.
-- Tap the print status area or its history icon to review printer messages.
-- Print status is centered beside CFS and supports two lines, with an ellipsis for longer messages.
-- Check spool colors and the feeding-filament marker in the CFS shortcut.
+| Printing | Heating toward targets |
+| --- | --- |
+| ![Printing](screenshots/home.png) | ![Heating toward targets](screenshots/heating.png) |
 
-![Home during a print](screenshots/home.png)
+| Long status message | Long time and layer counts |
+| --- | --- |
+| ![Long status message](screenshots/printing-status.png) | ![Long time and layer counts](screenshots/printing-extreme.png) |
 
-### Set temperatures and watch heating
+| Hours and minutes remaining | Dark model preview |
+| --- | --- |
+| ![Hours and minutes remaining](screenshots/printing-long.png) | ![Dark model preview](screenshots/dark-preview.png) |
 
-- Tap the nozzle, bed or chamber tile to change its target.
-- Choose a preset or tap the target value for numeric entry.
-- Temperature limits follow the printer configuration.
-- Change a target again while heating; calibration and filament safety locks still apply.
+### Temperatures
 
-![Nozzle temperature control](screenshots/temperature.png)
+- Choose a preset or tap the target for numeric entry. Limits follow configuration.
+- While approaching a target, tiles show current → target; near the target they
+  show the current value alone. Display rounding is stabilized to reduce flicker.
+- Targets stay editable while heating. Calibration and filament safety locks still apply.
 
-While heating or cooling toward a target, the tile shows the current temperature
-and an arrow to the target. Once the temperature is within range, it shows a
-single current value.
+| Nozzle target | Numeric entry |
+| --- | --- |
+| ![Nozzle target](screenshots/temperature.png) | ![Numeric entry](screenshots/numeric.png) |
 
-![Home while heating](screenshots/heating.png)
+| Bed target | Chamber target |
+| --- | --- |
+| ![Bed target](screenshots/bed-temperature.png) | ![Chamber target](screenshots/chamber-temperature.png) |
 
-### See what the printer is doing
+### Activity, messages and recovery
 
-Routine operations show a compact activity indicator with the operation name in
-the sidebar. You can continue navigating; controls that conflict with the
-operation become unavailable.
+- Routine work uses a small sidebar spinner with a short caption, such as
+  **Homing**, **Loading filament** or **Refreshing files**. Navigation stays available.
+- The badge disappears on completion and is hidden when idle. Progress already
+  shown on the current page is not duplicated; printing alone creates no badge.
+- Tap an active badge for history. When idle, use **System → Help & logs**.
+- Errors appear as dialogs even during an operation. Calibration blocks choosing
+  another print; homing alone still allows browsing files.
 
-![Operation in progress](screenshots/executing.png)
+| Homing | Reading a file |
+| --- | --- |
+| ![Homing](screenshots/executing.png) | ![Reading a file](screenshots/loading.png) |
 
-The indicator disappears when the operation finishes. Idle screens have no
-activity badge, and printing is represented in the Home status area. Calibration failures
-appear immediately as error dialogs. During calibration, the Home file button
-shows **Calibration in progress** instead of offering another print. Homing alone
-does not block file browsing.
+| Calibration in progress | Printer error |
+| --- | --- |
+| ![Calibration in progress](screenshots/calibrating.png) | ![Printer error](screenshots/error.png) |
 
-![Calibration in progress](screenshots/calibrating.png)
+| Notice | Status history |
+| --- | --- |
+| ![Notice](screenshots/notice.png) | ![Status history](screenshots/history.png) |
 
-### Startup and connection recovery
+| Recent errors | Printer startup |
+| --- | --- |
+| ![Recent errors](screenshots/errors.png) | ![Printer startup](screenshots/startup.png) |
 
-- During startup, a full-screen indicator stays visible until printer control,
-  configuration and the initial motor handshake are ready.
-- If Klipper or an MCU stops responding after connection, a blocking recovery
-  screen replaces all printer controls. Restart Klipper or controller firmware
-  using the two actions, each with confirmation.
-- When a healthy connection returns, the previous page comes back automatically.
-- If the local touchscreen service is unavailable, a separate reconnecting screen
-  appears without Klipper restart controls.
+Startup stays on a loading screen until printer control and initial state are
+ready. Losing Klipper or an MCU replaces controls with recovery actions; losing
+the local touchscreen service shows a separate reconnecting screen. Recovery
+returns to the previous page automatically.
 
-![Printer startup](screenshots/startup.png)
-
-![Connection lost after startup](screenshots/connection-lost.png)
-
-![MCU or Klipper shutdown](screenshots/shutdown.png)
+| Printer connection lost | MCU or Klipper shutdown |
+| --- | --- |
+| ![Printer connection lost](screenshots/connection-lost.png) | ![MCU or Klipper shutdown](screenshots/shutdown.png) |
 
 ![Touchscreen service unavailable](screenshots/service-lost.png)
 
@@ -84,274 +95,200 @@ does not block file browsing.
 
 ### Move
 
-- Home the printer, jog X/Y and Z, or enter a destination.
-- Movement becomes available after the relevant axes are homed.
-- Unlock motors for manual movement.
-- Extrude or retract when the nozzle is hot enough and the printer state allows it.
+- Home, jog X/Y and Z, or tap a coordinate to enter a destination within travel limits.
+- Motion and movement-step selection follow homing and operation availability.
+- Extrude/retract only when the nozzle is hot enough and the printer state allows it.
+- Unlock motors for manual movement; confirmation warns that the bed may drop.
 
-![Movement controls](screenshots/move.png)
+| Movement | Unlock motors |
+| --- | --- |
+| ![Movement](screenshots/move.png) | ![Unlock motors](screenshots/unlock-motors.png) |
 
-### Thermals
+### Thermals and fans
 
-- View nozzle, bed and chamber temperatures together.
-- Tap a tile to set its target.
-- When idle, use **Turn heaters off** to switch off all heaters.
+- Thermals groups nozzle, bed and chamber targets in three columns.
+- **Turn heaters off** is available when idle.
+- Touch sliders control part cooling, side cooling and chamber exhaust where supported.
+  Hotend cooling stays under firmware control.
 
-![Thermal controls](screenshots/thermals.png)
+| Thermals | Fans |
+| --- | --- |
+| ![Thermals](screenshots/thermals.png) | ![Fans](screenshots/fans.png) |
 
-### Fans
+### Filament and CFS
 
-- Adjust part cooling, side cooling and chamber exhaust with touch sliders.
-- Hotend cooling remains under firmware control.
+- Select a spool to edit its material, color and nozzle temperature, or Load/Unload.
+- The accent border marks selection; the nozzle marker identifies feeding filament.
+- Material filters shorten the list. CFS temperature and humidity appear below the spools.
+- With one CFS, no unit selector is shown. With multiple reported units, two to four
+  selectors share the available width; the spool holder remains separate.
+- Without CFS, edit the spool-holder card and feed filament manually. Load/Unload
+  buttons are hidden.
 
-![Fan controls](screenshots/fans.png)
+| One CFS | No CFS |
+| --- | --- |
+| ![One CFS](screenshots/filament.png) | ![No CFS](screenshots/no-cfs.png) |
 
-### Filament: one CFS
+| Two CFS units | Three CFS units |
+| --- | --- |
+| ![Two CFS units](screenshots/two-cfs.png) | ![Three CFS units](screenshots/three-cfs.png) |
 
-- Select a spool, then edit its material, color and nozzle temperature, or Load/Unload.
-- Use material filters to shorten the material list.
-- The nozzle marker identifies feeding filament; the accent border identifies selection.
-- Read CFS temperature and relative humidity below the spools.
+| Four CFS units | Filament editor |
+| --- | --- |
+| ![Four CFS units](screenshots/multi-cfs.png) | ![Filament editor](screenshots/edit.png) |
 
-![Single-CFS filament screen](screenshots/filament.png)
+| Material filters | Color picker |
+| --- | --- |
+| ![Material filters](screenshots/materials.png) | ![Color picker](screenshots/colors.png) |
 
-### Filament: multiple CFS units
+| Loading filament | Unloading filament |
+| --- | --- |
+| ![Loading filament](screenshots/load.png) | ![Unloading filament](screenshots/unload.png) |
 
-- Switch units using the color-dot selectors above the four spools.
-- Two, three or four selectors share the available width; the spool holder stays separate.
-- With one CFS, the selector is hidden and the spool tiles use the extra height.
+| CFS preferences | Automatic refill sequence |
+| --- | --- |
+| ![CFS preferences](screenshots/refill.png) | ![Automatic refill sequence](screenshots/refill-sequence.png) |
 
-![Four-unit CFS layout](screenshots/multi-cfs.png)
+Automatic refill uses loaded slots with matching material and color; the sequence
+page shows matching sources. Startup/insertion reading options follow backend support.
 
-This example demonstrates the multi-unit interface. The current OpenKlipper CFS
-driver operates one configured unit; additional-unit hardware support requires
-backend work. Environmental readings are not duplicated across units when only
-one unit's readings are available.
+**Multi-unit limitation:** the current OpenKlipper CFS driver operates one configured
+unit. Multi-unit screenshots demonstrate the UI; additional hardware support needs
+backend work. A single unit's environmental readings are not copied to other units.
 
-### Filament: no CFS
+### Tune and calibrate
 
-- Tap the spool-holder card to edit filament information.
-- Feed filament into the extruder manually; there are no Load/Unload buttons here.
+- Tune print speed and flow using steps or numeric entry, up to 200%.
+- Adjust Z offset for the current print; each change is limited to 0.1 mm.
+- Calibration offers homing, Z tilt, full bed mesh, input shaping, belt tension
+  and cutter calibration where supported. Z tilt homes missing axes first.
+- Save pending configuration changes with confirmation. Calibration controls are
+  replaced by an explanation during printing.
 
-![Spool-holder screen without CFS](screenshots/no-cfs.png)
+| Print tuning | Calibration |
+| --- | --- |
+| ![Print tuning](screenshots/tune.png) | ![Calibration](screenshots/calibrate.png) |
 
-### Tune
+| Save configuration | Calibration unavailable during printing |
+| --- | --- |
+| ![Save configuration](screenshots/save.png) | ![Calibration unavailable during printing](screenshots/calibrate-printing.png) |
 
-- Adjust print speed and flow ratio with buttons or direct numeric entry, up to 200%.
-- Adjust Z offset for the current print with steps or direct entry; each change is limited to 0.1 mm.
+## Files and starting a print
 
-![Live print tuning](screenshots/tune.png)
+1. Browse sliced files with thumbnails or a fallback icon. Refresh keeps the list
+   visible and reports progress in the sidebar.
+2. Review the preview and print details; select **Calibrate before printing** if available.
+3. Match each file filament's color/material to a printer source, then **Start print**.
+   Source lists scroll by touch. Incompatible materials are disabled and block starting;
+   colors may differ.
 
-### Calibrate
+- Trash icons open a filename-specific **Cancel / OK** confirmation.
+- Other files can be deleted while printing; the active or pending print file is protected.
+- Select failed parts on the plate view and confirm skipping them.
 
-- Run homing, Z tilt, a full bed mesh or input shaping where supported.
-- Z tilt homes the axes first when needed.
-- Start belt-tension or cutter calibration where supported.
-- Save pending calibration changes with **Save configuration**.
-- During printing, see an explanation instead of calibration controls.
+| Files | Background refresh |
+| --- | --- |
+| ![Files](screenshots/files.png) | ![Background refresh](screenshots/refreshing-files.png) |
 
-![Calibration controls](screenshots/calibrate.png)
+| File review | Filament mapping |
+| --- | --- |
+| ![File review](screenshots/file.png) | ![Filament mapping](screenshots/mapping-review.png) |
 
-## Choose and start a print
+| Material-aware source picker | Skip print objects |
+| --- | --- |
+| ![Material-aware source picker](screenshots/mapping.png) | ![Skip print objects](screenshots/objects.png) |
 
-### 1. Browse files
-
-- Browse files with slicer thumbnails, or a fallback icon.
-- Tap a file to review it; use the trash icon for Cancel/OK deletion confirmation.
-- Delete other files during printing; the active print file stays protected.
-
-![Printer file list](screenshots/files.png)
-
-### 2. Review the file
-
-- Check the larger preview and print details.
-- Choose whether to calibrate before printing.
-- Continue to filament selection before starting.
-
-![Selected print file](screenshots/file.png)
-
-### 3. Match filaments
-
-Match each filament required by the file to a source on the printer. The overview
-pairs the requested color/material with the selected source. Tap a source to
-choose another available filament; long lists scroll by touch.
-
-![File-to-printer filament mapping](screenshots/mapping-review.png)
-
-The picker shows the required material and disables incompatible choices. Colors
-may differ, but material mismatches block starting the print. Review the mappings,
-then choose **Start print**.
-
-![Material-aware source picker](screenshots/mapping.png)
+| Delete confirmation | Stop-print confirmation |
+| --- | --- |
+| ![Delete confirmation](screenshots/delete-file.png) | ![Stop-print confirmation](screenshots/stop-print.png) |
 
 ## Settings
 
 ### General
 
 - Change brightness and the interface highlight color.
-- Set screen, light and idle timers.
-- Configure automatic filament reading and refill when CFS is connected.
+- Set screen sleep, light-off and idle timers. Printing, operations and urgent
+  messages keep the screen awake; the first touch wakes it without activating a control.
+- Open CFS reading and refill preferences when connected.
 
-![General settings](screenshots/general.png)
+| General | Display and appearance |
+| --- | --- |
+| ![General](screenshots/general.png) | ![Display and appearance](screenshots/display.png) |
 
 ![Screen, light and idle timers](screenshots/timers.png)
 
 ### Network
 
-- View Ethernet and Wi-Fi connection details.
-- Scan for Wi-Fi networks, choose one and enter its password.
-- See connection success or failure feedback.
+- View Ethernet and Wi-Fi details; scan networks and enter a password.
+- The password hint disappears when typing. A blinking caret marks entry, and
+  the eye icon shows/hides the password. Shift is one-shot; double-tap for capitals.
+- Scanning and connecting use centered progress screens, followed by success or failure feedback.
 
-![Network settings](screenshots/network.png)
+| Network | Ethernet |
+| --- | --- |
+| ![Network](screenshots/network.png) | ![Ethernet](screenshots/ethernet.png) |
 
-### Time-lapse
+| Wi-Fi details | Available networks |
+| --- | --- |
+| ![Wi-Fi details](screenshots/wifi.png) | ![Available networks](screenshots/networks.png) |
 
-- Enable or disable recording when the time-lapse component is available, including during a print.
-- Browse recordings, save individual recordings to USB or confirm deletion.
+| Password entry | Scanning |
+| --- | --- |
+| ![Password entry](screenshots/wifi-password.png) | ![Scanning](screenshots/wifi-scanning.png) |
 
-![Time-lapse settings and recordings](screenshots/timelapse.png)
+| Connecting | Connected |
+| --- | --- |
+| ![Connecting](screenshots/wifi-connecting.png) | ![Connected](screenshots/wifi-connected.png) |
 
-### Storage
+![Connection failed](screenshots/wifi-failed.png)
 
-- Check available printer storage and connected USB drives.
-- Eject or format USB drives when available. Ejected drives remain unavailable until remounted.
-- During printing, unavailable storage operations show an explanation.
+### Time-lapse and storage
 
-![Storage settings](screenshots/storage.png)
+- Enable/disable recording when the time-lapse component is available, including during printing.
+- Save recordings to USB or confirm deletion with the icons beside each recording.
+- View printer/USB storage. Eject or format when allowed; an ejected drive stays
+  unavailable until remounted. Restricted operations show an explanation during printing.
+
+| Time-lapse settings | Recordings |
+| --- | --- |
+| ![Time-lapse settings](screenshots/timelapse.png) | ![Recordings](screenshots/recordings.png) |
+
+| Storage | USB actions |
+| --- | --- |
+| ![Storage](screenshots/storage.png) | ![USB actions](screenshots/usb.png) |
+
+![Ejected USB drive](screenshots/usb-ejected.png)
 
 ### System
 
-- View machine information and software versions.
-- Set the time zone and access logs.
-- Restart Klipper or controller firmware with a confirmation warning.
+- View machine/software information, choose a time zone and access logs/history.
+- Restart Klipper or controller firmware with confirmation, including during a print.
+  The warning explains that an ongoing print cannot continue.
 
-![System settings](screenshots/system.png)
-
-## More interface examples
-
-The galleries below show the supporting screens and dialogs used in these
-workflows. Screens that depend on hardware are shown with example connection and
-capability data.
-
-### Temperature entry, activity and messages
-
-Temperature controls share the same layout. Numeric entry opens a larger keypad.
-The bottom of the sidebar names active work, including **Loading filament**,
-**Unloading filament** and **Refreshing files**. Refresh keeps the file list visible.
-Progress already shown on the current page is not repeated in the sidebar.
-Faults and notices appear separately, with a clear dismissal action.
-
-| Bed temperature | Chamber temperature |
+| System | Machine information |
 | --- | --- |
-| ![Bed temperature](screenshots/bed-temperature.png) | ![Chamber temperature](screenshots/chamber-temperature.png) |
-| Numeric entry | Reading file |
-| ![Numeric temperature entry](screenshots/numeric.png) | ![Reading file activity](screenshots/loading.png) |
-| Loading filament | Unloading filament |
-| ![Loading filament activity at the bottom of the sidebar](screenshots/load.png) | ![Unloading filament activity at the bottom of the sidebar](screenshots/unload.png) |
-| Printer error | Notice |
-| ![Printer error dialog](screenshots/error.png) | ![Printer notice](screenshots/notice.png) |
-| Status history | Recent errors |
-| ![Status history](screenshots/history.png) | ![Recent errors](screenshots/errors.png) |
+| ![System](screenshots/system.png) | ![Machine information](screenshots/machine.png) |
 
-| File deletion confirmation | Stop-print confirmation |
+| Software version | Time zone |
 | --- | --- |
-| ![Confirm deleting a file](screenshots/delete-file.png) | ![Confirm stopping a print](screenshots/stop-print.png) |
-| Unlock motors | Printer startup |
-| ![Unlock motors warning](screenshots/unlock-motors.png) | ![Waiting for printer startup](screenshots/startup.png) |
+| ![Software version](screenshots/software.png) | ![Time zone](screenshots/timezone.png) |
 
-### Filament editing and unit selection
-
-Edit material, color and nozzle temperature from the slot editor. Material
-filters and the color picker keep common choices within reach. The unit selector
-shows only the reported CFS units; changing the viewed unit does not load filament.
-
-| Two CFS units | Three CFS units |
+| Help and logs | Restart options |
 | --- | --- |
-| ![Two CFS selectors](screenshots/two-cfs.png) | ![Three CFS selectors](screenshots/three-cfs.png) |
-| Filament editor | Material selection |
-| ![Filament editor](screenshots/edit.png) | ![Filtered material selection](screenshots/materials.png) |
-| Color selection | CFS preferences |
-| ![Filament color picker](screenshots/colors.png) | ![CFS detection and refill preferences](screenshots/refill.png) |
-| Automatic refill sequence | Print object selection |
-| ![Matching backup filament sequence](screenshots/refill-sequence.png) | ![Print object selection](screenshots/objects.png) |
-
-Automatic refill uses loaded slots with matching material and color. The sequence
-screen shows the available matching sources. Object selection shows the plate and
-part outlines: select failed parts, then confirm skipping them.
-
-### Display and network details
-
-Display settings control brightness and the interface highlight color. Network
-pages distinguish Ethernet from Wi-Fi. For a secured wireless network, enter the
-password with the on-screen keyboard; the eye icon shows or hides it.
-
-| Display and appearance | Ethernet details |
-| --- | --- |
-| ![Display settings](screenshots/display.png) | ![Ethernet connection](screenshots/ethernet.png) |
-| Wi-Fi details | Available networks |
-| ![Wi-Fi connection](screenshots/wifi.png) | ![Available wireless networks](screenshots/networks.png) |
-| Password entry | Successful connection |
-| ![Wi-Fi password keyboard](screenshots/wifi-password.png) | ![Wi-Fi connected notice](screenshots/wifi-connected.png) |
-| Connection failure | USB drive details |
-| ![Wi-Fi failure notice](screenshots/wifi-failed.png) | ![USB storage actions](screenshots/usb.png) |
-
-### Recordings and system details
-
-Saved recordings provide individual USB-save and delete actions. System pages
-show printer/software information, time-zone selection and logs. Saving
-configuration and restarting require deliberate confirmation; unavailable
-calibration shows an explanation instead of live controls.
-
-| Saved recordings | Machine information |
-| --- | --- |
-| ![Saved time-lapse recordings](screenshots/recordings.png) | ![Machine information](screenshots/machine.png) |
-| Software versions | Time zone |
-| ![Software versions](screenshots/software.png) | ![Time-zone selection](screenshots/timezone.png) |
-| Help and logs | Restart choices |
 | ![Help and logs](screenshots/help.png) | ![Restart options](screenshots/restart.png) |
-| Restart Klipper confirmation | Firmware restart confirmation |
-| ![Restart Klipper warning](screenshots/restart-klipper.png) | ![Firmware restart warning](screenshots/restart-firmware.png) |
-| Save configuration | Calibration during a print |
-| ![Save configuration confirmation](screenshots/save.png) | ![Calibration unavailable during printing](screenshots/calibrate-printing.png) |
+
+| Restart Klipper | Restart controller firmware |
+| --- | --- |
+| ![Restart Klipper](screenshots/restart-klipper.png) | ![Restart controller firmware](screenshots/restart-firmware.png) |
+
+## Optional print-failure detection
+
+K2 OpenKlipper's optional [failure watcher](../tools/ai-detect/) runs on an external
+PC. Its settings, including automatic pause, live in `/etc/default/k2-detect` on
+that PC. It does not expose a touchscreen settings API.
 
 ## For developers
 
-See the [Native touchscreen developer guide](developer-tools/README.md) for
-architecture, Linux builds, local previews, testing and packaging. Portable
-[preview cases and artwork](developer-tools/fixtures/README.md) are included in
-the repository.
-
-### More workflow examples
-
-| Longer print and readable dark preview | Calibration activity |
-| --- | --- |
-| ![Hours and minutes remaining](screenshots/printing-long.png) | ![Calibration in progress](screenshots/calibrating.png) |
-| ![Dark model on a neutral preview background](screenshots/dark-preview.png) | ![Ejected USB drive](screenshots/usb-ejected.png) |
-
-| Finding networks | Connecting to the chosen network |
-| --- | --- |
-| ![Scanning for Wi-Fi](screenshots/wifi-scanning.png) | ![Connecting to Wi-Fi](screenshots/wifi-connecting.png) |
-
-The password field has a blinking caret and a muted hint that disappears when
-you type. The password keyboard uses one-shot Shift; double-tap Shift for capitals until
-you tap it again. Restart controls remain available during a print, with a warning
-that the print cannot continue.
-
-| Long print and high layer counts | Long print status |
-| --- | --- |
-| ![Long print with six-digit layers](screenshots/printing-extreme.png) | ![Two-line status and history access](screenshots/printing-status.png) |
-
-### Optional print-failure detection
-
-K2 OpenKlipper includes an optional failure watcher for an external PC, using
-Obico and a local vision model. Its settings, including automatic pause, live on
-that PC in `/etc/default/k2-detect`. It does not expose a touchscreen settings
-API. See [the upstream watcher implementation](../tools/ai-detect/) for setup.
-
-### Refresh without blocking browsing
-
-The file list stays in place while **Refreshing files** appears in the sidebar.
-The badge disappears when the read completes. Tap an active badge to open status
-history; history is also available under **Help & logs** when idle.
-
-![Background file refresh](screenshots/refreshing-files.png)
+The [developer guide](developer-tools/README.md) covers architecture, builds,
+local previews, tests and packaging. Bundled [preview cases](developer-tools/fixtures/README.md)
+use synthetic data and work without connecting to a printer.

@@ -21,9 +21,9 @@ cutter_calibration_method: SENSOR
 nozzle:
 bed:
 chamber:
-light_on:
-light_off:
+lightbulb:
+lightbulb-off:
 home_fan:
 pause:
 play:
-skip-forward:
+skip-object:

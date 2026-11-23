@@ -532,8 +532,8 @@ case "$SETTINGS" in
         ;;
 esac
 
-# Native touchscreen is an explicit installation choice on this branch.
-# Source builds and release packages are handled by its own installer.
+# The native touchscreen is included by default; use the matching precompiled
+# package and preserve existing screen preferences during migration.
 if [ "${OKL_TOUCHSCREEN:-native}" = native ]; then
     sh "$BUILD/touchscreen/installation/install.sh" "$CONF" "$MODEL"
     for f in harkscreen.cfg harkscreen-settings.json; do

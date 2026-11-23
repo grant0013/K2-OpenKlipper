@@ -26,10 +26,10 @@ for pattern in ("*.png", "*.svg", "font_*.c", "*.json"):
 for family, sizes, source in (
     (
         "ui",
-        (12, 13, 14, 15, 16, 17, 18, 20, 21, 22, 24, 25, 28, 30),
+        (12, 13, 14, 15, 16, 17, 18, 20, 24, 25, 30),
         root / "assets/LiberationSans-Regular.ttf",
     ),
-    ("heading", (14, 24, 28), root / "assets/NotoSans-Regular.ttf"),
+    ("heading", (28,), root / "assets/NotoSans-Regular.ttf"),
 ):
     for size in sizes:
         subprocess.run(
@@ -56,66 +56,59 @@ for family, sizes, source in (
             ],
             check=True,
         )
-for old in out.glob("font_inter_*.c"):
-    old.unlink()
-icons = (
-    "droplets",
-    "house",
-    "folder-open",
-    "settings",
-    "move",
-    "thermometer",
-    "fan",
-    "gauge",
-    "activity",
-    "chevron-left",
-    "chevron-right",
-    "chevron-down",
-    "arrow-up",
-    "arrow-big-up",
-    "arrow-down",
-    "arrow-left",
-    "arrow-right",
-    "pause",
-    "play",
-    "square",
-    "skip-object",
-    "history",
-    "lightbulb",
-    "lightbulb-off",
-    "disc-3",
-    "pencil",
-    "check",
-    "x",
-    "eye",
-    "eye-off",
-    "delete",
-    "trash-2",
-    "lock-keyhole",
-    "lock-keyhole-open",
-    "search",
-    "wifi",
-    "ethernet-port",
-    "monitor",
-    "video",
-    "hard-drive",
-    "refresh-cw",
-    "power",
-    "usb",
-    "lock-keyhole",
-    "lock-keyhole-open",
-    "zoom-in",
-    "zoom-out",
-    "maximize",
-    "triangle-alert",
-    "info",
-    "download",
-    "rotate-ccw",
-    "save",
-    "sliders-horizontal",
-    "loader-circle",
-)
-for icon in (*icons, "nozzle", "bed", "chamber", "cfs", "printer-3d", "extruder"):
+# Only sizes used by the current layouts are shipped. Keep this inventory in
+# sync with icon(), tab, keyboard and button calls when changing the UI.
+icons = {
+    "droplets": (24,),
+    "house": (36,),
+    "folder-open": (20, 24),
+    "settings": (24,),
+    "move": (24,),
+    "thermometer": (24,),
+    "fan": (24, 28),
+    "gauge": (24,),
+    "activity": (24,),
+    "chevron-right": (16, 28),
+    "chevron-down": (20,),
+    "arrow-up": (36,),
+    "arrow-big-up": (28,),
+    "arrow-down": (36,),
+    "arrow-left": (28, 36),
+    "arrow-right": (16, 24, 36),
+    "pause": (28,),
+    "play": (28,),
+    "square": (28,),
+    "skip-object": (28,),
+    "history": (28,),
+    "lightbulb": (28,),
+    "lightbulb-off": (28,),
+    "disc-3": (24,),
+    "pencil": (16, 24),
+    "check": (24, 28),
+    "eye": (28,),
+    "eye-off": (28,),
+    "delete": (28,),
+    "trash-2": (28,),
+    "lock-keyhole": (24,),
+    "lock-keyhole-open": (24,),
+    "wifi": (24,),
+    "monitor": (24,),
+    "video": (24,),
+    "hard-drive": (24,),
+    "refresh-cw": (28,),
+    "zoom-in": (28,),
+    "zoom-out": (28,),
+    "maximize": (28,),
+    "save": (28,),
+    "sliders-horizontal": (28,),
+    "nozzle": (16, 24, 28),
+    "bed": (28,),
+    "chamber": (28,),
+    "cfs": (24, 28),
+    "printer-3d": (44,),
+    "extruder": (36,),
+}
+for icon, sizes in icons.items():
     local = root / "assets" / (icon + ".svg")
     source = (
         local.read_text()
@@ -129,7 +122,7 @@ for icon in (*icons, "nozzle", "bed", "chamber", "cfs", "printer-3d", "extruder"
     )
     svg = out / (icon + ".svg")
     svg.write_text(source)
-    for size in (16, 20, 22, 24, 28, 34, 36, 42, 44):
+    for size in sizes:
         subprocess.run(
             [
                 "convert",

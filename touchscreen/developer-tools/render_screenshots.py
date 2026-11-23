@@ -44,6 +44,7 @@ def main():
             ("file", "file", "idle", []),
             ("timers", "timers", "idle", []),
             ("idle", "home", "idle", []),
+            ("idle-no-cfs", "home", "no-cfs", []),
             ("heating", "home", "heating", []),
             ("temperature", "home", "idle", ["temperature:extruder"]),
             ("executing", "home", "homing", []),

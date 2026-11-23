@@ -72,6 +72,8 @@ cmake --build touchscreen/out/host --parallel 4
 ```
 
 After production asset or build-system changes, run `build.sh host` again.
+`build_assets.py` lists the exact icon sizes and fonts used by the layouts; update
+that inventory when adding a control. Unused size variants are not shipped.
 Interactive previews need an X11 display, or XWayland on a Wayland desktop.
 Headless captures do not need a display server.
 

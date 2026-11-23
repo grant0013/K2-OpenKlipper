@@ -1157,8 +1157,7 @@ void ui_render(void) {
     memset(app.temperature_arrow, 0, sizeof(app.temperature_arrow));
     memset(app.positions, 0, sizeof(app.positions));
     app.extrusion_temp = NULL;
-    app.status_label = app.status_dot = app.time_label = app.layer_label = app.progress =
-        app.percent = NULL;
+    app.status_label = app.time_label = app.layer_label = app.progress = app.percent = NULL;
     lv_obj_clean(app.content);
     ConnectionMode connection = ui_connection_mode();
     if (connection != CONNECTION_READY) {

@@ -51,7 +51,7 @@ The replacement UI remains under hardware validation.
 | Print safety | `[hark_safety]`: pauses on a dead hotend or part fan, cancels on an X/Y motor fault, pauses on an extruder fault (clog or jam) |
 | Runout refill | When a reel runs out, another CFS slot with the same material and colour takes over and the print carries on, like stock. With no match it pauses, and `RESUME` loads and purges the new spool before carrying on. A warning names the next slot as soon as the reel's end passes the CFS |
 | Chamber fan | The exhaust fan vents the chamber above 35C while printing, like stock; the slicer's chamber target (M141/M191) raises it |
-| Updates | Printer settings remain in `printer-overrides.cfg`; the native screen currently requires a matching manually built package |
+| Updates | Printer settings remain in `printer-overrides.cfg`; the installer uses the matching precompiled native screen included with each version |
 | AI failure detection | Optional, on the host PC: Obico model every 10 s plus a local vision model (Qwen3-VL) as a second opinion ([ai-detect](tools/ai-detect/)) |
 | Web UI | [Mainsail Hark K2 edition](https://github.com/grant0013/mainsail) (CFS panel, control centre, appearance presets) on port 4409, Moonraker on 7126 |
 
