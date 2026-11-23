@@ -873,6 +873,8 @@ void ui_data(cJSON *data) {
     if (connection == CONNECTION_READY)
         app.ever_ready = true;
     if (connection != previous_connection || !previous_link) {
+        /* The backend retains unacknowledged notices across reconnects. */
+        app.last_notice = 0;
         app.rendered = false;
         close_modal();
         app.dirty = true;

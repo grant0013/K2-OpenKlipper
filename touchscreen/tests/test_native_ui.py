@@ -498,6 +498,23 @@ class NativeUI(unittest.TestCase):
    _,commands=self.render('restart',['restart:'+choice,'confirmed'],data)
    self.assertEqual(commands,[{'action':action,'confirm':True}])
 
+ def test_unacknowledged_notice_reappears_after_connection_recovery(self):
+  for filament in (False,True):
+   with self.subTest(filament=filament):
+    data=copy.deepcopy(self.data)
+    notice={'id':1,'title':'Filament changed' if filament else 'Operation failed','detail':'Test notice','fault':not filament}
+    if filament:notice['filament_slot']='A'
+    data['notices']=[notice,{'id':2,'title':'Next notice','detail':'Still queued'}]
+    lost=copy.deepcopy(data);lost['connected']=False
+    items,_=self.render(actions=[{'snapshot':lost},{'snapshot':data}],data=data)
+    expected='filament_notice:' if filament else 'notice_ack:1'
+    self.assertTrue(any(item['action'].startswith(expected) for item in items))
+    acknowledged=copy.deepcopy(data);acknowledged['notices']=data['notices'][1:]
+    action=next(item['action'] for item in items if item['action'].startswith(expected))
+    items,commands=self.render(actions=[{'snapshot':lost},{'snapshot':data},action,{'snapshot':acknowledged}],data=data)
+    self.assertTrue(any(item['action']=='notice_ack:2' for item in items))
+    self.assertTrue(any(command=={'action':'ack','id':1} for command in commands))
+
  def test_failed_unload_notice_acknowledges_only_once(self):
   data=copy.deepcopy(self.data)
   data['notices']=[{'id':1,'title':'Unloading failed','detail':'Test failure','fault':True}]
