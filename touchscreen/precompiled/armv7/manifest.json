@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "built_from_commit": "1818a303eeb45576c35b58fecf105291bd8b250a",
+  "built_from_commit": "a9a8518191f1370bdac795a08a2ceaf876d7d194",
   "source_inputs": {
     "VERSION": "a12a1be3f3ee06a3159f695083ad52c3f3dc2ae1f071b7aece71cfe4c1f1e133",
     "install.sh": "2f47f109e1d906b94dbf6e4df29029537019ef7fb209d35689de61b10923084b",
@@ -40,12 +40,12 @@
     "touchscreen/src/screen.h": "0428a077fd9bcb352c8ad84e1b9472ee63ada89b150e918dd73825545fc97269",
     "touchscreen/src/ui.c": "f8acf34d2c88153c4acbeae45264c47896aa251d743484697ace3a225be6c66d",
     "touchscreen/src/view_inputs.c": "13389ffa93068efbd179e8838d871bd0c592a131f14b72255781156d1b754bc8",
-    "touchscreen/src/views.c": "bdcce3e54c3c2d1fff60c803b44fec1f35f8894425adab98c1ac6d511c74efd9"
+    "touchscreen/src/views.c": "6e34ef28c45310e1306de55a817ec2b6494045fe93dd8c02faefc380cc04f090"
   },
-  "source_fingerprint": "5fcb6a695d96ea8bfc1bb4d43f6ca4002ad4b2de3b663a3f4beb3978c39cafe8",
+  "source_fingerprint": "48e57f9602c0c6749058e443cf9893e9244c15d4d82113908a1c97f0941d5324",
   "target": "armv7-linux-gnueabihf",
   "files": {
-    "VERSION": "6b377b91c198590f97f00bed20ca7fb5104d18bb813779472fda38076e914284",
+    "VERSION": "0cf45e1436b9fbc8b0867615c89ed90db7dae10b018bfe5c12d891d001cb004c",
     "assets/activity-16.png": "c919d511ce9edcb9d429b0fd34c07992897427f344576e3d4205bdf884686734",
     "assets/activity-20.png": "992b40c4beea90f8f95d1e41f959c340754c47b8e16c69e13598e39af4a03222",
     "assets/activity-22.png": "c942aa5df3dcfc51374af5c9189d5de6ea824b3addebfb3f55c63de7e02538a7",
@@ -577,6 +577,6 @@
     "licenses/Lucide-LICENSE": "1e7290b35280a048667bbf0ebabac1c7fd52a75300e8b2946ac165715997f2bc",
     "licenses/Noto-LICENSE": "075f91382875da1c4b491f1facf2586f55448705133264d98ce15cab6211b125",
     "licenses/cJSON-LICENSE": "a36dda207c36db5818729c54e7ad4e8b0c6fba847491ba64f372c1a2037b6d5c",
-    "openklipper-screen": "0aa7db682fe6432c3466c237ce870a704151e6b99b83e369ce5ed7eaa45fbf8e"
+    "openklipper-screen": "2c4bcb937b6ddb566e6aa4f51c44fd0f44abca02c82accabaf65d4280943f892"
   }
 }
