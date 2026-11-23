@@ -124,8 +124,9 @@ returns to the previous page automatically.
 - Select a spool to edit its material, color and nozzle temperature, or Load/Unload.
 - The accent border marks selection; the nozzle marker identifies feeding filament.
 - Material filters shorten the list. CFS temperature and humidity appear below the spools.
-- With one CFS, no unit selector is shown. With multiple reported units, two to four
-  selectors share the available width; the spool holder remains separate.
+- With one CFS, all five spool tiles share the same height, with temperature and
+  humidity centered below them. No unit selector is shown. With multiple reported
+  units, two to four selectors share the available width; the spool holder remains separate.
 - Without CFS, edit the spool-holder card and feed filament manually. Load/Unload
   buttons are hidden. **Reset** in any spool editor removes its saved details
   with confirmation; it does not move or unload filament.
