@@ -100,3 +100,13 @@ class HomeFilamentStateTests(unittest.TestCase):
                     .crop((637, y + 29, 769, y + 32))
                     .getbbox()
                 )
+
+    def test_print_name_hides_gcode_suffix_and_directory_only_in_display(self):
+        data = copy.deepcopy(self.data)
+        data["status"]["print_stats"].update(state="printing", filename="Tray")
+        baseline = self.frame("home", data)
+        for filename in ("folder/Tray.gcode", "Tray.GCODE", "Tray.gco", "Tray.g"):
+            data["status"]["print_stats"]["filename"] = filename
+            image = self.frame("home", data)
+            self.assertIsNone(ImageChops.difference(baseline, image).getbbox())
+            self.assertEqual(data["status"]["print_stats"]["filename"], filename)

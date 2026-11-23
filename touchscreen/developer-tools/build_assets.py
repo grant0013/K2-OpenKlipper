@@ -78,7 +78,7 @@ icons = (
     "pause",
     "play",
     "square",
-    "skip-forward",
+    "skip-object",
     "history",
     "lightbulb",
     "lightbulb-off",

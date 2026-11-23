@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <time.h>
 enum { HOME_MAIN = 470, HOME_SIDE_X = 488, HOME_SIDE_W = 190 };
 static bool calibrate_before;
@@ -143,7 +144,7 @@ static void slot_unit(const char *slot, char *unit, size_t size) {
 static void home_cfs(int top, int height) {
     lv_obj_t *tile = button(app.content, "", HOME_SIDE_X, top, HOME_SIDE_W, height,
                             "home_filament_strip", false);
-    icon(tile, "cfs", 12, (height - 34) / 2, 34, colour("a4aebb"));
+    icon(tile, "cfs", 13, (height - 28) / 2, 28, colour("a4aebb"));
     if (!B("status.k2_cfs.online")) {
         text(tile, "Offline", 62, (height - 20) / 2, 116, &font_ui_18, true);
         return;
@@ -171,7 +172,7 @@ static void home_cfs(int top, int height) {
     if (units > 1) {
         char label[48];
         snprintf(label, sizeof(label), "CFS %s · %d units", unit, units);
-        text(tile, label, 62, 10, 118, &font_ui_12, true);
+        text(tile, label, 62, height / 2 - 34, 118, &font_ui_12, true);
     }
     int drawn = 0, total = 0;
     cJSON_ArrayForEach(record, J("slots")) {
@@ -185,7 +186,7 @@ static void home_cfs(int top, int height) {
         total++;
         if (drawn >= 4)
             continue;
-        int x = 62 + drawn++ * 28, y = units > 1 ? height / 2 : (height - 22) / 2;
+        int x = 62 + drawn++ * 28, y = (height - 22) / 2;
         bool present = jbool(record, "loaded", false);
         lv_obj_t *dot = box(tile, x, y, 22, 22, false);
         lv_obj_clear_flag(dot, LV_OBJ_FLAG_CLICKABLE);
@@ -205,23 +206,30 @@ void view_home(void) {
     const char *filename = S("status.print_stats.filename");
     const char *base = strrchr(filename, '/');
     if (printing) {
-        lv_obj_t *name =
-            text(app.content, base ? base + 1 : filename, 0, 18, HOME_MAIN, &font_ui_17, true);
+        box(app.content, 0, 19, HOME_MAIN, 260, false);
+        home_image(S("platform.thumbnail"), 19, 260);
+        char display_name[1024];
+        snprintf(display_name, sizeof(display_name), "%s", base ? base + 1 : filename);
+        char *extension = strrchr(display_name, '.');
+        if (extension && (!strcasecmp(extension, ".gcode") || !strcasecmp(extension, ".gco") ||
+                          !strcasecmp(extension, ".g")))
+            *extension = '\0';
+        lv_obj_t *name = text(app.content, display_name, 14, 31, HOME_MAIN - 28, &font_ui_17, true);
         lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
         lv_obj_set_height(name, 26);
-        box(app.content, 0, 57, HOME_MAIN, 248, false);
-        home_image(S("platform.thumbnail"), 57, 248);
-        lv_obj_t *summary = button(app.content, "", 0, 315, HOME_MAIN, 66, "home_history", false);
+        lv_obj_set_style_bg_color(name, colour("151a22"), 0);
+        lv_obj_set_style_bg_opa(name, LV_OPA_80, 0);
+        lv_obj_t *summary = button(app.content, "", 0, 289, HOME_MAIN, 80, "home_history", false);
         lv_obj_set_style_bg_opa(summary, 0, 0);
         lv_obj_set_style_border_width(summary, 0, 0);
-        app.time_label = text(summary, "", 0, 10, 270, &font_ui_20, false);
-        app.status_label = text(summary, "", 290, 10, 180, &font_ui_20, false);
+        app.time_label = text(summary, "", 0, 13, 270, &font_ui_20, false);
+        app.status_label = text(summary, "", 290, 13, 180, &font_ui_20, false);
         right(app.status_label);
-        app.layer_label = text(summary, "", 0, 43, 270, &font_ui_14, true);
-        icon(summary, "history", 343, 48, 16, colour("a4aebb"));
-        text(summary, "Status history", 367, 43, 86, &font_ui_14, true);
-        icon(summary, "chevron-right", 454, 48, 16, colour("a4aebb"));
-        app.status_dot = box(summary, 388, 18, 6, 6, false);
+        app.layer_label = text(summary, "", 0, 46, 270, &font_ui_14, true);
+        icon(summary, "history", 343, 51, 16, colour("a4aebb"));
+        text(summary, "Status history", 367, 46, 86, &font_ui_14, true);
+        icon(summary, "chevron-right", 454, 51, 16, colour("a4aebb"));
+        app.status_dot = box(summary, 388, 21, 6, 6, false);
         lv_obj_set_style_radius(app.status_dot, 3, 0);
         lv_obj_set_style_border_width(app.status_dot, 0, 0);
         lv_obj_set_style_bg_color(app.status_dot, app.accent, 0);
@@ -239,7 +247,7 @@ void view_home(void) {
         lv_obj_set_style_radius(app.progress, 4, LV_PART_INDICATOR);
         button(app.content, app.paused ? "icon:play" : "icon:pause", 294, 391, 52, 70,
                app.paused ? "{\"action\":\"resume\"}" : "{\"action\":\"pause\"}", true);
-        button(app.content, "icon:skip-forward", 356, 391, 52, 70, "route:objects", false);
+        button(app.content, "icon:skip-object", 356, 391, 52, 70, "route:objects", false);
         button(app.content, "icon:square", 418, 391, 52, 70, "cancel_print", false);
     } else {
         const char *art = S("platform.printer_image");
@@ -266,7 +274,7 @@ void view_home(void) {
              !strcmp(key, "extruder")     ? "nozzle"
              : !strcmp(key, "heater_bed") ? "bed"
                                           : "chamber",
-             10, (height - 34) / 2, 34, colour("a4aebb"));
+             13, (height - 28) / 2, 28, colour("a4aebb"));
         app.current[i] = text(tile, "", 0, (height - 32) / 2, 54, &font_ui_24, false);
         app.target[i] = text(tile, "", 0, (height - 32) / 2, 54, &font_ui_24, true);
         icon(tile, "arrow-right", 0, (height - 16) / 2, 16, colour("a4aebb"));
