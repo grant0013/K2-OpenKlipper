@@ -7,7 +7,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from demo_snapshot import preview_scenario
+from demo_snapshot import preview_case, preview_scenario
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -43,9 +43,79 @@ def main():
             ("files", "files", "idle", []),
             ("file", "file", "idle", []),
             ("timers", "timers", "idle", []),
+            ("idle", "home", "idle", []),
+            ("heating", "home", "heating", []),
+            ("temperature", "home", "idle", ["temperature:extruder"]),
+            ("executing", "home", "homing", []),
+            ("thermals", "heat", "heating", []),
+            ("fans", "fans", "idle", []),
+            ("no-cfs", "filament", "no-cfs", []),
+            ("multi-cfs", "filament", "multi-cfs", []),
+            ("mapping-review", "file", "multi-cfs", ["review_mapping"]),
+            ("tune", "tune", "printing", []),
+            ("calibrate", "calibration", "idle", []),
+            ("general", "settings", "idle", []),
+            ("network", "network", "idle", []),
+            ("timelapse", "timelapse", "idle", []),
+            ("storage", "storage", "idle", []),
+            ("system", "system", "idle", []),
+            ("load", "filament", "load", []),
+            ("unload", "filament", "unload", []),
+            ("two-cfs", "filament", "multi-cfs", []),
+            ("three-cfs", "filament", "multi-cfs", []),
+            ("edit", "filament", "idle", ["edit_slot"]),
+            ("materials", "filament", "idle", ["edit_slot", "route:materials"]),
+            ("colors", "filament", "idle", ["edit_slot", "route:colors"]),
+            ("numeric", "home", "idle", ["temperature:extruder", "temp_input"]),
+            ("bed-temperature", "home", "idle", ["temperature:heater_bed"]),
+            ("chamber-temperature", "home", "idle", ["temperature:chamber"]),
+            ("objects", "objects", "printing", []),
+            ("history", "history", "idle", []),
+            ("errors", "errors", "idle", []),
+            ("error", "home", "error", []),
+            ("notice", "home", "notice", []),
+            ("loading", "home", "loading", []),
+            ("display", "display", "idle", []),
+            ("refill", "refill", "idle", []),
+            ("refill-sequence", "refill_sequence", "idle", []),
+            ("ethernet", "ethernet", "idle", []),
+            ("wifi", "wifi", "idle", []),
+            ("networks", "networks", "idle", []),
+            (
+                "wifi-password",
+                "networks",
+                "idle",
+                ['wifi_select:{"ssid":"Demo network","secured":true}'],
+            ),
+            ("wifi-connected", "wifi", "wifi-connected", []),
+            ("wifi-failed", "wifi", "wifi-failed", []),
+            ("recordings", "recordings", "idle", []),
+            ("usb", "usb", "idle", []),
+            ("machine", "machine", "idle", []),
+            ("software", "software", "idle", []),
+            ("timezone", "timezone", "idle", []),
+            ("help", "help", "idle", []),
+            ("restart", "restart", "idle", []),
+            ("restart-klipper", "restart", "idle", ["restart:klipper"]),
+            ("restart-firmware", "restart", "idle", ["restart:firmware"]),
+            ("save", "save", "idle", []),
+            ("calibrate-printing", "calibration", "printing", []),
+            (
+                "delete-file",
+                "files",
+                "idle",
+                ['file_delete:{"action":"file","path":"Demo print.gcode"}'],
+            ),
+            ("stop-print", "home", "printing", ["cancel_print"]),
+            ("unlock-motors", "move", "heated", ["motor_toggle"]),
+            ("startup", "home", "disconnected", []),
         ]
         for name, page, scenario, actions in cases:
-            data = preview_scenario(scenario)
+            data = (
+                preview_case(scenario)
+                if scenario == "no-cfs"
+                else preview_scenario(scenario)
+            )
             data["status"]["stepper_enable"] = {
                 "steppers": {"stepper_x": True, "stepper_y": True, "stepper_z": True}
             }
@@ -75,6 +145,41 @@ def main():
                             "Tool stand_ASA.gcode",
                         )
                     )
+                ]
+            if name in ("two-cfs", "three-cfs"):
+                units = 2 if name == "two-cfs" else 3
+                data["slots"] = [
+                    r for r in data["slots"] if int(r["slot"][:-1]) <= units
+                ]
+                data["cfs_units"] = units
+            if name == "files":
+                data["platform"]["file_thumbnails"] = {
+                    data["files"][0]["path"]: str(preview),
+                    data["files"][1]["path"]: str(preview),
+                }
+            if name in ("history", "errors"):
+                data["events"] = [
+                    {
+                        "id": 1,
+                        "time": 1795387354,
+                        "title": "Homing complete",
+                        "detail": "X, Y and Z homed.",
+                        "fault": False,
+                    },
+                    {
+                        "id": 2,
+                        "time": 1795387414,
+                        "title": "Filament operation failed",
+                        "detail": "Check the filament path before trying again.",
+                        "fault": True,
+                    },
+                    {
+                        "id": 3,
+                        "time": 1795387474,
+                        "title": "Printer ready",
+                        "detail": "Ready for the next operation.",
+                        "fault": False,
+                    },
                 ]
             fixture = directory / "snapshot.json"
             fixture.write_text(json.dumps(data))
