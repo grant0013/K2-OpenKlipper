@@ -749,6 +749,10 @@ static void filament_view(void) {
         lv_obj_t *tile = button(app.content, "", x, tile_top, tile_width, tile_height, action,
                                 !strcmp(slot, app.selected_slot));
         int content_y = (tile_height - 166) / 2;
+        /* With one CFS, all five spool contents share the same baselines.
+         * Keep the holder frame and the multi-unit layout unchanged. */
+        if (external && boxes == 1)
+            content_y = (328 - top - 166) / 2;
         char display_slot[64];
         snprintf(display_slot, sizeof(display_slot), "%s",
                  !strcmp(slot, "E") ? "Spool holder" : slot_label(slot));
