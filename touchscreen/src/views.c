@@ -107,6 +107,16 @@ static void spool_widget(lv_obj_t *parent, int x, int y, int size, const char *h
     lv_obj_set_style_border_width(inner, 2, 0);
     lv_obj_set_style_border_color(inner, ring, 0);
 }
+/* The extruder sensor confirms the path; spool presence is a separate state.
+ * An old active_slot after unloading must never imply filament in the nozzle. */
+static bool feeding_slot(const char *slot) {
+    if (!B("status.filament_switch_sensor filament_sensor.filament_detected"))
+        return false;
+    const char *active = S("status.k2_cfs.active_slot");
+    if (!strcmp(slot, "E"))
+        return !*active || !fitted();
+    return fitted() && B("status.k2_cfs.online") && !strcmp(slot, active);
+}
 static bool known_slot(cJSON *rec) {
     const char *slot = jstr(rec, "slot", "");
     const char *hex = jstr(rec, "color", "");
@@ -190,12 +200,13 @@ void view_home(void) {
         lv_obj_set_style_border_side(tile, LV_BORDER_SIDE_TOP, 0);
         icon(tile, i == 0 ? "nozzle" : i == 1 ? "bed" : "chamber", 12, 15, 24, colour("a4aebb"));
         text(tile, jstr(heater, "label", ""), 44, 17, 82, &font_ui_14, true);
-        app.current[i] = text(tile, "", 12, 45, 58, &font_ui_24, false);
+        app.current[i] = text(tile, "", 8, 48, 52, &font_ui_20, false);
         right(app.current[i]);
-        app.target[i] = text(tile, "", 74, 53, 52, &font_ui_14, true);
+        centered(text(tile, "/", 62, 48, 12, &font_ui_20, true));
+        app.target[i] = text(tile, "", 78, 48, 50, &font_ui_20, true);
+        right(app.target[i]);
     }
-    lv_obj_t *light = button(app.content, "", 540, 307, 64, 70, "{\"action\":\"light\"}",
-                             B("status.output_pin chamber_led.value"));
+    lv_obj_t *light = button(app.content, "", 540, 307, 64, 70, "{\"action\":\"light\"}", false);
     const char *light_path =
         S(B("status.output_pin chamber_led.value") ? "platform.icons.light_on"
                                                    : "platform.icons.light_off");
@@ -212,10 +223,11 @@ void view_home(void) {
     if (fitted()) {
         lv_obj_t *strip = button(app.content, "", 0, 391, 678, 70, "home_filament_strip", false);
         const char *active = S("status.k2_cfs.active_slot");
+        if (!feeding_slot(active))
+            active = "";
         cJSON *rec = slot_record(*active ? active : "E");
         char label[150];
-        bool external =
-            !*active && B("status.filament_switch_sensor filament_sensor.filament_detected");
+        bool external = feeding_slot("E");
         const char *name = *active    ? slot_label(active)
                            : external ? "Spool holder"
                                       : "No filament loaded";
@@ -281,7 +293,7 @@ void views_refresh(void) {
                              !strcmp(jstr(heater, "key", ""), "chamber") ? "No target set"
                                                                          : "Heater off");
             } else
-                snprintf(value, sizeof(value), target ? "/ %.0f°" : "", target);
+                snprintf(value, sizeof(value), target ? "%.0f°" : "Off", target);
             lv_label_set_text(app.target[i], value);
         }
         if (app.positions[i]) {
@@ -528,7 +540,8 @@ static void fans_view(void) {
 }
 static void filament_view(void) {
     ui_tabs(false, "filament");
-    if (ui_unavailable("Filament controls", "loading, retracting or editing filament"))
+    if ((!app.connected || strcmp(S("status.webhooks.state"), "ready")) &&
+        ui_unavailable("Filament controls", "loading, retracting or editing filament"))
         return;
     if (fitted() && !B("status.k2_cfs.online")) {
         center_message("CFS connection lost",
@@ -548,6 +561,8 @@ static void filament_view(void) {
         text(tile, name, start + 90, 93, metrics.x + 2, &font_ui_24, false);
         centered(text(tile, "Spool holder", start + 90, 135, metrics.x + 2, &font_ui_14, true));
         icon(tile, "chevron-right", start + group_width - 16, 115, 16, colour("a4aebb"));
+        if (feeding_slot("E"))
+            icon(tile, "nozzle", (673 - 24) / 2, 200, 24, colour("f0f3f7"));
         lv_obj_t *line = box(app.content, 0, 388, 678, 1, false);
         lv_obj_set_style_radius(line, 0, 0);
         lv_obj_set_style_bg_color(line, colour("343e4b"), 0);
@@ -620,7 +635,7 @@ static void filament_view(void) {
         snprintf(display_slot, sizeof(display_slot), "%s",
                  !strcmp(slot, "E") ? "Spool holder" : slot_label(slot));
         centered(text(tile, display_slot, 4, 15, width - 8, &font_ui_17, false));
-        bool present = !strcmp(slot, "E") || jbool(r, "loaded", false);
+        bool present = !strcmp(slot, "E") ? feeding_slot("E") : jbool(r, "loaded", false);
         const char *hex = present ? jstr(r, "color", "828b98") : "343e4b";
         lv_color_t ring = colour(hex);
         if (ring.ch.red < 25 && ring.ch.green < 25 && ring.ch.blue < 25)
@@ -644,6 +659,8 @@ static void filament_view(void) {
                       : present            ? "Unknown"
                                            : "Empty",
                       4, 126, width - 8, &font_ui_16, false));
+        if (feeding_slot(slot))
+            icon(tile, "nozzle", (width - 24) / 2, 165, 24, colour("f0f3f7"));
     }
 
     if (fitted()) {
