@@ -11,6 +11,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 from service import Service
+import platform_services
 
 
 def status():
@@ -322,6 +323,29 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(len(self.s.platform["file_thumbnails"]), 17)
         self.s.file_thumbnails(files)
         self.assertEqual(self.mr.metadata.call_count, 17)
+
+    def test_timezone_setting_updates_uci_and_runtime_zonefile(self):
+        zone_root = Path(self.tmp.name) / "zoneinfo"
+        zone = zone_root / "America" / "Detroit"
+        zone.parent.mkdir(parents=True)
+        zone.write_bytes(b"TZif")
+        with (
+            mock.patch.object(platform_services, "ZONEINFO", str(zone_root)),
+            mock.patch("platform_services.subprocess.call") as command,
+            mock.patch("platform_services.os.symlink") as link,
+            mock.patch("platform_services.os.replace") as replace,
+            mock.patch("platform_services.os.path.lexists", return_value=False),
+            mock.patch("platform_services.time.tzset") as refresh,
+        ):
+            platform_services.set_system_zone("America/Detroit")
+        self.assertEqual(
+            command.call_args_list[0].args[0],
+            ["uci", "set", "system.@system[0].zonename=America/Detroit"],
+        )
+        self.assertEqual(command.call_args_list[1].args[0], ["uci", "commit", "system"])
+        link.assert_called_once_with(str(zone), "/tmp/localtime.new")
+        replace.assert_called_once_with("/tmp/localtime.new", "/tmp/localtime")
+        refresh.assert_called_once_with()
 
     def test_timezone_presets_read_retained_firmware_mapping(self):
         import storage

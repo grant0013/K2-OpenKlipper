@@ -13,6 +13,7 @@ GCODE_LINK = "/mnt/UDISK/printer_data_mainline/gcodes"
 TIMELAPSE_LINK = "/mnt/UDISK/printer_data_mainline/timelapse"
 LOGS_LINK = "/mnt/UDISK/printer_data_mainline/logs"
 BRIGHTNESS_SH = "/usr/bin/brightness.sh"
+ZONEINFO = "/usr/share/zoneinfo"
 
 
 class Wifi:
