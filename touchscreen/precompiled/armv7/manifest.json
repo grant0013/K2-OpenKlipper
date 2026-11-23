@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "built_from_commit": "bfa5b5e869b50bf6e0a1116fdd8cac19b4a77ae5",
+  "built_from_commit": "65c84728b271cd50b4145b3d38b1242476b7751f",
   "source_inputs": {
     "VERSION": "a12a1be3f3ee06a3159f695083ad52c3f3dc2ae1f071b7aece71cfe4c1f1e133",
     "install.sh": "2f47f109e1d906b94dbf6e4df29029537019ef7fb209d35689de61b10923084b",
@@ -19,8 +19,8 @@
     "touchscreen/backend/action_policy.py": "58cc266c397d764dbf77177341dbb7d09660b8d031dfc52039b86e389769d617",
     "touchscreen/backend/model.py": "dd97b0a4915de09bfa5d56f971cfcb46eda958e38e73c94cb952605795025d84",
     "touchscreen/backend/platform_services.py": "e74d1eb0162e9a79ead36091bb4df334223ae7a244c60d106b9cce58d2ad0391",
-    "touchscreen/backend/service.py": "c4c5a717af75db91943314effa458256075c4ddccbd8ab04ceb9a74777da6f3a",
-    "touchscreen/backend/storage.py": "a4f23ef0a44bf257343b44b7d1a51aa13649f925b069320b90911948d3afa9e8",
+    "touchscreen/backend/service.py": "0be078f451c94130c8bffae6b9d6d878cec5167d3843982e907d4f6ffea9e1a7",
+    "touchscreen/backend/storage.py": "3c94f250523894aedde00e401e53f390b6f72792ace517968b1b7c460b74436f",
     "touchscreen/build/CMakeLists.txt": "866150a63ecbe9ebe04a72e9e16b8706f59d5eb50a5d8d250a80bc2ffb0e2e20",
     "touchscreen/build/arm-linux.cmake": "9345345c5e2cc41053e1dd40ddeceac98a14bec13b8f2f68985e9eb48a6767be",
     "touchscreen/build/lv_conf.h": "f46c918695b398d406f5835fa7fd5dd404444d4041ae9cea2194b4e0740f527e",
@@ -38,15 +38,15 @@
     "touchscreen/src/json.c": "78986758cd5e2c91ff366341f3a35144163e8d646cce878abd2bae1105d22195",
     "touchscreen/src/main.c": "64e706b4a3d2527895534af105b00d6cf080ef76eefa522cd09fa1e1749f766f",
     "touchscreen/src/platform.c": "073cc61aa45d05a9003626c3d13d6577aa2ee4d287c376a6f732854ae9814f96",
-    "touchscreen/src/screen.h": "471ba6844ced357c47669fac55d921594943c723fcbe8bf52d7d025d060805ad",
-    "touchscreen/src/ui.c": "000f52237e30a547958780613bec4feefcf6d68755348c57bc9d5157855269a8",
+    "touchscreen/src/screen.h": "b7d2f865fceaa30b69d2e8c92467c35abe876d6cfa02c2cf67b92730c63ea8a9",
+    "touchscreen/src/ui.c": "a0a5d6938c1a753ca4a6b41485ed4bf086a00fd90bbc13c7fe7fc67e38123d5e",
     "touchscreen/src/view_inputs.c": "faca09c65c6547f67523cde4039ab5d745baead09e650aef463d2c7e45c38c29",
-    "touchscreen/src/views.c": "ae023d1cb2b5103bf13bc4109c82bf51abf11d4a3ecd65356259ece4f5e6a63a"
+    "touchscreen/src/views.c": "5955a5e2c8ba0f27cf1582a41820b3b4b1ce8028129207d2da422868ed7dd703"
   },
-  "source_fingerprint": "fa9d3550095d4b6000465f1403ed254a6d215de73c6d2887fc52c0cb9d5a01ae",
+  "source_fingerprint": "34518d66c5a419c34d11b85347544201ce52112affb50b4930e5b72b56a9db27",
   "target": "armv7-linux-gnueabihf",
   "files": {
-    "VERSION": "454f0956822ef7ced0ae73bfaa43df21e1482fd502694eca4c1621fd1ce8a769",
+    "VERSION": "4590a7bbb3b0c796a8428e00811760fc623b13c66d3eabd98b3ccfc29804615c",
     "assets/activity-16.png": "c919d511ce9edcb9d429b0fd34c07992897427f344576e3d4205bdf884686734",
     "assets/activity-20.png": "992b40c4beea90f8f95d1e41f959c340754c47b8e16c69e13598e39af4a03222",
     "assets/activity-22.png": "c942aa5df3dcfc51374af5c9189d5de6ea824b3addebfb3f55c63de7e02538a7",
@@ -578,6 +578,6 @@
     "licenses/Lucide-LICENSE": "1e7290b35280a048667bbf0ebabac1c7fd52a75300e8b2946ac165715997f2bc",
     "licenses/Noto-LICENSE": "075f91382875da1c4b491f1facf2586f55448705133264d98ce15cab6211b125",
     "licenses/cJSON-LICENSE": "a36dda207c36db5818729c54e7ad4e8b0c6fba847491ba64f372c1a2037b6d5c",
-    "openklipper-screen": "91ea60d756709a2c9d294af65c15ad5d5ba64be221a9bced0104d7ce0744826c"
+    "openklipper-screen": "d44f09bc7e6ce8dd77d44feef7f522aa8ba14b3fb13e35d54ff299f1d316919d"
   }
 }
