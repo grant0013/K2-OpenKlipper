@@ -704,8 +704,7 @@ void ui_init(const char *assets, const char *socket) {
 /* Home retains value widgets between snapshots. Rebuild its static artwork
  * and controls only when one of their actual inputs changes. */
 static void home_state(char *buffer, size_t size) {
-    snprintf(buffer, size, "%s|%g|%g|%g|%d|%d|%g|%g|%g|%g|%s|%s", S("status.k2_cfs.active_slot"),
-             N("status.k2_cfs.temperature"), N("status.k2_cfs.humidity"),
+    snprintf(buffer, size, "%s|%g|%d|%d|%g|%g|%g|%g|%s|%s", S("status.k2_cfs.active_slot"),
              N("status.hark_cfs_slots.revision"), B("status.k2_cfs.online"),
              B("status.filament_switch_sensor filament_sensor.filament_detected"),
              N("status.output_pin chamber_led.value"), N("status.fan.speed"),

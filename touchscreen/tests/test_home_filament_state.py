@@ -52,9 +52,9 @@ class HomeFilamentStateTests(unittest.TestCase):
         off["status"]["output_pin chamber_led"]["value"] = 0
         a = self.frame("home", on)
         b = self.frame("home", off)
-        self.assertEqual(a.getpixel((650, 320)), b.getpixel((650, 320)))
+        self.assertEqual(a.getpixel((600, 400)), b.getpixel((600, 400)))
         self.assertIsNotNone(
-            ImageChops.difference(a, b).crop((660, 325, 695, 360)).getbbox()
+            ImageChops.difference(a, b).crop((620, 410, 655, 445)).getbbox()
         )
 
     def test_current_readings_are_centered_for_different_digit_counts(self):
@@ -63,13 +63,13 @@ class HomeFilamentStateTests(unittest.TestCase):
             h.update(current=current, target=0)
         image = self.frame("home", data)
         bounds = []
-        for y in (67, 158, 249):
-            crop = image.crop((655, y, 769, y + 30))
+        for y in (43, 133, 223):
+            crop = image.crop((637, y, 769, y + 32))
             bounds.append(
                 crop.convert("L").point(lambda v: 255 if v > 100 else 0).getbbox()
             )
         for bounds_item in bounds:
-            self.assertLessEqual(abs((bounds_item[0] + bounds_item[2]) / 2 - 57), 1)
+            self.assertLessEqual(abs((bounds_item[0] + bounds_item[2]) / 2 - 66), 1)
         self.assertLessEqual(max(b[1] for b in bounds) - min(b[1] for b in bounds), 1)
 
     def test_target_is_only_shown_while_approaching_it(self):
@@ -80,8 +80,8 @@ class HomeFilamentStateTests(unittest.TestCase):
         for h in data["heaters"]:
             h["target"] = 200
         holding = self.frame("home", data)
-        for y in (67, 158, 249):
-            region = (655, y, 769, y + 30)
+        for y in (43, 133, 223):
+            region = (637, y, 769, y + 32)
             self.assertIsNone(
                 ImageChops.difference(off, holding).crop(region).getbbox()
             )
@@ -90,13 +90,13 @@ class HomeFilamentStateTests(unittest.TestCase):
                 h["target"] = target
             approaching = self.frame("home", data)
             # Both heating and cooling retain the destination, on one line.
-            for y in (67, 158, 249):
-                region = (705, y, 769, y + 30)
+            for y in (43, 133, 223):
+                region = (637, y, 769, y + 32)
                 self.assertIsNotNone(
                     ImageChops.difference(holding, approaching).crop(region).getbbox()
                 )
                 self.assertIsNone(
                     ImageChops.difference(holding, approaching)
-                    .crop((655, y + 24, 769, y + 30))
+                    .crop((637, y + 29, 769, y + 32))
                     .getbbox()
                 )

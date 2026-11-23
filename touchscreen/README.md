@@ -25,8 +25,9 @@ firmware.
 ## Printing at a glance
 
 View the print preview, progress, remaining time and layers. Temperature tiles
-open nozzle, bed and chamber controls. Light, fans, pause, stop, object exclusion
-and status history are available without leaving the main workflow.
+open nozzle, bed and chamber controls. A CFS shortcut beside the preview shows
+spool colors and marks the filament feeding the nozzle. Light, fans, pause, stop,
+object exclusion and status history remain within reach.
 
 ![Printing home screen](screenshots/home.png)
 

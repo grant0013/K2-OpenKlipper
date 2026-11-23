@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+enum { HOME_MAIN = 470, HOME_SIDE_X = 488, HOME_SIDE_W = 190 };
 static bool calibrate_before;
 static bool has(const char *path) {
     return J(path) != NULL && !cJSON_IsNull(J(path));
@@ -61,13 +62,13 @@ static void home_image(const char *path, int top, int height) {
     if (lv_img_decoder_get_info(source, &info) != LV_RES_OK || !info.w || !info.h)
         return;
     int zoom = height * 256 / info.h;
-    if (zoom > 522 * 256 / info.w)
-        zoom = 522 * 256 / info.w;
+    if (zoom > HOME_MAIN * 256 / info.w)
+        zoom = HOME_MAIN * 256 / info.w;
     lv_obj_t *preview = lv_img_create(app.content);
     lv_img_set_src(preview, source);
     lv_img_set_pivot(preview, 0, 0);
     lv_img_set_zoom(preview, zoom);
-    lv_obj_set_pos(preview, (522 - info.w * zoom / 256) / 2,
+    lv_obj_set_pos(preview, (HOME_MAIN - info.w * zoom / 256) / 2,
                    top + (height - info.h * zoom / 256) / 2);
 }
 cJSON *slot_record(const char *slot) {
@@ -132,151 +133,164 @@ static bool known_slot(cJSON *rec) {
                !*S("status.k2_cfs.active_slot");
     return fitted() && B("status.k2_cfs.online");
 }
+static void slot_unit(const char *slot, char *unit, size_t size) {
+    size_t n = strlen(slot);
+    if (n <= 1)
+        snprintf(unit, size, "1");
+    else
+        snprintf(unit, size, "%.*s", (int)n - 1, slot);
+}
+static void home_cfs(int top, int height) {
+    lv_obj_t *tile = button(app.content, "", HOME_SIDE_X, top, HOME_SIDE_W, height,
+                            "home_filament_strip", false);
+    icon(tile, "cfs", 12, (height - 34) / 2, 34, colour("a4aebb"));
+    if (!B("status.k2_cfs.online")) {
+        text(tile, "Offline", 62, (height - 20) / 2, 116, &font_ui_18, true);
+        return;
+    }
+    char unit[16] = "", groups[16][16] = {{0}};
+    int units = 0;
+    const char *active = S("status.k2_cfs.active_slot");
+    if (*active && feeding_slot(active))
+        slot_unit(active, unit, sizeof(unit));
+    cJSON *record;
+    cJSON_ArrayForEach(record, J("slots")) {
+        const char *slot = jstr(record, "slot", "");
+        if (!*slot || !strcmp(slot, "E"))
+            continue;
+        char group[16];
+        slot_unit(slot, group, sizeof(group));
+        if (!*unit)
+            snprintf(unit, sizeof(unit), "%s", group);
+        bool seen = false;
+        for (int i = 0; i < units; i++)
+            seen |= !strcmp(groups[i], group);
+        if (!seen && units < 16)
+            snprintf(groups[units++], sizeof(groups[0]), "%s", group);
+    }
+    if (units > 1) {
+        char label[48];
+        snprintf(label, sizeof(label), "CFS %s · %d units", unit, units);
+        text(tile, label, 62, 10, 118, &font_ui_12, true);
+    }
+    int drawn = 0, total = 0;
+    cJSON_ArrayForEach(record, J("slots")) {
+        const char *slot = jstr(record, "slot", "");
+        if (!*slot || !strcmp(slot, "E"))
+            continue;
+        char group[16];
+        slot_unit(slot, group, sizeof(group));
+        if (strcmp(group, unit))
+            continue;
+        total++;
+        if (drawn >= 4)
+            continue;
+        int x = 62 + drawn++ * 28, y = units > 1 ? height / 2 : (height - 22) / 2;
+        bool present = jbool(record, "loaded", false);
+        lv_obj_t *dot = box(tile, x, y, 22, 22, false);
+        lv_obj_clear_flag(dot, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(dot, colour(jstr(record, "color", "828b98")), 0);
+        lv_obj_set_style_bg_opa(dot, present ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_color(dot, colour(feeding_slot(slot) ? "f0f3f7" : "596371"), 0);
+        lv_obj_set_style_border_width(dot, feeding_slot(slot) ? 3 : 1, 0);
+        if (feeding_slot(slot))
+            icon(tile, "nozzle", x + 3, y + 24, 16, colour("f0f3f7"));
+    }
+    if (!total)
+        text(tile, "No slots", 62, (height - 20) / 2, 116, &font_ui_18, true);
+}
 void view_home(void) {
     bool printing = app.printing || app.paused || !strcmp(S("status.print_stats.state"), "error");
     const char *filename = S("status.print_stats.filename");
     const char *base = strrchr(filename, '/');
     if (printing) {
-        text(app.content, base ? base + 1 : filename, 0, 18, 522, &font_ui_17, true);
-        box(app.content, 0, 57, 522, 164, false);
-        home_image(S("platform.thumbnail"), 57, 164);
-        lv_obj_t *summary = button(app.content, "", 0, 227, 522, 66, "home_history", false);
+        lv_obj_t *name =
+            text(app.content, base ? base + 1 : filename, 0, 18, HOME_MAIN, &font_ui_17, true);
+        lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
+        lv_obj_set_height(name, 26);
+        box(app.content, 0, 57, HOME_MAIN, 248, false);
+        home_image(S("platform.thumbnail"), 57, 248);
+        lv_obj_t *summary = button(app.content, "", 0, 315, HOME_MAIN, 66, "home_history", false);
         lv_obj_set_style_bg_opa(summary, 0, 0);
         lv_obj_set_style_border_width(summary, 0, 0);
-        app.time_label = text(summary, "", 0, 10, 381, &font_ui_20, false);
-        app.status_label = text(summary, "", 342, 10, 180, &font_ui_20, false);
+        app.time_label = text(summary, "", 0, 10, 270, &font_ui_20, false);
+        app.status_label = text(summary, "", 290, 10, 180, &font_ui_20, false);
         right(app.status_label);
-        app.layer_label = text(summary, "", 0, 43, 381, &font_ui_14, true);
-        icon(summary, "history", 395, 48, 16, colour("a4aebb"));
-        text(summary, "Status history", 419, 43, 86, &font_ui_14, true);
-        icon(summary, "chevron-right", 506, 48, 16, colour("a4aebb"));
-        app.status_dot = box(summary, 440, 18, 6, 6, false);
+        app.layer_label = text(summary, "", 0, 43, 270, &font_ui_14, true);
+        icon(summary, "history", 343, 48, 16, colour("a4aebb"));
+        text(summary, "Status history", 367, 43, 86, &font_ui_14, true);
+        icon(summary, "chevron-right", 454, 48, 16, colour("a4aebb"));
+        app.status_dot = box(summary, 388, 18, 6, 6, false);
         lv_obj_set_style_radius(app.status_dot, 3, 0);
         lv_obj_set_style_border_width(app.status_dot, 0, 0);
         lv_obj_set_style_bg_color(app.status_dot, app.accent, 0);
         lv_label_set_long_mode(app.status_label, LV_LABEL_LONG_DOT);
         lv_obj_set_height(app.status_label, 28);
-        app.percent = text(app.content, "", 0, 332, 46, &font_ui_20, false);
+        app.percent = text(app.content, "", 0, 416, 46, &font_ui_20, false);
         app.progress = lv_bar_create(app.content);
-        lv_obj_set_pos(app.progress, 58, 342);
-        lv_obj_set_size(app.progress, 278, 7);
+        lv_obj_set_pos(app.progress, 58, 426);
+        lv_obj_set_size(app.progress, 224, 7);
         lv_obj_set_style_bg_color(app.progress, colour("29313d"), LV_PART_MAIN);
         lv_obj_set_style_bg_color(app.progress, app.accent, LV_PART_INDICATOR);
         lv_obj_set_style_bg_opa(app.progress, LV_OPA_COVER, LV_PART_MAIN);
         lv_obj_set_style_bg_opa(app.progress, LV_OPA_COVER, LV_PART_INDICATOR);
         lv_obj_set_style_radius(app.progress, 4, LV_PART_MAIN);
         lv_obj_set_style_radius(app.progress, 4, LV_PART_INDICATOR);
-        button(app.content, app.paused ? "icon:play" : "icon:pause", 348, 307, 50, 70,
+        button(app.content, app.paused ? "icon:play" : "icon:pause", 294, 391, 52, 70,
                app.paused ? "{\"action\":\"resume\"}" : "{\"action\":\"pause\"}", true);
-        button(app.content, "icon:skip-forward", 410, 307, 50, 70, "route:objects", false);
-        button(app.content, "icon:square", 472, 307, 50, 70, "cancel_print", false);
+        button(app.content, "icon:skip-forward", 356, 391, 52, 70, "route:objects", false);
+        button(app.content, "icon:square", 418, 391, 52, 70, "cancel_print", false);
     } else {
         const char *art = S("platform.printer_image");
-        if (*art) {
-            home_image(art, 19, 274);
-        } else {
-            box(app.content, 155, 19, 212, 274, false);
-            icon(app.content, "printer-3d", 244, 139, 34, colour("a4aebb"));
-        }
-        button_with_icon(app.content, "folder-open", "Print a file", 0, 307, 522, 70, "open_files",
-                         true);
+        if (*art)
+            home_image(art, 19, 362);
+        else
+            icon(app.content, "printer-3d", (HOME_MAIN - 44) / 2, 178, 44, colour("a4aebb"));
+        button_with_icon(app.content, "folder-open", "Print a file", 0, 391, HOME_MAIN, 70,
+                         "open_files", true);
     }
     int count = cJSON_GetArraySize(J("heaters"));
     if (count > 3)
         count = 3;
-    lv_obj_t *equipment = box(app.content, 540, 19, 138, 274, false);
-    lv_obj_set_style_border_width(equipment, 0, 0);
-    lv_obj_set_style_radius(equipment, 14, 0);
-    lv_obj_set_style_clip_corner(equipment, true, 0);
-    int h = count ? 274 / count : 91;
+    int rows = count + fitted();
+    int height = rows ? (350 - (rows - 1) * 10) / rows : 0;
     for (int i = 0; i < count; i++) {
         cJSON *heater = cJSON_GetArrayItem(J("heaters"), i);
         char act[100];
         snprintf(act, sizeof(act), "temperature:%s", jstr(heater, "key", ""));
-        int y = 19 + i * h, height = i == count - 1 ? 274 - i * h : h;
-        lv_obj_t *tile = button(equipment, "", 0, y - 19, 138, height, act, false);
-        lv_obj_set_style_radius(tile, 0, 0);
-        lv_obj_set_style_border_width(tile, i ? 1 : 0, 0);
-        lv_obj_set_style_border_side(tile, LV_BORDER_SIDE_TOP, 0);
-        lv_point_t title_size;
-        const char *title = jstr(heater, "label", "");
-        lv_txt_get_size(&title_size, title, &font_ui_14, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
-        int title_width = title_size.x < 94 ? title_size.x : 94;
-        int title_x = (138 - 24 - 8 - title_width) / 2;
+        lv_obj_t *tile = button(app.content, "", HOME_SIDE_X, 19 + i * (height + 10), HOME_SIDE_W,
+                                height, act, false);
+        const char *key = jstr(heater, "key", "");
         icon(tile,
-             i == 0   ? "nozzle"
-             : i == 1 ? "bed"
-                      : "chamber",
-             title_x, 15, 24, colour("a4aebb"));
-        lv_obj_t *heading = text(tile, title, title_x + 32, 19, title_width, &font_ui_14, true);
-        lv_label_set_long_mode(heading, LV_LABEL_LONG_DOT);
-        /* Separate arrow artwork aligns with the numbers' visual centre,
-         * independent of the text font's arrow-glyph baseline. */
-        app.current[i] = text(tile, "", 0, 48, 48, &font_ui_20, false);
-        app.target[i] = text(tile, "", 0, 48, 48, &font_ui_20, true);
-        icon(tile, "arrow-right", 0, 54, 16, colour("a4aebb"));
+             !strcmp(key, "extruder")     ? "nozzle"
+             : !strcmp(key, "heater_bed") ? "bed"
+                                          : "chamber",
+             10, (height - 34) / 2, 34, colour("a4aebb"));
+        app.current[i] = text(tile, "", 0, (height - 32) / 2, 54, &font_ui_24, false);
+        app.target[i] = text(tile, "", 0, (height - 32) / 2, 54, &font_ui_24, true);
+        icon(tile, "arrow-right", 0, (height - 16) / 2, 16, colour("a4aebb"));
         app.temperature_arrow[i] = lv_obj_get_child(tile, -1);
     }
-    lv_obj_t *light = button(app.content, "", 540, 307, 64, 70, "{\"action\":\"light\"}", false);
+    if (fitted())
+        home_cfs(19 + count * (height + 10), height);
+    lv_obj_t *light =
+        button(app.content, "", HOME_SIDE_X, 391, 90, 70, "{\"action\":\"light\"}", false);
     const char *light_path =
         S(B("status.output_pin chamber_led.value") ? "platform.icons.light_on"
                                                    : "platform.icons.light_off");
     if (*light_path)
-        image(light, light_path, 15, 15);
+        image(light, light_path, 0, 0);
     else
-        icon(light, B("status.output_pin chamber_led.value") ? "lightbulb" : "lightbulb-off", 20,
-             23, 24, colour("a4aebb"));
-    lv_obj_t *fans = button(app.content, "", 614, 307, 64, 70, "home_fans", false);
+        icon(light, B("status.output_pin chamber_led.value") ? "lightbulb" : "lightbulb-off", 0, 0,
+             28, colour("a4aebb"));
+    lv_obj_align(lv_obj_get_child(light, -1), LV_ALIGN_CENTER, 0, 0);
+    lv_obj_t *fans = button(app.content, "", HOME_SIDE_X + 100, 391, 90, 70, "home_fans", false);
     if (*S("platform.icons.home_fan"))
-        image(fans, S("platform.icons.home_fan"), 17, 20);
+        image(fans, S("platform.icons.home_fan"), 0, 0);
     else
-        icon(fans, "fan", 20, 23, 24, colour("a4aebb"));
-    if (fitted()) {
-        lv_obj_t *strip = button(app.content, "", 0, 391, 678, 70, "home_filament_strip", false);
-        const char *active = S("status.k2_cfs.active_slot");
-        if (!feeding_slot(active))
-            active = "";
-        cJSON *rec = slot_record(*active ? active : "E");
-        char label[150];
-        bool external = feeding_slot("E");
-        const char *name = *active    ? slot_label(active)
-                           : external ? "Spool holder"
-                                      : "No filament loaded";
-        const char *material_type = (*active || external) ? jstr(rec, "type", "") : "";
-        snprintf(label, sizeof(label), "%s%s%s", name, *material_type ? " · " : "", material_type);
-        icon(strip, "cfs", 0, 0, 34, colour("a4aebb"));
-        lv_obj_align(lv_obj_get_child(strip, -1), LV_ALIGN_LEFT_MID, 16, 0);
-        lv_obj_t *dot = box(strip, 0, 0, 10, 10, false);
-        lv_obj_align(dot, LV_ALIGN_LEFT_MID, 64, 0);
-        lv_obj_clear_flag(dot, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_set_style_radius(dot, 5, 0);
-        lv_obj_set_style_border_width(dot, 0, 0);
-        const char *material_colour = (*active || external) ? jstr(rec, "color", "") : "";
-        lv_obj_set_style_bg_color(dot, colour(*material_colour ? material_colour : "7b8594"), 0);
-        lv_obj_t *material = text(strip, label, 0, 0, 300, &font_ui_18, false);
-        lv_obj_align(material, LV_ALIGN_LEFT_MID, 86, 0);
-
-        /* One centre line for artwork, text and disclosure, independent of
-         * font metrics. Sensor groups are visually separate from the material. */
-        lv_obj_t *environment = lv_obj_create(strip);
-        lv_obj_remove_style_all(environment);
-        lv_obj_set_size(environment, 170, 34);
-        lv_obj_clear_flag(environment, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_align(environment, LV_ALIGN_RIGHT_MID, -40, 0);
-        char reading[40];
-        icon(environment, "thermometer", 0, 0, 20, colour("a4aebb"));
-        lv_obj_align(lv_obj_get_child(environment, -1), LV_ALIGN_LEFT_MID, 0, 0);
-        snprintf(reading, sizeof(reading), "%.0f°C", N("status.k2_cfs.temperature"));
-        lv_obj_t *temperature = text(environment, reading, 0, 0, 44, &font_ui_16, true);
-        lv_obj_align(temperature, LV_ALIGN_LEFT_MID, 26, 0);
-        icon(environment, "droplets", 0, 0, 20, colour("a4aebb"));
-        lv_obj_align(lv_obj_get_child(environment, -1), LV_ALIGN_LEFT_MID, 76, 0);
-        snprintf(reading, sizeof(reading), "%.0f%% RH", N("status.k2_cfs.humidity"));
-        lv_obj_t *humidity = text(environment, reading, 0, 0, 68, &font_ui_16, true);
-        lv_obj_align(humidity, LV_ALIGN_LEFT_MID, 102, 0);
-        icon(strip, "chevron-right", 0, 0, 20, colour("a4aebb"));
-        lv_obj_align(lv_obj_get_child(strip, -1), LV_ALIGN_RIGHT_MID, -12, 0);
-    }
+        icon(fans, "fan", 0, 0, 28, colour("a4aebb"));
+    lv_obj_align(lv_obj_get_child(fans, -1), LV_ALIGN_CENTER, 0, 0);
 }
 void views_refresh(void) {
     char value[180];
@@ -310,12 +324,12 @@ void views_refresh(void) {
         if (app.temperature_arrow[i]) {
             bool approaching = target > 0 && fabs(jnum(heater, "current", 0) - target) > 1.0;
             lv_point_t current_size, target_size;
-            lv_txt_get_size(&current_size, lv_label_get_text(app.current[i]), &font_ui_20, 0, 0,
+            lv_txt_get_size(&current_size, lv_label_get_text(app.current[i]), &font_ui_24, 0, 0,
                             LV_COORD_MAX, LV_TEXT_FLAG_NONE);
-            lv_txt_get_size(&target_size, lv_label_get_text(app.target[i]), &font_ui_20, 0, 0,
+            lv_txt_get_size(&target_size, lv_label_get_text(app.target[i]), &font_ui_24, 0, 0,
                             LV_COORD_MAX, LV_TEXT_FLAG_NONE);
             int width = current_size.x + (approaching ? 28 + target_size.x : 0);
-            int x = (138 - width) / 2;
+            int x = 46 + (132 - width) / 2;
             lv_obj_set_width(app.current[i], current_size.x);
             lv_obj_set_x(app.current[i], x);
             if (approaching) {
@@ -344,7 +358,7 @@ void views_refresh(void) {
         lv_point_t metrics;
         lv_txt_get_size(&metrics, state, &font_ui_20, 0, 0, 180, LV_TEXT_FLAG_NONE);
         if (app.status_dot)
-            lv_obj_set_x(app.status_dot, 522 - (metrics.x > 180 ? 180 : metrics.x) - 14);
+            lv_obj_set_x(app.status_dot, HOME_MAIN - (metrics.x > 180 ? 180 : metrics.x) - 14);
     }
     if (app.time_label) {
         double estimated = N("platform.estimated_time"),

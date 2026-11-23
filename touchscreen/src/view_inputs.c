@@ -9,7 +9,7 @@ typedef struct {
     const char *inputs[12];
 } ViewSpec;
 static const ViewSpec views[] = {
-    {"home", {"settings"}},
+    {"home", {"settings", "slots"}},
     {"move",
      {"settings", "status.toolhead.homed_axes", "status.stepper_enable",
       "status.extruder.can_extrude"}},

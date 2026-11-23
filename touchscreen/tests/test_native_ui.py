@@ -63,16 +63,16 @@ class NativeUI(unittest.TestCase):
    with self.subTest(page=page):
     _,commands=self.render(page);self.assertTrue(all(c['action']=='files' for c in commands))
 
- def test_idle_home_has_no_history_button_and_exact_cfs_strip(self):
+ def test_idle_home_has_no_history_button_and_right_column_cfs(self):
   items,_=self.render()
   self.assertFalse(any(item['action']=='route:history' for item in items))
-  self.assert_rect(items,'home_filament_strip',[103,391,678,70])
-  self.assert_rect(items,'open_files',[103,307,522,70])
-  self.assert_rect(items,'home_fans',[717,307,64,70])
-  self.assert_rect(items,'{"action":"light"}',[643,307,64,70])
+  self.assert_rect(items,'home_filament_strip',[591,289,190,80])
+  self.assert_rect(items,'open_files',[103,391,470,70])
+  self.assert_rect(items,'home_fans',[691,391,90,70])
+  self.assert_rect(items,'{"action":"light"}',[591,391,90,70])
 
- def test_cfs_strip_is_tappable_across_its_height(self):
-  for point in ([110,398],[440,426],[600,426],[700,426],[772,454]):
+ def test_cfs_shortcut_is_tappable_across_its_height(self):
+  for point in ([600,300],[650,325],[700,325],[772,350],[750,360]):
    with self.subTest(point=point):
     items,commands=self.render(actions=[{'tap':point}])
     self.assertTrue(any(item['action']=='edit_slot' for item in items))
@@ -368,17 +368,17 @@ class NativeUI(unittest.TestCase):
   self.assertFalse(any(item['action']=='error_ack' for item in items))
   self.assertTrue(any(item['action']=='open_files' for item in items))
 
- def test_home_sensor_and_light_widgets_update_from_live_snapshots(self):
+ def test_home_swatch_and_light_widgets_update_from_live_snapshots(self):
   from PIL import Image
   self.render()
   before=Image.open(self.path/'screen.ppm').copy()
   changed=copy.deepcopy(self.data)
-  changed['status']['k2_cfs'].update(temperature=31,humidity=42)
+  changed['slots'][0]['color']='E34C55'
   changed['status']['output_pin chamber_led']['value']=0
   self.render(actions=[{'snapshot':changed}])
   after=Image.open(self.path/'screen.ppm')
-  self.assertNotEqual(before.crop((510,391,780,461)).tobytes(),after.crop((510,391,780,461)).tobytes())
-  self.assertNotEqual(before.crop((643,307,707,377)).tobytes(),after.crop((643,307,707,377)).tobytes())
+  self.assertNotEqual(before.crop((591,289,781,369)).tobytes(),after.crop((591,289,781,369)).tobytes())
+  self.assertNotEqual(before.crop((591,391,681,461)).tobytes(),after.crop((591,391,681,461)).tobytes())
 
  def test_snapshot_between_press_and_queued_release_does_not_lose_navigation(self):
   items,commands=self.render('files',[{'queue_touch':[43,117,True]},
