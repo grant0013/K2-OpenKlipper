@@ -330,14 +330,14 @@ backend work. A single unit's environmental readings are not copied to other uni
 | --- | --- |
 | ![Restart Klipper](screenshots/restart-klipper.png) | ![Restart controller firmware](screenshots/restart-firmware.png) |
 
-## Optional print-failure detection
-
-K2 OpenKlipper's optional [failure watcher](../tools/ai-detect/) runs on an external
-PC. Its settings, including automatic pause, live in `/etc/default/k2-detect` on
-that PC. It does not expose a touchscreen settings API.
-
 ## For developers
 
 The [developer guide](developer-tools/README.md) covers architecture, builds,
 local previews, tests and packaging. Bundled [preview cases](developer-tools/fixtures/README.md)
 use synthetic data and work without connecting to a printer.
+
+### Contributing
+
+Report bugs and suggest improvements through [Issues](https://github.com/carmanspb/K2-OpenKlipper-Touchscreen/issues).
+Code changes go through pull requests reviewed by @carmanspb. See the
+[contribution guidelines](https://github.com/carmanspb/K2-OpenKlipper-Touchscreen/blob/main/CONTRIBUTING.md) before submitting a PR.
