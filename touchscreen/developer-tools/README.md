@@ -113,6 +113,8 @@ sh touchscreen/developer-tools/preview.sh --scenario idle
 sh touchscreen/developer-tools/preview.sh --scenario printing
 sh touchscreen/developer-tools/preview.sh --scenario heating
 sh touchscreen/developer-tools/preview.sh --scenario printing --page objects
+sh touchscreen/developer-tools/preview.sh --scenario multi-cfs --page filament
+sh touchscreen/developer-tools/preview.sh --scenario multi-cfs --page file
 
 sh touchscreen/developer-tools/preview.sh --scenario idle --page display
 sh touchscreen/developer-tools/preview.sh --scenario idle --page fans
@@ -123,6 +125,9 @@ sh touchscreen/developer-tools/preview.sh --scenario homing
 sh touchscreen/developer-tools/preview.sh --scenario wifi-connected --page wifi
 sh touchscreen/developer-tools/preview.sh --scenario wifi-failed --page wifi
 ```
+
+The `multi-cfs` scenario provides three CFS units, twelve present spools, mixed
+PLA/PETG/ASA materials, and three file-filament requirements for mapping.
 
 The printing and heating scenarios include three sample objects. Open the jump
 button on Home, or use `--page objects`, to preview object selection. The

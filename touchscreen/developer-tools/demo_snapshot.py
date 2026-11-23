@@ -135,6 +135,7 @@ def snapshot(printing=False):
 SCENARIOS = (
     "idle",
     "heated",
+    "multi-cfs",
     "heating",
     "empty-extruder",
     "printing",
@@ -226,6 +227,51 @@ def preview_scenario(name="idle", printing=False):
                 data["status"][key].update(temperature=temperature, target=temperature)
         data["status"]["extruder"]["can_extrude"] = True
         data["status"]["hark_chamber"]["requested"] = 45
+    if name == "multi-cfs":
+        data = preview_scenario("heated", printing)
+        palette = (
+            ("5035CE", "E34C55", "4F9F73", "EDCE52"),
+            ("1E88E5", "F5F5F5", "F39C12", "222222"),
+            ("D15AA5", "00A6A6", "8D6E63", "ABB2BC"),
+        )
+        records = []
+        for unit, (kind, temperature) in enumerate(
+            (("PLA", 220), ("PETG", 250), ("ASA", 260)), 1
+        ):
+            for letter, color in zip("ABCD", palette[unit - 1]):
+                records.append(
+                    {
+                        "slot": str(unit) + letter,
+                        "loaded": True,
+                        "type": kind,
+                        "name": "Demo " + kind,
+                        "color": color,
+                        "nozzle_temp": temperature,
+                    }
+                )
+        data["slots"] = records
+        data["cfs_units"] = 3
+        data["status"]["k2_cfs"]["active_slot"] = "1B"
+        data["status"]["filament_switch_sensor filament_sensor"] = {
+            "filament_detected": True
+        }
+        data["status"]["hark_cfs_slots"].update(
+            slots={
+                r["slot"]: {k: v for k, v in r.items() if k != "slot"} for r in records
+            },
+            map_targets=[r["slot"] for r in records] + ["E"],
+            map_tools=["T" + str(i) for i in range(12)],
+        )
+        data["materials"] = [
+            {"name": "Demo " + kind, "type": kind, "nozzle_temp": temperature}
+            for kind, temperature in (("PLA", 220), ("PETG", 250), ("ASA", 260))
+        ]
+        data["metadata"]["filaments"] = [
+            {"tool": i, "type": kind, "colour": palette[i][i]}
+            for i, kind in enumerate(("PLA", "PETG", "ASA"))
+        ]
+        data["metadata"]["suggested_mapping"] = {"0": "1A", "1": "2B", "2": "3C"}
+        data["availability"] = action_policy.availability(data["status"], True, [])
     if name in operations:
         action, detail = operations[name]
         data["operation"] = {
