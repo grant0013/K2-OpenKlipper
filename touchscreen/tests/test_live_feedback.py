@@ -51,6 +51,7 @@ class BackendFeedback(unittest.TestCase):
         )
 
     def test_slow_query_cannot_overwrite_newer_homing_subscription(self):
+        self.s.stream_connected = True
         self.s.merge_status({"toolhead": {"homed_axes": "xyz"}}, 20)
         stale = copy.deepcopy(self.state)
         stale["toolhead"]["homed_axes"] = ""

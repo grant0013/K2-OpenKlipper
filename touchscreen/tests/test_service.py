@@ -335,6 +335,69 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(choices[1]["cities"], "Kolkata")
         self.assertEqual(choices[1]["label"], "UTC+05:30")
 
+    def test_new_subscription_resets_remote_clock_and_rejects_old_http_response(self):
+        self.s.merge_status(
+            {"extruder": {"temperature": 240}, "toolhead": {"homed_axes": "xyz"}}, 9000
+        )
+        old_epoch = self.s.status_epoch
+        self.s.stream_message(
+            {
+                "result": {
+                    "eventtime": 5,
+                    "status": {
+                        "webhooks": {"state": "ready"},
+                        "extruder": {"temperature": 25},
+                        "toolhead": {"homed_axes": ""},
+                        "print_stats": {"state": "standby"},
+                    },
+                }
+            }
+        )
+        self.assertEqual(self.s.status["extruder"]["temperature"], 25)
+        self.assertEqual(self.s.status["toolhead"]["homed_axes"], "")
+        self.assertFalse(
+            self.s.merge_status(
+                {"extruder": {"temperature": 240}}, 9001, epoch=old_epoch
+            )
+        )
+        self.assertEqual(self.s.status["extruder"]["temperature"], 25)
+
+    def test_action_query_from_previous_connection_is_rejected(self):
+        def settings_after_reconnect():
+            self.s.stream_message(
+                {
+                    "result": {
+                        "eventtime": 5,
+                        "status": {
+                            "webhooks": {"state": "ready"},
+                            "print_stats": {"state": "standby"},
+                            "toolhead": {"homed_axes": ""},
+                        },
+                    }
+                }
+            )
+            return self.config
+
+        self.mr.settings.side_effect = settings_after_reconnect
+        with self.assertRaisesRegex(RuntimeError, "connection changed"):
+            self.run_action("jog", axis="X", value=1)
+        self.mr.run_gcode.assert_not_called()
+        self.assertEqual(self.s.status["toolhead"]["homed_axes"], "")
+
+    def test_http_fallback_recovers_after_remote_monotonic_clock_resets(self):
+        self.s.merge_status(
+            {"extruder": {"temperature": 240}, "toolhead": {"homed_axes": "xyz"}}, 9000
+        )
+        self.s.stream_connected = False
+        self.s.merge_status(
+            {"webhooks": {"state": "ready"}, "extruder": {"temperature": 25}},
+            5,
+            full=True,
+            clock_baseline=9000,
+        )
+        self.assertEqual(self.s.status["extruder"]["temperature"], 25)
+        self.assertNotIn("toolhead", self.s.status)
+
     def test_restart_invalidates_subscription_and_accepts_fresh_status(self):
         self.s.stream_connected = True
         with self.assertRaises(EOFError):

@@ -255,6 +255,7 @@ class Service:
         self.connected = False
         self.stream_connected = False
         self.status_times = {}
+        self.status_epoch = 0
         self.read_policy = storage.FilamentReadPolicy()
         self.filaments = []
         self.ready = False
@@ -312,11 +313,21 @@ class Service:
         )
 
     def fresh(self, idle=False):
+        with self.lock:
+            epoch = self.status_epoch
+            baseline = max(self.status_times.values(), default=float("-inf"))
         snapshot = self.mr.status_snapshot()
         settings = self.mr.settings()
         # A slower HTTP response must not overwrite newer subscription state.
-        self.merge_status(snapshot["status"], snapshot.get("eventtime"))
         with self.lock:
+            if not self.merge_status(
+                snapshot["status"],
+                snapshot.get("eventtime"),
+                full=True,
+                epoch=epoch,
+                clock_baseline=baseline,
+            ):
+                raise RuntimeError("Printer connection changed; retry the action.")
             status = {
                 key: dict(value) if isinstance(value, dict) else value
                 for key, value in self.status.items()
@@ -1346,8 +1357,36 @@ class Service:
                 )
         self.cfs_event_id = latest
 
-    def merge_status(self, delta, eventtime=None, full=False):
+    def merge_status(
+        self,
+        delta,
+        eventtime=None,
+        full=False,
+        epoch=None,
+        new_epoch=False,
+        clock_baseline=None,
+    ):
         with self.lock:
+            if epoch is not None and epoch != self.status_epoch:
+                return False
+            # A new subscription establishes an authoritative baseline. HTTP
+            # fallback also detects a remote reboot by its reset monotonic clock.
+            reset_clock = (
+                full
+                and not self.stream_connected
+                and eventtime is not None
+                and clock_baseline is not None
+                and eventtime < clock_baseline
+            )
+            if new_epoch or reset_clock:
+                self.status_epoch += 1
+                self.status_times.clear()
+                self.status.clear()
+                self.settings.clear()
+                self.requested_values.clear()
+                self.pending_temperatures.clear()
+                self.pending_fans.clear()
+                self.cfs_event_id = None
             initialized = bool(self.status)
             previous_file = self.status.get("print_stats", {}).get("filename", "")
             previous_state = self.status.get("print_stats", {}).get("state", "")
@@ -1407,6 +1446,7 @@ class Service:
             "state"
         ) in ("error", "shutdown"):
             self.wake_screen()
+        return True
 
     def stream_message(self, message):
         if "error" in message:
@@ -1424,7 +1464,9 @@ class Service:
                 self.event("Printer error", line[2:].strip(), fault=True)
         elif "result" in message and "status" in message["result"]:
             result = message["result"]
-            self.merge_status(result["status"], result.get("eventtime"), full=True)
+            self.merge_status(
+                result["status"], result.get("eventtime"), full=True, new_epoch=True
+            )
             self.stream_connected = True
         elif method in (
             "notify_klippy_shutdown",
@@ -1774,9 +1816,18 @@ class Service:
                 if not self.stream_connected or not self.status or now - full_at >= 5:
                     # CFS adds environment fields after its startup poll. Some
                     # Moonraker versions subscribe only to initially known keys.
+                    with self.lock:
+                        epoch = self.status_epoch
+                        baseline = max(
+                            self.status_times.values(), default=float("-inf")
+                        )
                     snapshot = self.mr.status_snapshot()
                     self.merge_status(
-                        snapshot["status"], snapshot.get("eventtime"), full=True
+                        snapshot["status"],
+                        snapshot.get("eventtime"),
+                        full=True,
+                        epoch=epoch,
+                        clock_baseline=baseline,
                     )
                     full_at = now
                 if now - config_at > 30 or not self.settings:
