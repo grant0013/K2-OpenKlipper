@@ -256,10 +256,13 @@ class NativeUI(unittest.TestCase):
   data=copy.deepcopy(self.data);data['status']['k2_cfs'].update(fitted=False,active_slot=None)
   data['cfs_units']=0
   items,_=self.render('filament',data=data)
-  self.assert_rect(items,'slot:E',[377,88,126,240])
+  self.assert_rect(items,'edit_slot',[103,110,673,247])
+  self.assertFalse(any(item['action'] in ('load','unload') for item in items))
+  edited,commands=self.render('filament',['edit_slot'],data)
+  self.assertTrue(any(item['action']=='draft_temperature' for item in edited))
+  self.assertEqual(commands,[])
   self.assertFalse(any(item['action']=='units' for item in items))
   self.assertFalse(any(item['action']=='route:refill' for item in items))
-  self.assertTrue(any(item['action']=='slot:E' for item in items))
   data=copy.deepcopy(self.data)
   for unit in (2,3):
    for letter in 'ABCD':data['slots'].append(dict(data['slots'][0],slot=str(unit)+letter))

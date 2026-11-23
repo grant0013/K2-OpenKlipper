@@ -597,6 +597,23 @@ static void filament_view(void) {
                        "route:home");
         return;
     }
+    if (!fitted()) {
+        snprintf(app.selected_slot, sizeof(app.selected_slot), "E");
+        cJSON *record = slot_record("E");
+        lv_obj_t *tile = button(app.content, "", 0, 110, 673, 247, "edit_slot", false);
+        const char *name = jstr(record, "name", "Spool holder");
+        lv_point_t metrics;
+        lv_txt_get_size(&metrics, name, &font_ui_24, 0, 0, 250, LV_TEXT_FLAG_NONE);
+        int group_width = 62 + 28 + metrics.x + 28 + 16;
+        int start = (lv_obj_get_width(tile) - group_width) / 2;
+        spool_widget(tile, start, 92, 62, jstr(record, "color", "828b98"));
+        text(tile, name, start + 90, 93, metrics.x + 2, &font_ui_24, false);
+        centered(text(tile, "Spool holder", start + 90, 135, metrics.x + 2, &font_ui_14, true));
+        icon(tile, "chevron-right", start + group_width - 16, 115, 16, colour("a4aebb"));
+        if (feeding_slot("E"))
+            icon(tile, "nozzle", (673 - 24) / 2, 200, 24, colour("f0f3f7"));
+        return;
+    }
     int boxes = 0;
     char groups[16][16] = {{0}};
     cJSON *r;
