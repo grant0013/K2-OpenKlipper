@@ -208,6 +208,34 @@ class UIReview(unittest.TestCase):
             preview.preview_scenario("usb-ejected")["platform"]["usb"]["ejected"]
         )
 
+    def test_printing_history_is_in_centered_status_area(self):
+        data = copy.deepcopy(self.data)
+        data["status"]["print_stats"]["state"] = "printing"
+        for stage in (
+            "Printing",
+            "Waiting for the heated bed to settle before continuing with the print preparation sequence",
+        ):
+            data["print_stage"] = stage
+            items, _ = self.render("home", data=data)
+            history = [i for i in items if i["action"] == "route:history"]
+            self.assertEqual(len(history), 1)
+            self.assertEqual(history[0]["rect"], [103, 289, 470, 80])
+            image = Image.open(self.path / "screen.ppm").convert("RGB")
+            rows = [
+                y
+                for y in range(289, 369)
+                if any(
+                    all(v > 175 for v in image.getpixel((x, y)))
+                    for x in range(103, 515)
+                )
+            ]
+            self.assertTrue(rows)
+            self.assertLessEqual(abs((min(rows) + max(rows)) / 2 - 329), 3)
+            if stage != "Printing":
+                self.assertGreater(max(rows) - min(rows), 30)
+        items, _ = self.render("home", [{"tap": [310, 330]}], data=data)
+        self.assertFalse(any(i["action"] == "cancel_print" for i in items))
+
     def test_steps_disabled_when_unhomed_or_homing(self):
         data = copy.deepcopy(self.data)
         data["status"]["toolhead"]["homed_axes"] = ""
@@ -314,6 +342,26 @@ class UIReview(unittest.TestCase):
             any(
                 "usb_eject" in i["action"] or i["action"] == "usb_format" for i in items
             )
+        )
+
+    def test_password_caret_blinks_without_covering_placeholder(self):
+        initial = ['wifi_select:{"ssid":"Demo","secured":true}']
+        self.render("networks", initial)
+        first = Image.open(self.path / "screen.ppm").convert("RGB")
+        # The caret is at x=33; the first hint letter begins after the gap.
+        self.assertTrue(any(first.getpixel((33, y))[0] > 180 for y in range(89, 125)))
+        self.assertTrue(all(first.getpixel((x, 108))[0] < 80 for x in range(37, 47)))
+        self.render("networks", initial + [{"snapshot": self.data} for _ in range(30)])
+        later = Image.open(self.path / "screen.ppm").convert("RGB")
+        self.assertNotEqual(
+            first.crop((32, 88, 36, 126)).tobytes(),
+            later.crop((32, 88, 36, 126)).tobytes(),
+        )
+        self.render("networks", initial + ["key:q"])
+        typed = Image.open(self.path / "screen.ppm").convert("RGB")
+        self.assertNotEqual(
+            first.crop((48, 90, 210, 125)).tobytes(),
+            typed.crop((48, 90, 210, 125)).tobytes(),
         )
 
     def test_shift_is_one_shot_and_double_tap_locks_capitals(self):

@@ -227,12 +227,16 @@ void view_home(void) {
         lv_obj_t *name = text(app.content, display_name, 14, 31, HOME_MAIN - 28, &font_ui_17, true);
         lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
         lv_obj_set_height(name, 26);
-        app.time_label = text(app.content, "", 14, 247, 270, &font_ui_17, false);
-        app.layer_label = text(app.content, "", 286, 249, 170, &font_ui_14, true);
+        app.time_label = text(app.content, "", 14, 247, 230, &font_ui_17, false);
+        app.layer_label = text(app.content, "", 248, 249, 208, &font_ui_14, true);
         right(app.layer_label);
-        app.status_label = text(app.content, "", 0, 297, HOME_MAIN, &font_ui_20, false);
+        lv_obj_t *status = button(app.content, "", 0, 289, HOME_MAIN, 80, "route:history", false);
+        lv_obj_set_style_bg_opa(status, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(status, 0, 0);
+        app.status_label = text(status, "", 0, 0, HOME_MAIN - 52, &font_ui_20, false);
         lv_label_set_long_mode(app.status_label, LV_LABEL_LONG_DOT);
-        lv_obj_set_height(app.status_label, 60);
+        lv_obj_set_style_max_height(app.status_label, 56, 0);
+        icon(status, "history", HOME_MAIN - 36, 26, 28, colour("a4aebb"));
         app.percent = text(app.content, "", 0, 416, 46, &font_ui_20, false);
         app.progress = lv_bar_create(app.content);
         lv_obj_set_pos(app.progress, 58, 426);
@@ -353,7 +357,12 @@ void views_refresh(void) {
         const char *state = app.paused     ? "Paused"
                             : app.printing ? (*S("print_stage") ? S("print_stage") : "Printing")
                                            : "Stopped";
+        lv_point_t size;
+        lv_txt_get_size(&size, state, &font_ui_20, 0, 0, HOME_MAIN - 52, LV_TEXT_FLAG_NONE);
+        lv_obj_set_height(app.status_label, size.y > 56 ? 56 : size.y);
         lv_label_set_text(app.status_label, state);
+        lv_obj_update_layout(app.status_label);
+        lv_obj_align(app.status_label, LV_ALIGN_LEFT_MID, 0, 0);
     }
     if (app.time_label) {
         double estimated = N("platform.estimated_time"),
@@ -365,11 +374,11 @@ void views_refresh(void) {
             else
                 snprintf(value, sizeof(value), "%d min remaining", minutes);
         } else
-            snprintf(value, sizeof(value), "Time remaining unavailable");
+            snprintf(value, sizeof(value), "— remaining");
         lv_label_set_text(app.time_label, value);
     }
     if (app.layer_label) {
-        snprintf(value, sizeof(value), "Layer %.0f of %.0f",
+        snprintf(value, sizeof(value), "Layer %.0f / %.0f",
                  N("status.print_stats.info.current_layer"),
                  N("status.print_stats.info.total_layer"));
         lv_label_set_text(app.layer_label, value);
@@ -2011,13 +2020,18 @@ static void keyboard_draw(void) {
     lv_obj_add_state(keyboard_input, LV_STATE_FOCUSED);
     lv_obj_set_style_text_color(keyboard_input, colour("828b98"), LV_PART_TEXTAREA_PLACEHOLDER);
     lv_obj_set_style_bg_color(keyboard_input, colour("f0f3f7"), LV_PART_CURSOR);
-    lv_obj_set_style_bg_opa(keyboard_input, LV_OPA_COVER, LV_PART_CURSOR);
+    lv_obj_set_style_bg_opa(keyboard_input, LV_OPA_TRANSP, LV_PART_CURSOR);
+    lv_obj_set_style_border_side(keyboard_input, LV_BORDER_SIDE_LEFT, LV_PART_CURSOR);
+    lv_obj_set_style_border_width(keyboard_input, 2, LV_PART_CURSOR);
+    lv_obj_set_style_border_color(keyboard_input, colour("f0f3f7"), LV_PART_CURSOR);
     lv_obj_set_style_width(keyboard_input, 2, LV_PART_CURSOR);
+    lv_obj_set_style_anim_time(keyboard_input, 500, LV_PART_CURSOR);
+    lv_textarea_set_cursor_pos(keyboard_input, LV_TEXTAREA_CURSOR_LAST);
 
     lv_textarea_set_password_mode(keyboard_input,
                                   !strcmp(app.keyboard_kind, "wifi") && !app.password_visible);
     if (!strcmp(app.keyboard_kind, "wifi")) {
-        lv_textarea_set_placeholder_text(keyboard_input, "Wi-Fi password");
+        lv_textarea_set_placeholder_text(keyboard_input, "  Wi-Fi password");
         lv_textarea_set_max_length(keyboard_input, 63);
         lv_obj_t *eye = keyboard_key(app.password_visible ? "icon:eye" : "icon:eye-off", "key_eye",
                                      710, 76, 64, 64, false);

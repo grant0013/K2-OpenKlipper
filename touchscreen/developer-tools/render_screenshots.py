@@ -117,6 +117,8 @@ def main():
             ("wifi-connecting", "wifi", "wifi-connecting", []),
             ("usb-ejected", "storage", "usb-ejected", []),
             ("printing-long", "home", "printing-long", []),
+            ("printing-extreme", "home", "printing-extreme", []),
+            ("printing-status", "home", "printing-status", []),
             ("dark-preview", "home", "dark-preview", []),
         ]
         for name, page, scenario, actions in cases:

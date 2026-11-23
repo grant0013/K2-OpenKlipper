@@ -115,7 +115,10 @@ trash control must never open the print-file screen underneath it.
 
 Navigation remains a fixed group above a separate activity area. Activity uses
 short explicit captions limited to two lines (e.g. Loading / filament), never an
-unbounded operation description. The same sidebar area opens history while idle. Print preparation stays on Home;
+unbounded operation description. The same sidebar area opens status history while idle. Printing Home exposes
+history through its full status row and omits the duplicate sidebar control. The
+row centers one or two lines beside CFS and truncates overflow with an ellipsis.
+Print preparation stays on Home;
 file deletion results take precedence on file pages.
 
 Moonraker file-delete API reference:

@@ -156,6 +156,8 @@ SCENARIOS = (
     "wifi-connecting",
     "usb-ejected",
     "printing-long",
+    "printing-extreme",
+    "printing-status",
     "dark-preview",
     "wifi-connected",
     "wifi-failed",
@@ -165,6 +167,7 @@ SCENARIOS = (
 def preview_scenario(name="idle", printing=False):
     data = snapshot(printing or name in ("printing", "heating"))
     data["platform"].update(
+        estimated_time=4500,
         printer_image=str(FIXTURES / "assets/demo-printer-combo.png"),
         thumbnail=str(ROOT / "developer-tools/fixtures/assets/demo-part.png"),
         file_thumbnail=str(ROOT / "developer-tools/fixtures/assets/demo-part.png"),
@@ -288,7 +291,7 @@ def preview_scenario(name="idle", printing=False):
         ]
         data["metadata"]["suggested_mapping"] = {"0": "1A", "1": "2B", "2": "3C"}
         data["availability"] = action_policy.availability(data["status"], True, [])
-    if name in ("printing-long", "dark-preview"):
+    if name in ("printing-long", "printing-extreme", "printing-status", "dark-preview"):
         data = preview_scenario("printing")
         data["platform"]["estimated_time"] = (
             data["status"]["print_stats"]["print_duration"] + 8100
@@ -296,6 +299,18 @@ def preview_scenario(name="idle", printing=False):
         if name == "dark-preview":
             image = str(ROOT / "developer-tools/fixtures/assets/demo-part-dark.png")
             data["platform"].update(thumbnail=image, file_thumbnail=image)
+    if name == "printing-extreme":
+        data["platform"]["estimated_time"] = (
+            data["status"]["print_stats"]["print_duration"] + 35999940
+        )
+        data["status"]["print_stats"]["info"] = {
+            "current_layer": 999999,
+            "total_layer": 999999,
+        }
+    if name == "printing-status":
+        data["print_stage"] = (
+            "Preparing the printer: waiting for the bed temperature to stabilize before the next operation begins"
+        )
     if name == "calibrating":
         data["operation"] = {
             "id": 1,

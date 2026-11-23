@@ -1,0 +1,7 @@
+{
+  "description": "Multi-line print status with ellipsis.",
+  "scenario": "printing-status",
+  "page": "home",
+  "printer_image": "assets/demo-printer-combo.png",
+  "actions": []
+}

@@ -1,13 +1,19 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="400" height="520" viewBox="0 0 400 520" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Cabinet and CFS share an oblique projection: depth is +29 x, -20 y. -->
   <g id="cfs" stroke="#8795a7" stroke-width="3">
-    <path d="M112 96V46Q112 18 140 18H266Q294 18 294 46V96" fill="#273241"/>
-    <path d="M112 46Q112 18 140 18H266Q294 18 294 46V82H112Z" fill="#1b2531"/>
-    <g stroke-width="5"><ellipse cx="142" cy="56" rx="14" ry="28" stroke="#7256ed"/><ellipse cx="183" cy="56" rx="14" ry="28" stroke="#e34c55"/><ellipse cx="224" cy="56" rx="14" ry="28" stroke="#4f9f73"/><ellipse cx="265" cy="56" rx="14" ry="28" stroke="#edce52"/></g>
-    <path d="M106 82H300V110H106Z" fill="#313e4e"/><rect x="187" y="91" width="32" height="10" rx="2" fill="#75869b" stroke="none"/>
+    <path d="M106 58Q106 30 134 30H272Q300 30 300 58L329 38Q329 10 301 10H163Q135 10 135 38Z" fill="#344252"/>
+    <path d="M300 58 329 38V90L300 110Z" fill="#273442"/>
+    <path d="M106 58Q106 30 134 30H272Q300 30 300 58V84H106Z" fill="#1b2531"/>
+    <g stroke-width="4"><ellipse cx="136" cy="59" rx="13" ry="23" stroke="#7256ed"/><ellipse cx="180" cy="59" rx="13" ry="23" stroke="#e34c55"/><ellipse cx="224" cy="59" rx="13" ry="23" stroke="#4f9f73"/><ellipse cx="268" cy="59" rx="13" ry="23" stroke="#edce52"/></g>
+    <path d="M106 84H300V110H106Z" fill="#313e4e"/>
+    <path d="M300 84 329 64" stroke="#64788f"/>
+    <rect x="187" y="91" width="32" height="10" rx="2" fill="#75869b" stroke="none"/>
+    <path d="M112 110V126H294V110" fill="#202d3b"/>
   </g>
   <g stroke="#8795a7" stroke-width="3">
-    <path d="M72 131 319 131 348 151V475L319 490H72Z" fill="#1a2430"/>
-    <path d="M319 131V490L348 475V151Z" fill="#273442"/>
+    <path d="M72 131 101 111H348V470L319 490H72Z" fill="#1a2430"/>
+    <path d="M319 131 348 111V470L319 490Z" fill="#273442"/>
+    <path d="M72 131 101 111H348L319 131Z" fill="#3b4b5d"/>
     <rect x="72" y="131" width="247" height="359" rx="6" fill="#303d4c"/>
     <rect x="87" y="171" width="216" height="281" rx="4" fill="#101923"/>
     <path d="M110 204V426M281 204V426" stroke="#64788f" stroke-width="5"/>

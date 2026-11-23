@@ -1047,12 +1047,17 @@ static void navigation(void) {
         snprintf(nav_icon, sizeof(nav_icon), "nav-%s", names[i]);
         icon(b, nav_icon, 5, 6, 56, i == current ? app.accent : fg);
     }
+    /* Home already exposes history in the print status area. Other pages keep
+     * their contextual operation feedback and history access. */
+    if (!strcmp(app.route, "home") &&
+        (app.printing || app.paused || !strcmp(S("status.print_stats.state"), "error")))
+        return;
     cJSON *operation = sidebar_operation();
     lv_obj_t *activity =
         button_fixed(app.nav, "", 4, 391, 76, 70, "route:history", !strcmp(app.route, "history"));
     lv_obj_set_style_bg_opa(activity, 0, 0);
     lv_obj_set_style_border_width(activity, 0, 0);
-    const char *caption = "History";
+    const char *caption = "Status\nhistory";
     if (cJSON_IsObject(operation)) {
         lv_obj_t *spinner = lv_spinner_create(activity, 1000, 60);
         lv_obj_set_pos(spinner, 26, 6);

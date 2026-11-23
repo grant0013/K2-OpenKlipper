@@ -24,7 +24,8 @@ its installed firmware components.
 
 - See the model preview, remaining hours/minutes, layer count and progress.
 - Pause or stop the print, or select failed objects to skip.
-- Tap the sidebar history icon to review printer messages; the Home status row shows print preparation.
+- Tap the print status area or its history icon to review printer messages.
+- Print status is centered beside CFS and supports two lines, with an ellipsis for longer messages.
 - Check spool colors and the feeding-filament marker in the CFS shortcut.
 
 ![Home during a print](screenshots/home.png)
@@ -329,6 +330,18 @@ the repository.
 | --- | --- |
 | ![Scanning for Wi-Fi](screenshots/wifi-scanning.png) | ![Connecting to Wi-Fi](screenshots/wifi-connecting.png) |
 
-The password keyboard uses one-shot Shift; double-tap Shift for capitals until
+The password field has a blinking caret and a muted hint that disappears when
+you type. The password keyboard uses one-shot Shift; double-tap Shift for capitals until
 you tap it again. Restart controls remain available during a print, with a warning
 that the print cannot continue.
+
+| Long print and high layer counts | Long print status |
+| --- | --- |
+| ![Long print with six-digit layers](screenshots/printing-extreme.png) | ![Two-line status and history access](screenshots/printing-status.png) |
+
+### Optional print-failure detection
+
+K2 OpenKlipper includes an optional failure watcher for an external PC, using
+Obico and a local vision model. Its settings, including automatic pause, live on
+that PC in `/etc/default/k2-detect`. It does not expose a touchscreen settings
+API. See [the upstream watcher implementation](../tools/ai-detect/) for setup.
