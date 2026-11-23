@@ -405,6 +405,10 @@ class K2CFS:
         if 0. < self.runout_purge_length < 30.:
             raise config.error(
                 "runout_purge_length must be 0 or 30-240 (CFS_PURGE SHORT)")
+        # Purge before every RESUME (mm), as stock RESUME_EXTERNAL (82 mm,
+        # 2 of them refill its pause retract, which ours doesn't do). 0 = off
+        self.resume_purge_length = config.getfloat(
+            'resume_purge_length', 80., minval=0., maxval=240.)
         self.cutter_y = config.getfloat('cutter_y', 150.)
         self.cutter_speed = config.getfloat(
             'cutter_speed', 100., above=0.)
@@ -632,6 +636,9 @@ class K2CFS:
         self.gcode.register_command(
             'CFS_PURGE_RETURN', self.cmd_CFS_PURGE_RETURN,
             desc="Leave the K2 purge bucket using the stock safe route")
+        self.gcode.register_command(
+            'RESUME_PURGE', self.cmd_RESUME_PURGE,
+            desc="Before a resume: purge at the chute, cool and wipe")
         self.gcode.register_command(
             'NOZZLE_WIPE', self.cmd_NOZZLE_WIPE,
             desc="Wipe the nozzle on the K2 rear silicone cleaner")
@@ -1605,6 +1612,28 @@ class K2CFS:
         gcmd.respond_info(
             "CFS purge return reached: X%.3f Y%.3f"
             % (self.purge_return_x, self.purge_safe_y))
+
+    def cmd_RESUME_PURGE(self, gcmd):
+        # Stock RESUME_EXTERNAL: before every resume push filament through
+        # at the chute (fan off), let the strand set under the fan, wipe.
+        # The nozzle may have oozed, cooled or got fresh filament by hand.
+        length = gcmd.get_float('LENGTH', self.resume_purge_length,
+                                minval=0., maxval=240.)
+        if not length:
+            return
+        self._require_hot_extruder(gcmd)
+        self._raise_to_gate()
+        self._ensure_purge_position(gcmd)
+        fans = self._fan_speeds()
+        try:
+            self.gcode.run_script_from_command(
+                "M83\nM106 S0\nG1 E%.3f F%.3f\nM400\nM106 S%d\nG4 P%d"
+                % (length, self.purge_extrude_speed * 60.,
+                   round(self.purge_cool_fan * 255.),
+                   self.purge_cool_time * 1000.))
+            self.gcode.run_script_from_command("NOZZLE_WIPE CONFIRM=1")
+        finally:
+            self._set_fans(fans)
 
     def cmd_NOZZLE_WIPE(self, gcmd):
         position = self._require_safe_motion(gcmd, "NOZZLE_WIPE")

@@ -173,11 +173,16 @@ class ResumeLoadTest(unittest.TestCase):
         self.assertLess(out.index("M109 S250.0"), out.index("_RESUME_LOAD"))
         self.assertLess(out.index("_RESUME_LOAD"), out.index("RESUME_BASE"))
 
-    def test_filament_present_loads_nothing(self):
-        self.assertEqual(render("_RESUME_LOAD", paused(detected=True)), [])
+    def test_filament_present_purges_and_wipes_only(self):
+        # Stock purges and wipes on every resume
+        out = render("_RESUME_LOAD", paused(detected=True))
+        self.assertIn("RESUME_PURGE CONFIRM=1", out)
+        self.assertNotIn("CFS_RUNOUT_REFILL", " ".join(out))
 
     def test_a_disabled_sensor_is_not_believed(self):
-        self.assertEqual(render("_RESUME_LOAD", paused(enabled=False)), [])
+        out = render("_RESUME_LOAD", paused(enabled=False))
+        self.assertIn("RESUME_PURGE CONFIRM=1", out)
+        self.assertNotIn("CFS_RUNOUT_REFILL", " ".join(out))
 
     def test_only_from_a_pause(self):
         self.assertEqual(render("_RESUME_LOAD", paused(state="printing")), [])
