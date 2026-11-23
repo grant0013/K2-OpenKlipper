@@ -133,7 +133,9 @@ returns to the previous page automatically.
 - With one CFS, all five spool tiles share the same height, with temperature and
   humidity centered below them. No unit selector is shown. With multiple reported
   units, two to four selectors share the available width; the spool holder remains separate.
-- Without CFS, edit the spool-holder card and feed filament manually. Load/Unload
+- Without CFS, the home screen shows a spool-holder shortcut in place of CFS.
+  Save its material and color before mapping it to a print; an unconfigured spool
+  cannot be selected. Edit the spool-holder card and feed filament manually. Load/Unload
   buttons are hidden. **Reset** in any spool editor removes its saved details
   with confirmation; it does not move or unload filament.
 

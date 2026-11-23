@@ -1,5 +1,5 @@
 {
-  "description": "Idle printer without CFS; the CFS shortcut is hidden.",
+  "description": "Idle printer without CFS; the home shortcut opens the spool holder.",
   "scenario": "idle",
   "page": "home",
   "printer_image": "assets/demo-printer-only.png",

@@ -207,6 +207,19 @@ static void home_cfs(int top, int height) {
     if (!total)
         text(tile, "No slots", 62, (height - 20) / 2, 116, &font_ui_18, true);
 }
+static void home_spool(int top, int height) {
+    cJSON *record = slot_record("E");
+    bool known = known_slot(record);
+    lv_obj_t *tile =
+        button(app.content, "", HOME_SIDE_X, top, HOME_SIDE_W, height, "route:filament", false);
+    spool_widget(tile, 13, (height - 36) / 2, 36,
+                 known ? jstr(record, "color", "828b98") : "596371");
+    text(tile, "Spool holder", 62, height / 2 - 23, 118, &font_ui_16, false);
+    lv_obj_t *details = text(tile, known ? jstr(record, "type", "") : "Set details", 62,
+                             height / 2 + 3, 118, &font_ui_16, true);
+    lv_label_set_long_mode(details, LV_LABEL_LONG_DOT);
+    lv_obj_set_height(details, 23);
+}
 static void file_title(char *out, size_t size, const char *path) {
     const char *base = strrchr(path, '/');
     snprintf(out, size, "%s", base ? base + 1 : path);
@@ -282,7 +295,7 @@ void view_home(void) {
     int count = cJSON_GetArraySize(J("heaters"));
     if (count > 3)
         count = 3;
-    int rows = count + fitted();
+    int rows = count + 1;
     int height = rows ? (350 - (rows - 1) * 10) / rows : 0;
     for (int i = 0; i < count; i++) {
         cJSON *heater = cJSON_GetArrayItem(J("heaters"), i);
@@ -303,6 +316,8 @@ void view_home(void) {
     }
     if (fitted())
         home_cfs(19 + count * (height + 10), height);
+    else
+        home_spool(19 + count * (height + 10), height);
     lv_obj_t *light =
         button(app.content, "", HOME_SIDE_X, 391, 90, 70, "{\"action\":\"light\"}", false);
     icon(light, B("status.output_pin chamber_led.value") ? "lightbulb" : "lightbulb-off", 0, 0, 28,
