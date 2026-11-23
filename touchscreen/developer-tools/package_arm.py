@@ -48,6 +48,8 @@ def main():
     (package / binary.name).chmod(0o755)
     for source in (ROOT / "assets/generated").glob("*.png"):
         shutil.copy2(source, package / "assets" / source.name)
+    for source in (ROOT / "assets").glob("printer-*.png"):
+        shutil.copy2(source, package / "assets" / source.name)
     for source in (ROOT / "assets").glob("*-LICENSE"):
         shutil.copy2(source, package / "licenses" / source.name)
     for source in (args.build / "licenses").glob("*"):

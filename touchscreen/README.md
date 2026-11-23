@@ -14,7 +14,7 @@ its installed firmware components.
 
 ### Home: ready to print
 
-- See the printer illustration when idle.
+- See the original printer illustration when idle, with or without CFS automatically.
 - Tap a temperature tile to set its target.
 - Open files, filament controls or fans, and switch the light.
 

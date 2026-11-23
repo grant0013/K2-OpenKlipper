@@ -5,7 +5,8 @@ project-authored artwork, not a saved printer configuration.
 
 - `cases/`: small JSON recipes naming a scenario, opening page and optional clicks.
 - `assets/`: the example three-part print and printer illustrations, as SVG sources
-  and ready-to-use PNGs. `demo-printer.svg` also produces the version without CFS.
+  and ready-to-use PNGs. The shared printer SVG lives in `touchscreen/assets/printer.svg`
+  and produces both CFS variants for the runtime and previews.
 
 Run a case from the repository root:
 

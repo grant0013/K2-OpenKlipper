@@ -27,14 +27,19 @@ def render(source, destination):
 
 def main():
     render(ASSETS / "demo-part.svg", ASSETS / "demo-part.png")
-    render(ASSETS / "demo-printer.svg", ASSETS / "demo-printer-combo.png")
-    tree = ET.parse(ASSETS / "demo-printer.svg")
+    render(ASSETS.parents[2] / "assets/printer.svg", ASSETS / "demo-printer-combo.png")
+    render(
+        ASSETS.parents[2] / "assets/printer.svg",
+        ASSETS.parents[2] / "assets/printer-with-cfs.png",
+    )
+    tree = ET.parse(ASSETS.parents[2] / "assets/printer.svg")
     root = tree.getroot()
     root.remove(next(child for child in root if child.get("id") == "cfs"))
     with tempfile.TemporaryDirectory(prefix="native-fixture-art-") as directory:
         source = Path(directory) / "printer.svg"
         tree.write(source, encoding="unicode")
         render(source, ASSETS / "demo-printer-only.png")
+        render(source, ASSETS.parents[2] / "assets/printer-without-cfs.png")
 
 
 if __name__ == "__main__":

@@ -1280,14 +1280,15 @@ class Service:
             path = Path(source)
             if not path.is_absolute():
                 path = self.config_path.parent / path
-            signature = (str(path), path.stat().st_mtime)
-            if signature != self.artwork_key:
-                self.platform["printer_image"] = storage.prepare_image(
-                    path, self.cache_path, "printer", (400, 286), lighten=True
-                )
-                self.artwork_key = signature
         else:
-            self.platform.pop("printer_image", None)
+            filename = "printer-with-cfs.png" if cfs else "printer-without-cfs.png"
+            path = Path(__file__).resolve().parents[1] / "assets" / filename
+        signature = (str(path), path.stat().st_mtime)
+        if signature != self.artwork_key:
+            self.platform["printer_image"] = storage.prepare_image(
+                path, self.cache_path, "printer", (400, 286), lighten=True
+            )
+            self.artwork_key = signature
 
     def file_thumbnails(self, files, generation=None):
         for item in files:

@@ -76,6 +76,24 @@ class ServiceTests(unittest.TestCase):
     def run_action(self, action, **kw):
         return self.s.execute(dict(action=action, **kw))
 
+    def test_bundled_printer_artwork_switches_with_cfs_presence(self):
+        self.s.prepare_artwork()
+        with_cfs = self.s.platform["printer_image"]
+        self.assertTrue(Path(with_cfs).is_file())
+        self.assertEqual(Path(self.s.artwork_key[0]).name, "printer-with-cfs.png")
+        self.s.status["k2_cfs"]["fitted"] = False
+        self.s.prepare_artwork()
+        self.assertNotEqual(self.s.platform["printer_image"], with_cfs)
+        self.assertEqual(Path(self.s.artwork_key[0]).name, "printer-without-cfs.png")
+        self.s.status["k2_cfs"]["fitted"] = True
+        self.s.prepare_artwork()
+        self.assertEqual(self.s.platform["printer_image"], with_cfs)
+
+    def test_custom_printer_artwork_remains_supported(self):
+        self.s.config.set("brand", "status_image", str(ROOT / "assets/printer-without-cfs.png"))
+        self.s.prepare_artwork()
+        self.assertEqual(Path(self.s.artwork_key[0]).name, "printer-without-cfs.png")
+
     def test_limits_change_without_model_assumptions(self):
         self.run_action("temperature", heater="extruder", value=350)
         self.mr.run_gcode.assert_called_with("M104 S350")
