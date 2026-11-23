@@ -59,7 +59,8 @@ material mismatches block Start print. Long lists scroll by touch.
 ## Files and recordings
 
 Browse printer files and review a file before printing. Each list row has a trash
-icon with a filename-specific Cancel/OK confirmation. Saved time-lapse recordings
+icon with a filename-specific Cancel/OK confirmation. Other files can be deleted
+during printing; the active print file is protected. Saved time-lapse recordings
 use the same deletion flow and can be exported to USB when the time-lapse
 component and a USB drive are available.
 

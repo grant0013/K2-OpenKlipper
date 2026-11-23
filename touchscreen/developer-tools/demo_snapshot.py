@@ -88,7 +88,15 @@ def snapshot(printing=False):
         }
         service.materials = [{"name": "Demo PLA", "type": "PLA", "nozzle_temp": 220}]
         service.files = [
-            {"path": "Demo print.gcode", "modified": 1700000000, "size": 10000}
+            {"path": path, "modified": 1700000000 - i * 3600, "size": 10000 + i * 1000}
+            for i, path in enumerate(
+                (
+                    "Demo print.gcode",
+                    "Storage tray.gcode",
+                    "Cable clips.gcode",
+                    "Tool stand.gcode",
+                )
+            )
         ]
         service.selected_file = "Demo print.gcode"
         service.metadata[service.selected_file] = {
@@ -105,7 +113,10 @@ def snapshot(printing=False):
             "usb": {"mounted": True, "model": "Demo USB drive"},
             "usb_free": "8 GB free",
             "timelapse": {"enabled": True},
-            "recordings": [{"path": "Demo timelapse.mp4"}],
+            "recordings": [
+                {"path": name}
+                for name in ("Storage tray.mp4", "Cable clips.mp4", "Tool stand.mp4")
+            ],
             "interfaces": {"ethernet": {"address": "192.0.2.20"}},
             "wifi": {
                 "ssid": "Demo network",

@@ -146,7 +146,9 @@ layouts, generate the snapshot with `--printing`.
 
 Fixture mode never connects to the printer service or sends printer commands.
 Navigation and dialogs run locally; operations needing a backend response do not
-complete as live operations. It is a UI preview, not a simulated printer backend.
+complete as live operations. Confirmed file/recording deletions remove only
+demo list entries, and the time-lapse On/Off controls update demo state; reopening
+the preview resets both. It is a UI preview, not a simulated printer backend.
 The dimensions and heater limits in the demo generator are synthetic examples,
 not defaults applied to a real printer.
 

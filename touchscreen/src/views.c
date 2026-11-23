@@ -310,34 +310,27 @@ void views_refresh(void) {
         cJSON *heater = cJSON_GetArrayItem(J("heaters"), i);
         double target = jnum(heater, "target", 0);
         if (app.current[i]) {
-            if (!strcmp(app.route, "heat"))
-                snprintf(value, sizeof(value), target ? "%.0f° / %.0f°" : "%.0f°",
-                         jnum(heater, "current", 0), target);
-            else
-                snprintf(value, sizeof(value), "%.0f°", jnum(heater, "current", 0));
+            snprintf(value, sizeof(value), "%.0f°", jnum(heater, "current", 0));
             lv_label_set_text(app.current[i], value);
         }
         if (app.target[i]) {
-            if (!strcmp(app.route, "heat")) {
-                if (target)
-                    snprintf(value, sizeof(value), "Target %.0f°C", target);
-                else
-                    snprintf(value, sizeof(value), "%s",
-                             !strcmp(jstr(heater, "key", ""), "chamber") ? "No target set"
-                                                                         : "Heater off");
-            } else
-                snprintf(value, sizeof(value), target ? "%.0f°" : "Off", target);
+            snprintf(value, sizeof(value), "%.0f°", target);
             lv_label_set_text(app.target[i], value);
         }
         if (app.temperature_arrow[i]) {
             bool approaching = target > 0 && fabs(jnum(heater, "current", 0) - target) > 1.0;
+            bool thermals = !strcmp(app.route, "heat");
+            const lv_font_t *font = thermals ? &font_ui_30 : &font_ui_24;
             lv_point_t current_size, target_size;
-            lv_txt_get_size(&current_size, lv_label_get_text(app.current[i]), &font_ui_24, 0, 0,
+            lv_txt_get_size(&current_size, lv_label_get_text(app.current[i]), font, 0, 0,
                             LV_COORD_MAX, LV_TEXT_FLAG_NONE);
-            lv_txt_get_size(&target_size, lv_label_get_text(app.target[i]), &font_ui_24, 0, 0,
+            lv_txt_get_size(&target_size, lv_label_get_text(app.target[i]), font, 0, 0,
                             LV_COORD_MAX, LV_TEXT_FLAG_NONE);
             int width = current_size.x + (approaching ? 28 + target_size.x : 0);
-            int x = 46 + (132 - width) / 2;
+            int x =
+                thermals
+                    ? 48 + (lv_obj_get_width(lv_obj_get_parent(app.current[i])) - 58 - width) / 2
+                    : 46 + (132 - width) / 2;
             lv_obj_set_width(app.current[i], current_size.x);
             lv_obj_set_x(app.current[i], x);
             if (approaching) {
@@ -481,35 +474,29 @@ static void heat_view(void) {
                        NULL);
         return;
     }
-    int width = (673 - (n - 1) * 12) / n;
+    if (n > 3)
+        n = 3;
+    int width = (674 - (n - 1) * 12) / n;
     for (int i = 0; i < n; i++) {
-        cJSON *h = cJSON_GetArrayItem(J("heaters"), i);
+        cJSON *heater = cJSON_GetArrayItem(J("heaters"), i);
+        const char *key = jstr(heater, "key", "");
         char action[100];
-        snprintf(action, sizeof(action), "temperature:%s", jstr(h, "key", ""));
-        lv_obj_t *b = button(app.content, "", i * (width + 12), 100, width, 274, action, false);
-        const char *label = jstr(h, "label", "");
-        lv_point_t metrics;
-        lv_txt_get_size(&metrics, label, &font_ui_18, 0, 0, 1000, LV_TEXT_FLAG_NONE);
-        int start = (lv_obj_get_width(b) - metrics.x - 34) / 2;
-        icon(b, i == 0 ? "nozzle" : i == 1 ? "bed" : "chamber", start, 73, 24, colour("a4aebb"));
-        text(b, label, start + 34, 76, metrics.x + 2, &font_ui_18, false);
-        char value[80], mode[100];
-        double target = jnum(h, "target", 0);
-        snprintf(value, sizeof(value), target ? "%.0f° / %.0f°" : "%.0f°", jnum(h, "current", 0),
-                 target);
-        app.current[i] = text(b, value, 6, 126, lv_obj_get_width(b) - 12, &font_ui_30, false);
-        centered(app.current[i]);
-        if (target)
-            snprintf(mode, sizeof(mode), "Target %.0f°C", target);
-        else
-            snprintf(mode, sizeof(mode), "%s",
-                     !strcmp(jstr(h, "key", ""), "chamber") ? "No target set" : "Heater off");
-        app.target[i] = text(b, mode, 6, 190, lv_obj_get_width(b) - 12, &font_ui_14, true);
-        centered(app.target[i]);
+        snprintf(action, sizeof(action), "temperature:%s", key);
+        lv_obj_t *tile = button(app.content, "", i * (width + 12), 100, width, 280, action, false);
+        centered(text(tile, jstr(heater, "label", ""), 8, 52, width - 16, &font_ui_20, false));
+        icon(tile,
+             !strcmp(key, "extruder")     ? "nozzle"
+             : !strcmp(key, "heater_bed") ? "bed"
+                                          : "chamber",
+             10, 126, 28, colour("a4aebb"));
+        app.current[i] = text(tile, "", 0, 122, 100, &font_ui_30, false);
+        app.target[i] = text(tile, "", 0, 122, 100, &font_ui_30, true);
+        icon(tile, "arrow-right", 0, 132, 16, colour("a4aebb"));
+        app.temperature_arrow[i] = lv_obj_get_child(tile, -1);
     }
     if (!app.printing && !app.paused)
-        button(app.content, "Turn heaters off", 258, 386, 157, 48, "{\"action\":\"heaters_off\"}",
-               false);
+        button_fixed(app.content, "Turn heaters off", 189, 402, 296, 64,
+                     "{\"action\":\"heaters_off\"}", false);
 }
 typedef struct {
     char *name;
@@ -584,13 +571,6 @@ static void fans_view(void) {
         control->name = strdup(ids[i]);
         control->output = output;
         lv_obj_add_event_cb(slider, slider_event, LV_EVENT_ALL, control);
-    }
-    if (has("settings.heater_fan hotend_fan")) {
-        int y = 110 + rowno * 92;
-        char speed[30];
-        snprintf(speed, sizeof(speed), "%.0f%%", N("status.heater_fan hotend_fan.speed") * 100);
-        text(app.content, "Hotend cooling", 0, y, 400, &font_ui_17, false);
-        right(text(app.content, speed, 550, y, 124, &font_ui_16, false));
     }
 }
 static void filament_view(void) {
@@ -842,26 +822,28 @@ static void tune_view(void) {
         int y = 110 + i * 108;
         double value = jnum(app.data, paths[i], 1) * 100;
         double increment = i == 0 ? 10 : 1;
-        text(app.content, labels[i], 0, y + 11, 260, &font_ui_18, false);
+        text(app.content, labels[i], 0, y + 22, 260, &font_ui_18, false);
         char action[120], caption[50];
         snprintf(action, sizeof(action), "tune:%s:%g", keys[i], value - increment);
-        button(app.content, "−", 310, y, 56, 56, action, false);
+        button_fixed(app.content, "−", 310, y, 64, 64, action, false);
         snprintf(action, sizeof(action), "tune_input:%s", keys[i]);
         snprintf(caption, sizeof(caption), "%.0f%%", value);
-        lv_obj_t *input = button(app.content, caption, 378, y, 170, 56, action, false);
+        lv_obj_t *input = button_fixed(app.content, "", 386, y, 162, 64, action, false);
+        lv_obj_t *value_text = text(input, caption, 0, 0, 162, &font_ui_24, false);
+        centered(value_text);
+        lv_obj_align(value_text, LV_ALIGN_CENTER, 0, 0);
         lv_obj_set_style_bg_opa(input, 0, 0);
         lv_obj_set_style_border_width(input, 0, 0);
         snprintf(action, sizeof(action), "tune:%s:%g", keys[i], value + increment);
-        button(app.content, "+", 560, y, 56, 56, action, false);
+        button_fixed(app.content, "+", 560, y, 64, 64, action, false);
     }
-    text(app.content, "Z offset", 0, 348, 260, &font_ui_18, false);
-    text(app.content, "Current print only", 0, 374, 260, &font_ui_12, true);
-    button(app.content, "−0.01", 310, 334, 92, 56, "tune:z:-0.01", false);
+    text(app.content, "Z offset", 0, 356, 90, &font_ui_18, false);
+    text(app.content, "Current print only", 100, 360, 196, &font_ui_12, true);
+    button(app.content, "−0.01", 310, 334, 64, 64, "tune:z:-0.01", false);
     char z[80];
-    snprintf(z, sizeof(z), "%.3f", N("status.gcode_move.homing_origin.2"));
-    centered(text(app.content, z, 491, 343, 96, &font_ui_24, false));
-    centered(text(app.content, "mm", 491, 375, 96, &font_ui_12, true));
-    button(app.content, "+0.01", 548, 334, 92, 56, "tune:z:0.01", false);
+    snprintf(z, sizeof(z), "%.3f mm", N("status.gcode_move.homing_origin.2"));
+    centered(text(app.content, z, 386, 352, 162, &font_ui_24, false));
+    button(app.content, "+0.01", 560, 334, 64, 64, "tune:z:0.01", false);
 }
 static void calibration_view(void) {
     ui_tabs(false, "calibration");
@@ -889,6 +871,14 @@ static void calibration_view(void) {
         visible++;
     }
 }
+static lv_obj_t *list_action(lv_obj_t *list, const char *name, int x, int y, const char *action) {
+    char label[64];
+    snprintf(label, sizeof(label), "icon:%s", name);
+    lv_obj_t *control = button_fixed(list, label, x, y, 64, 64, action, false);
+    lv_obj_set_style_bg_opa(control, LV_OPA_TRANSP, LV_STATE_DEFAULT);
+    lv_obj_set_style_border_width(control, 0, LV_STATE_DEFAULT);
+    return control;
+}
 static void files_view(void) {
     button_fixed(app.content, "icon:refresh-cw", 600, 9, 64, 64, "refresh_files", false);
     const char *refresh = *S("files_refresh.error") ? "Refresh failed — tap refresh to retry"
@@ -906,7 +896,7 @@ static void files_view(void) {
         size_t n = strlen(payload) + 16;
         char *a = malloc(n);
         snprintf(a, n, "file_open:%s", payload);
-        lv_obj_t *b = button(list, "", 0, y, 673, 78, a, false);
+        lv_obj_t *b = button(list, "", 0, y, 586, 78, a, false);
         lv_obj_set_style_bg_opa(b, 0, 0);
         lv_obj_set_style_border_side(b, LV_BORDER_SIDE_BOTTOM, 0);
         lv_obj_set_style_radius(b, 0, 0);
@@ -927,7 +917,11 @@ static void files_view(void) {
         strftime(modified, sizeof(modified), "%d %b %Y · %H:%M", &tm);
         text(b, modified, 80, 44, 490, &font_ui_13, true);
         snprintf(a, n, "file_delete:%s", payload);
-        button_fixed(list, "icon:trash-2", 600, y + 7, 64, 64, a, false);
+        list_action(list, "trash-2", 600, y + 7, a);
+        lv_obj_t *separator = box(list, 0, y + 77, 673, 1, false);
+        lv_obj_clear_flag(separator, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_border_width(separator, 0, 0);
+        lv_obj_set_style_bg_color(separator, colour("343e4b"), 0);
         free(a);
         free(payload);
         y += 82;
@@ -1285,9 +1279,11 @@ static void timelapse_view(void) {
                        "The Moonraker time-lapse component is not installed.", NULL, NULL);
         return;
     }
-    row(app.content, 100, "Time-lapse", B("platform.timelapse.enabled") ? "On" : "Off", "",
-        "toggle_timelapse");
-    row(app.content, 212, "Recordings & USB export", "›", "Saved time-lapse videos", "recordings");
+    text(app.content, "Time-lapse", 0, 130, 330, &font_ui_20, false);
+    bool enabled = B("platform.timelapse.enabled");
+    button_fixed(app.content, "On", 420, 110, 114, 64, "timelapse_on", enabled);
+    button_fixed(app.content, "Off", 546, 110, 114, 64, "timelapse_off", !enabled);
+    row(app.content, 212, "Recordings", "›", "Saved time-lapse videos", "recordings");
 }
 static void recordings_view(void) {
     lv_obj_t *list = scroll_area(88, 462);
@@ -1298,21 +1294,15 @@ static void recordings_view(void) {
         cJSON *r = request("export");
         cJSON_AddStringToObject(r, "path", path);
         char *a = encode(r);
-        lv_obj_t *item =
-            button_fixed(list, "", 0, y, 673, 78, B("platform.usb.mounted") ? a : NULL, false);
-        lv_obj_set_style_bg_opa(item, 0, 0);
+        lv_obj_t *item = box(list, 0, y, 673, 78, false);
+        lv_obj_clear_flag(item, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_bg_opa(item, LV_OPA_TRANSP, 0);
         lv_obj_set_style_border_side(item, LV_BORDER_SIDE_BOTTOM, 0);
         lv_obj_set_style_radius(item, 0, 0);
-        if (!B("platform.usb.mounted")) {
-            lv_obj_clear_flag(item, LV_OBJ_FLAG_CLICKABLE);
-            lv_obj_clear_state(item, LV_STATE_DISABLED);
-            lv_obj_set_style_opa(item, 255, 0);
-        }
-        lv_obj_t *name = text(item, path, 16, 12, 552, &font_ui_18, false);
+        lv_obj_t *name = text(item, path, 16, 26, 482, &font_ui_18, false);
         lv_obj_set_height(name, 26);
         lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
-        text(item, B("platform.usb.mounted") ? "Export to USB" : "", 16, 44, 552, &font_ui_14,
-             true);
+        list_action(list, "save", 516, y + 7, B("platform.usb.mounted") ? a : NULL);
         free(a);
         r = request("delete_recording");
         cJSON_AddStringToObject(r, "path", path);
@@ -1320,7 +1310,7 @@ static void recordings_view(void) {
         size_t size = strlen(payload) + 16;
         a = malloc(size);
         snprintf(a, size, "file_delete:%s", payload);
-        button_fixed(list, "icon:trash-2", 600, y + 7, 64, 64, a, false);
+        list_action(list, "trash-2", 600, y + 7, a);
         free(a);
         free(payload);
         y += 82;
@@ -1503,6 +1493,7 @@ static void plate_event(lv_event_t *e) {
     if (x1 <= x0 || y1 <= y0)
         return;
     double span = fmax(x1 - x0, y1 - y0) / app.zoom;
+    double pixels = lv_obj_get_width(object) - 2;
     int code = lv_event_get_code(e);
     static lv_point_t origin;
     static double ox, oy;
@@ -1521,8 +1512,8 @@ static void plate_event(lv_event_t *e) {
             drag = true;
         if (drag) {
             double maximum = fmax(x1 - x0, y1 - y0) - span;
-            app.plate_x = fmax(0, fmin(maximum, ox - (p.x - origin.x) * span / 280));
-            app.plate_y = fmax(0, fmin(maximum, oy + (p.y - origin.y) * span / 280));
+            app.plate_x = fmax(0, fmin(maximum, ox - (p.x - origin.x) * span / pixels));
+            app.plate_y = fmax(0, fmin(maximum, oy + (p.y - origin.y) * span / pixels));
             lv_obj_invalidate(object);
         }
         return;
@@ -1538,8 +1529,8 @@ static void plate_event(lv_event_t *e) {
             return;
         for (int i = 0; i < n; i++) {
             cJSON *p = cJSON_GetArrayItem(poly, i);
-            points[i].x = area.x1 + (jnum(p, "0", x0) - x0 - app.plate_x) * 280 / span;
-            points[i].y = area.y1 + 280 - (jnum(p, "1", y0) - y0 - app.plate_y) * 280 / span;
+            points[i].x = area.x1 + (jnum(p, "0", x0) - x0 - app.plate_x) * pixels / span;
+            points[i].y = area.y1 + pixels - (jnum(p, "1", y0) - y0 - app.plate_y) * pixels / span;
         }
         const char *name = jstr(part, "name", "");
         bool selected = false, excluded = false;
@@ -1603,13 +1594,16 @@ static void objects_view(void) {
                        "route:home");
         return;
     }
-    lv_obj_t *plate = box(app.content, 174, 88, 282, 282, false);
+    lv_obj_t *plate = box(app.content, 138, 19, 352, 352, false);
     lv_obj_add_flag(plate, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(plate, plate_event, LV_EVENT_ALL, NULL);
-    button(app.content, "icon:zoom-in", 474, 96, 56, 56, "zoom:in", false);
-    button(app.content, "icon:zoom-out", 474, 166, 56, 56, "zoom:out", false);
-    button(app.content, "icon:maximize", 474, 236, 56, 56, "zoom:fit", false);
-    footer("Back", "back", "Skip selected", "exclude");
+    button(app.content, "icon:zoom-in", 514, 27, 64, 64, "zoom:in", false);
+    button(app.content, "icon:zoom-out", 514, 103, 64, 64, "zoom:out", false);
+    button(app.content, "icon:maximize", 514, 179, 64, 64, "zoom:fit", false);
+    button_fixed(app.content, "Back", 0, 402, 296, 64, "back", false);
+    bool selected = cJSON_GetArraySize(app.object_selection) > 0;
+    button_fixed(app.content, "Skip selected", 378, 402, 296, 64, selected ? "exclude" : NULL,
+                 selected);
 }
 void views_render(void) {
     const char *p = app.route;
@@ -1678,7 +1672,8 @@ void views_render(void) {
         snprintf(edit_title, sizeof(edit_title), "Slot %s", slot_label(app.selected_slot));
         title = edit_title;
     }
-    ui_header(title);
+    if (strcmp(p, "objects"))
+        ui_header(title);
     if (!strcmp(p, "move"))
         move_view();
     else if (!strcmp(p, "heat"))
@@ -1864,6 +1859,9 @@ bool views_control_key(const char *action, char *key, size_t size) {
         snprintf(key, size, "%s",
                  !strcmp(jstr(r, "action", ""), "delete_recording") ? "delete_recording"
                                                                     : "delete_file");
+        if (!strcmp(key, "delete_file") && (app.printing || app.paused) &&
+            !strcmp(jstr(r, "path", ""), S("status.print_stats.filename")))
+            snprintf(key, size, "delete_file_current");
         cJSON_Delete(r);
         return true;
     }
@@ -1879,6 +1877,9 @@ bool views_control_key(const char *action, char *key, size_t size) {
                           : !strcmp(name, "preference") ? jstr(r, "key", "")
                                                         : "";
         snprintf(key, size, *arg ? "%s:%s" : "%s", name, arg);
+        if (!strcmp(name, "delete_file") && (app.printing || app.paused) &&
+            !strcmp(jstr(r, "path", ""), S("status.print_stats.filename")))
+            snprintf(key, size, "delete_file_current");
         cJSON_Delete(r);
         return *key != 0;
     }
@@ -1954,6 +1955,8 @@ bool views_control_key(const char *action, char *key, size_t size) {
                               {"timezone_apply", "timezone"},
                               {"refresh_files", "files"},
                               {"recordings", "recordings"},
+                              {"timelapse_on", "timelapse"},
+                              {"timelapse_off", "timelapse"},
                               {"toggle_timelapse", "timelapse"}};
     for (unsigned i = 0; i < sizeof(names) / sizeof(names[0]); i++)
         if (!strcmp(a, names[i][0])) {
@@ -2300,9 +2303,12 @@ void views_action(const char *a) {
             app.edit_dirty = true;
             ui_route("edit", false);
         }
-    } else if (!strcmp(a, "toggle_timelapse")) {
+    } else if (!strcmp(a, "toggle_timelapse") || !strcmp(a, "timelapse_on") ||
+               !strcmp(a, "timelapse_off")) {
         cJSON *r = request("timelapse");
-        cJSON_AddBoolToObject(r, "enabled", !B("platform.timelapse.enabled"));
+        cJSON_AddBoolToObject(r, "enabled",
+                              !strcmp(a, "toggle_timelapse") ? !B("platform.timelapse.enabled")
+                                                             : !strcmp(a, "timelapse_on"));
         ui_send(r);
     } else if (!strcmp(a, "recordings")) {
         simple("recordings");

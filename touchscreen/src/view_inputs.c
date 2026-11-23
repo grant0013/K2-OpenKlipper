@@ -16,7 +16,7 @@ static const ViewSpec views[] = {
     {"heat", {"settings"}},
     {"fans",
      {"settings", "status.fan", "status.fan_generic auxiliary_fan",
-      "status.fan_generic exhaust_fan", "status.heater_fan hotend_fan"}},
+      "status.fan_generic exhaust_fan"}},
     {"filament|edit|materials|colors|mapping|mapping_pick",
      {"slots", "materials", "metadata", "cfs_units", "status.k2_cfs",
       "status.filament_switch_sensor filament_sensor", "platform.file_thumbnail"}},

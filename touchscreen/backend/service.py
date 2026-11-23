@@ -534,6 +534,7 @@ class Service:
             "files",
             "file",
             "recordings",
+            "delete_recording",
             "export",
             "usb_format",
             "usb_eject",
@@ -751,6 +752,12 @@ class Service:
                 raise ValueError("Deletion requires confirmation")
             path = r.get("path")
             recording = action == "delete_recording"
+            if (
+                not recording
+                and model.active(status)
+                and path == status.get("print_stats", {}).get("filename")
+            ):
+                raise RuntimeError("Cannot delete the file being printed")
             extensions = (".mp4", ".mkv") if recording else (".gcode", ".gco", ".g")
             root = "timelapse" if recording else "gcodes"
             if (

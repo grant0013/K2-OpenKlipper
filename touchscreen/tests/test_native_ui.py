@@ -401,4 +401,14 @@ class NativeUI(unittest.TestCase):
   self.assertEqual(commands,[{'action':'ack','id':1}])
   self.assertFalse(any(item['action']=='notice_ack:1' for item in items))
 
+ def test_larger_object_plate_preserves_touch_selection_and_confirmation(self):
+  import importlib.util
+  spec=importlib.util.spec_from_file_location('demo_snapshot',ROOT/'developer-tools/demo_snapshot.py')
+  demo=importlib.util.module_from_spec(spec);spec.loader.exec_module(demo)
+  data=demo.preview_scenario('printing')
+  items,commands=self.render('objects',[{'tap':[310,190]},'exclude','confirmed'],data=data)
+  self.assertIn({'action':'exclude','names':['Part_1'],'confirm':True},commands)
+  self.assertFalse(any(i['action']=='back' and i['rect'][1]<100 for i in items))
+
+
 if __name__=='__main__':unittest.main()

@@ -430,6 +430,29 @@ void ui_send(cJSON *value) {
     ui_command(raw);
     free(raw);
 }
+/* A fixture never reaches the printer. Apply only local list edits and the
+ * time-lapse switch so desktop previews can exercise these UI workflows. */
+static void fixture_action(const char *command) {
+    cJSON *request = cJSON_Parse(command);
+    const char *action = jstr(request, "action", "");
+    bool recording = !strcmp(action, "delete_recording");
+    if ((recording || !strcmp(action, "delete_file")) && jbool(request, "confirm", false)) {
+        cJSON *rows = J(recording ? "platform.recordings" : "files");
+        const char *path = jstr(request, "path", "");
+        for (int i = cJSON_GetArraySize(rows) - 1; i >= 0; i--)
+            if (!strcmp(jstr(cJSON_GetArrayItem(rows, i), "path", ""), path))
+                cJSON_DeleteItemFromArray(rows, i);
+        app.dirty = true;
+    } else if (!strcmp(action, "timelapse") &&
+               cJSON_IsBool(cJSON_GetObjectItemCaseSensitive(request, "enabled"))) {
+        cJSON *settings = J("platform.timelapse");
+        if (cJSON_IsObject(settings))
+            cJSON_ReplaceItemInObjectCaseSensitive(
+                settings, "enabled", cJSON_CreateBool(jbool(request, "enabled", false)));
+        app.dirty = true;
+    }
+    cJSON_Delete(request);
+}
 void ui_command(const char *command) {
     if (*ui_control_reason(command))
         return;
@@ -441,6 +464,7 @@ void ui_command(const char *command) {
                 fclose(file);
             }
         }
+        fixture_action(command);
         return;
     }
     if (!platform_send(command))
@@ -896,7 +920,7 @@ static void navigation(void) {
     lv_obj_set_style_border_color(app.nav, edge, 0);
     const char *names[] = {"house", "printer-3d", "folder-open", "settings"};
     const char *routes[] = {"home", app.control_tab, "files", app.settings_tab};
-    int current = !strcmp(app.route, "home") ? 0
+    int current = (!strcmp(app.route, "home") || !strcmp(app.route, "objects")) ? 0
                   : (!strcmp(app.route, "files") || !strcmp(app.route, "file") ||
                      !strncmp(app.route, "mapping", 7))
                       ? 2

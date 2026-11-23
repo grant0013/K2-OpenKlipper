@@ -61,9 +61,9 @@ ACTIONS = {
     "exclude": rule("Skipping objects", {"objects"}),
     "files": rule("Reading files", ready=False),
     "delete_recording": rule(
-        "Deleting recording", {"recordings", "storage"}, idle=True
+        "Deleting recording", {"recordings", "storage"}, ready=False
     ),
-    "delete_file": rule("Deleting file", {"file", "storage"}, idle=True),
+    "delete_file": rule("Deleting file", {"storage"}),
     "file": rule("Reading file", {"file"}, ready=False),
     "recordings": rule("Reading recordings", {"recordings"}, ready=False),
     "export": rule("Exporting", {"storage"}, ready=False, report=True),
@@ -110,6 +110,10 @@ def describe(request):
             idle_only=True,
             requires_ready=True,
         )
+    if action in ("start", "file", "delete_file") and request.get("path"):
+        spec = replace(
+            spec, resources=spec.resources | {"file:" + str(request["path"])}
+        )
     return spec
 
 
@@ -136,6 +140,13 @@ def reason(request, status, connected, operations):
         )
         if sensor is False and not status.get("k2_cfs", {}).get("active_slot"):
             return "No filament in the extruder"
+    if (
+        request.get("action") == "delete_file"
+        and request.get("path")
+        and status.get("print_stats", {}).get("state") in ("printing", "paused")
+        and request["path"] == status.get("print_stats", {}).get("filename")
+    ):
+        return "Cannot delete the file being printed"
     if spec.idle_only:
         if status.get("print_stats", {}).get("state") in ("printing", "paused"):
             return "Unavailable during printing"
@@ -159,12 +170,16 @@ def reason(request, status, connected, operations):
     return ""
 
 
-def controls():
+def controls(status=None):
     """Stable keys consumed by native controls; values are validated requests."""
     result = {
         name: {"action": name}
         for name in ACTIONS
         if name not in ("temperature", "fan", "preference")
+    }
+    result["delete_file_current"] = {
+        "action": "delete_file",
+        "path": (status or {}).get("print_stats", {}).get("filename", ""),
     }
     result.update(
         {
@@ -194,7 +209,7 @@ def controls():
 
 def availability(status, connected, operations):
     result = {}
-    for key, request in controls().items():
+    for key, request in controls(status).items():
         blocked = reason(request, status, connected, operations)
         result[key] = {"enabled": not bool(blocked), "reason": blocked}
     return result

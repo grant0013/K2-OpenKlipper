@@ -4,6 +4,7 @@ import copy
 import unittest
 from unittest import mock
 
+import action_policy
 import test_native_ui
 import test_service
 
@@ -41,12 +42,54 @@ class FileDeleteServiceTests(unittest.TestCase):
 
     def test_delete_rechecks_active_print_and_pause(self):
         for state in ("printing", "paused"):
-            self.state["print_stats"]["state"] = state
-            with self.assertRaises(RuntimeError):
+            self.state["print_stats"].update(state=state, filename="part.gcode")
+            with self.assertRaisesRegex(RuntimeError, "file being printed"):
                 self.s.execute(
                     {"action": "delete_file", "path": "part.gcode", "confirm": True}
                 )
         self.mr.request.assert_not_called()
+
+    def test_other_files_and_completed_recordings_can_be_deleted_while_printing(self):
+        self.state["print_stats"].update(state="printing", filename="current.gcode")
+        self.s.status = copy.deepcopy(self.state)
+        self.s.execute(
+            {"action": "delete_file", "path": "other.gcode", "confirm": True}
+        )
+        with mock.patch(
+            "service.storage.list_recordings", return_value=[{"path": "done.mp4"}]
+        ):
+            self.s.execute(
+                {"action": "delete_recording", "path": "done.mp4", "confirm": True}
+            )
+        self.assertEqual(
+            [c.args[0] for c in self.mr.request.call_args_list],
+            ["/server/files/gcodes/other.gcode", "/server/files/timelapse/done.mp4"],
+        )
+
+    def test_start_reservation_only_blocks_deleting_the_same_file(self):
+        resources = action_policy.describe(
+            {"action": "start", "path": "current.gcode"}
+        ).resources
+        operations = [
+            {"resources": resources, "label": "Starting print", "interrupt": False}
+        ]
+        self.assertTrue(
+            action_policy.reason(
+                {"action": "delete_file", "path": "current.gcode"},
+                self.state,
+                True,
+                operations,
+            )
+        )
+        self.assertEqual(
+            action_policy.reason(
+                {"action": "delete_file", "path": "other.gcode"},
+                self.state,
+                True,
+                operations,
+            ),
+            "",
+        )
 
     def test_url_encoding_and_failed_delete_retains_file(self):
         path = "parts/a #1%.gcode"
@@ -147,3 +190,43 @@ class FileDeleteUITests(unittest.TestCase):
         self.assertTrue(any(i["action"] == "refresh_files" for i in items))
         items, _ = self.render("heat", [{"snapshot": done}])
         self.assertTrue(any(i["action"] == "temperature:extruder" for i in items))
+
+    def test_disabled_current_trash_cannot_open_print_file_and_other_delete_still_works(
+        self,
+    ):
+        data = copy.deepcopy(self.data)
+        data["status"]["print_stats"].update(state="printing", filename="part.gcode")
+        data["files"].append({"path": "keep.gcode"})
+        data["availability"] = action_policy.availability(data["status"], True, [])
+        items, commands = self.render("files", [{"tap": [735, 115]}], data=data)
+        self.assertTrue(any(i["action"] == "refresh_files" for i in items))
+        self.assertFalse(any(c["action"] == "file" for c in commands))
+        deletes = [i for i in items if i["action"].startswith("file_delete:")]
+        self.assertFalse(deletes[0]["enabled"])
+        self.assertTrue(deletes[1]["enabled"])
+        items, commands = self.render(
+            "files", [deletes[1]["action"], "confirmed"], data=data
+        )
+        self.assertIn(
+            {"action": "delete_file", "path": "keep.gcode", "confirm": True}, commands
+        )
+        self.assertEqual(sum(i["action"].startswith("file_open:") for i in items), 1)
+
+    def test_recording_save_icon_is_separate_from_delete_and_disabled_without_usb(self):
+        data = copy.deepcopy(self.data)
+        data["platform"]["recordings"] = [{"path": "part.mp4"}]
+        data["platform"]["usb"] = {"mounted": True}
+        items, commands = self.render("recordings", [{"tap": [650, 125]}], data=data)
+        self.assertIn({"action": "export", "path": "part.mp4"}, commands)
+        self.assertFalse(any(i["action"] == "confirmed" for i in items))
+        data["platform"]["usb"]["mounted"] = False
+        _, commands = self.render("recordings", [{"tap": [650, 125]}], data=data)
+        self.assertEqual(commands, [])
+
+    def test_timelapse_has_explicit_on_off_controls_in_preview(self):
+        data = copy.deepcopy(self.data)
+        data["platform"]["timelapse"] = {"enabled": True}
+        items, commands = self.render("timelapse", ["timelapse_off"], data=data)
+        self.assertTrue(any(i["action"] == "timelapse_on" for i in items))
+        self.assertTrue(any(i["action"] == "timelapse_off" for i in items))
+        self.assertEqual(commands, [{"action": "timelapse", "enabled": False}])
