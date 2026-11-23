@@ -19,6 +19,19 @@ class MigrationTest(unittest.TestCase):
             migration.migrate(target, ROOT / "runtime/native-screen.cfg.example", Path(directory) / "missing.cfg")
             self.assertEqual(target.read_text(), "[brand]\n# Keep this comment\nmodel: My printer\n[screen]\nrotate: 90\n")
 
+    def test_active_usb_storage_selection_survives_migration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            legacy = path / "harkscreen.cfg"
+            legacy.write_text("[screen]\nrotate: 90\n")
+            (path / "harkscreen-settings.json").write_text(
+                '{"gcode_storage": "usb", "usb_ejected": false}'
+            )
+            migration.migrate(path / "native-screen.cfg", ROOT / "runtime/native-screen.cfg.example", legacy)
+            prefs = migration.json.loads((path / "native-screen-settings.json").read_text())
+            self.assertEqual(prefs["gcode_storage"], "usb")
+            self.assertIs(prefs["usb_ejected"], False)
+
     def test_display_settings_transfer_and_calibration_stays_untouched(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)

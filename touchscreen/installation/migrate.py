@@ -58,6 +58,8 @@ def migrate(config, example, legacy, model=""):
         "sleep_after",
         "idle",
         "light_off",
+        "gcode_storage",
+        "usb_ejected",
         "cfs_startup_read",
         "cfs_insertion_read",
         "cfs_auto_refill",
