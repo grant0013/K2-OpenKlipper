@@ -94,6 +94,14 @@ class ServiceTests(unittest.TestCase):
         self.s.prepare_artwork()
         self.assertEqual(Path(self.s.artwork_key[0]).name, "printer-without-cfs.png")
 
+    def test_timelapse_can_be_toggled_during_print(self):
+        self.state["print_stats"]["state"] = "printing"
+        self.s.platform["timelapse"] = {"enabled": False}
+        for value in (True, False):
+            self.run_action("timelapse", enabled=value)
+            self.mr.request.assert_called_with("/machine/timelapse/settings", {"enabled": value})
+            self.assertEqual(self.s.platform["timelapse"]["enabled"], value)
+
     def test_limits_change_without_model_assumptions(self):
         self.run_action("temperature", heater="extruder", value=350)
         self.mr.run_gcode.assert_called_with("M104 S350")

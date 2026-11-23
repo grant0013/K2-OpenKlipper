@@ -176,7 +176,7 @@ then choose **Start print**.
 
 ### Time-lapse
 
-- Enable or disable recording when the time-lapse component is available.
+- Enable or disable recording when the time-lapse component is available, including during a print.
 - Browse recordings, save individual recordings to USB or confirm deletion.
 
 ![Time-lapse settings and recordings](screenshots/timelapse.png)

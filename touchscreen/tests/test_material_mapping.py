@@ -81,7 +81,7 @@ class MaterialUITests(unittest.TestCase):
         self.assertFalse(any(i["action"] == "start_print" for i in items))
         self.assertEqual(commands, [])
         image = Image.open(self.path / "screen.ppm").convert("RGB")
-        self.assertEqual(image.getpixel((500, 94)), (227, 93, 106))
+        self.assertEqual(image.getpixel((500, 25)), (227, 93, 106))
 
     def test_matching_material_different_color_still_prints(self):
         data = self.mismatch()

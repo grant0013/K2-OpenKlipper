@@ -713,8 +713,8 @@ static void filament_view(void) {
         bool external = i == cfs_count;
         int x = external ? (fitted() ? 548 : (674 - 126) / 2) : start + i * (width + 10);
         int tile_width = external ? 126 : width;
-        int tile_top = top;
-        int tile_height = 328 - top;
+        int tile_top = external ? 88 : top;
+        int tile_height = external ? 292 : 328 - top;
         char action[50];
         snprintf(action, sizeof(action), "slot:%s", slot);
         lv_obj_t *tile = button(app.content, "", x, tile_top, tile_width, tile_height, action,
@@ -1101,7 +1101,7 @@ static bool mapping_ready(void) {
 static void mapping_view(void) {
     if (ui_unavailable("Filament selection", "starting another print"))
         return;
-    lv_obj_t *list = scroll_area(88, 388);
+    lv_obj_t *list = scroll_area(19, 388);
     cJSON *filament;
     int y = 0;
     int count = cJSON_GetArraySize(J("metadata.filaments"));
@@ -1774,7 +1774,7 @@ void views_render(void) {
         snprintf(edit_title, sizeof(edit_title), "Slot %s", slot_label(app.selected_slot));
         title = edit_title;
     }
-    if (strcmp(p, "objects") && strcmp(p, "file"))
+    if (strcmp(p, "objects") && strcmp(p, "file") && strcmp(p, "mapping"))
         ui_header(title);
     if (!strcmp(p, "move"))
         move_view();

@@ -81,7 +81,7 @@ class NativeUI(unittest.TestCase):
  def test_filament_slots_and_footer_use_current_native_geometry(self):
   items,_=self.render('filament')
   expected={'slot:A':[103,88,123,240],'slot:D':[502,88,123,240],
-            'slot:E':[651,88,126,240],'edit_slot':[147,398,110,68],
+            'slot:E':[651,88,126,292],'edit_slot':[147,398,110,68],
             'load':[269,398,190,68],'unload':[471,398,190,68],
             'route:refill':[673,398,64,68]}
   for action,rect in expected.items():self.assert_rect(items,action,rect)
@@ -248,6 +248,14 @@ class NativeUI(unittest.TestCase):
   self.assertEqual(commands,[])
   self.assertTrue(any(item['action']=='open_files' for item in items))
 
+ def test_mapping_uses_header_space_and_retains_footer_navigation(self):
+  items,_=self.render('file',['review_mapping'])
+  self.assertFalse(any(item['action']=='back' and item['rect'][1]<80 for item in items))
+  pick=next(item for item in items if item['action']=='mapping_pick:0')
+  self.assertLess(pick['rect'][1],40)
+  self.assertTrue(any(item['action']=='start_print' for item in items))
+  self.assertTrue(any(item['action']=='back' and item['rect'][1]>380 for item in items))
+
  def test_mapping_defaults_and_back_preserve_selection(self):
   _,commands=self.render('file',['review_mapping','mapping_pick:0','mapping_set:A','back','review_mapping','start_print'])
   self.assertEqual(commands,[{'action':'start','path':'part.gcode','mapping':{'0':'A'},'calibrate':False}])
@@ -274,7 +282,7 @@ class NativeUI(unittest.TestCase):
   items,commands=self.render('filament',['unit:2'],data)
   self.assertTrue(any(item['action']=='slot:2A' for item in items))
   self.assertFalse(any(item['action']=='slot:A' for item in items))
-  self.assert_rect(items,'slot:E',[651,162,126,166])
+  self.assert_rect(items,'slot:E',[651,88,126,292])
   self.assertEqual(commands,[])
   items,commands=self.render('filament',['unit:2','edit_slot'],data)
   self.assertTrue(any(item.get('text')=='Slot CFS 2 · A' for item in items) or
