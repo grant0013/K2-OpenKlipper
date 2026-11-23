@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "built_from_commit": "a5f16b79de763463b8089dcedabb10c61c773660",
+  "built_from_commit": "5152150d1a25e3c433770d4187b9eb24bb553543",
   "source_inputs": {
     "VERSION": "a12a1be3f3ee06a3159f695083ad52c3f3dc2ae1f071b7aece71cfe4c1f1e133",
     "install.sh": "2f47f109e1d906b94dbf6e4df29029537019ef7fb209d35689de61b10923084b",
@@ -22,7 +22,7 @@
     "touchscreen/backend/action_policy.py": "58cc266c397d764dbf77177341dbb7d09660b8d031dfc52039b86e389769d617",
     "touchscreen/backend/model.py": "dd97b0a4915de09bfa5d56f971cfcb46eda958e38e73c94cb952605795025d84",
     "touchscreen/backend/platform_services.py": "e74d1eb0162e9a79ead36091bb4df334223ae7a244c60d106b9cce58d2ad0391",
-    "touchscreen/backend/service.py": "4e5496d35fddaf0452156cd0f650661d35b348d5d7e09155ba371bba0aadfa22",
+    "touchscreen/backend/service.py": "693db22cfdfdcd28cf880a104b3fcde7410da79af3f92566c82b2744d327d743",
     "touchscreen/backend/storage.py": "3c94f250523894aedde00e401e53f390b6f72792ace517968b1b7c460b74436f",
     "touchscreen/build/CMakeLists.txt": "866150a63ecbe9ebe04a72e9e16b8706f59d5eb50a5d8d250a80bc2ffb0e2e20",
     "touchscreen/build/arm-linux.cmake": "9345345c5e2cc41053e1dd40ddeceac98a14bec13b8f2f68985e9eb48a6767be",
@@ -33,10 +33,10 @@
     "touchscreen/developer-tools/package.json": "d4f38d17f563400d5a3316ffd56cf17a11da743d4186b88d7d6206d9669b7496",
     "touchscreen/developer-tools/package_arm.py": "372020ee87978ff6e70036c2a12b764d51a24c7a60afd427781e1ba63b009838",
     "touchscreen/installation/install.sh": "108fbc71a615cd500e72f9289f1caffce1b0ccdf90575d1bdf27a489f8e07300",
-    "touchscreen/installation/migrate.py": "6e6a5b554d76fdc16bc23812ba53ddf70650afe1b7c6adfafa6cfe1cf6ede427",
+    "touchscreen/installation/migrate.py": "54f7b4df88e6980dd3d52fcc1c3aae3b60f45a46cc00553f0d806c6ceb5ff7a0",
     "touchscreen/installation/validate_package.py": "f37227744dfbf583a4d3c9b28f24116274e57916ea2643802364d261ba91afb0",
     "touchscreen/runtime/launch.py": "9e8e84bd7a8c4de5fa179ac70bf44b8a1e45634c333ae82e6b9dad31558eb4a4",
-    "touchscreen/runtime/native-screen.cfg.example": "e47cd16eabe8556f0ff9356bd7ce007b670df3e98cb53c32f743361d86329b53",
+    "touchscreen/runtime/native-screen.cfg.example": "1a2e0967364d6775c9c6562f9c14272a34e855331cd8aff2c06dd6cd729fa043",
     "touchscreen/runtime/start.sh": "92582b3c69004b0db391f83b866762f5e7b3223bcad48be696ebb91049077293",
     "touchscreen/src/json.c": "78986758cd5e2c91ff366341f3a35144163e8d646cce878abd2bae1105d22195",
     "touchscreen/src/main.c": "64e706b4a3d2527895534af105b00d6cf080ef76eefa522cd09fa1e1749f766f",
@@ -46,10 +46,10 @@
     "touchscreen/src/view_inputs.c": "faca09c65c6547f67523cde4039ab5d745baead09e650aef463d2c7e45c38c29",
     "touchscreen/src/views.c": "02f2936ba288a1700d329bf333b473db416faa88eaddf96f6a81b45406f76afb"
   },
-  "source_fingerprint": "f02783afcd8208895cc0a4a96587c3173e650d0053e008f898ec76625a211b01",
+  "source_fingerprint": "b41d91b11f3d5fec6aa961012e2fac3669ca7c5ed8ab33f933aa010eb9e9a261",
   "target": "armv7-linux-gnueabihf",
   "files": {
-    "VERSION": "d9601b5c6db0a5798d37f62301c626997debac4e9f5e15a303ca211b89539a26",
+    "VERSION": "8f888ecc3b717121c7989ef2984a0637dcb978e9dc116c8d8f6568a3eefead2d",
     "assets/activity-16.png": "c919d511ce9edcb9d429b0fd34c07992897427f344576e3d4205bdf884686734",
     "assets/activity-20.png": "992b40c4beea90f8f95d1e41f959c340754c47b8e16c69e13598e39af4a03222",
     "assets/activity-22.png": "c942aa5df3dcfc51374af5c9189d5de6ea824b3addebfb3f55c63de7e02538a7",
