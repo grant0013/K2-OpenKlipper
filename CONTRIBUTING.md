@@ -1,42 +1,12 @@
-# Contributing
+# Contributions to this fork
 
-This project welcomes protocol research, code, documentation, and supervised
-hardware validation.
+This is @carmanspb's integration fork of [K2 OpenKlipper](https://github.com/grant0013/K2-OpenKlipper).
+Only @carmanspb maintains and changes this repository. External contributions
+are not accepted here; pull request creation is restricted to collaborators,
+and branch changes are restricted to the owner.
 
-## Before testing
+- For K2 OpenKlipper changes, contribute to the [upstream project](https://github.com/grant0013/K2-OpenKlipper/blob/main/CONTRIBUTING.md).
+- For the native touchscreen, contribute through a pull request to
+  [K2 OpenKlipper Touchscreen](https://github.com/carmanspb/K2-OpenKlipper-Touchscreen/blob/main/CONTRIBUTING.md).
 
-- Read `docs/PROJECT-STATUS.md`, `docs/PRTOUCH.md`, and
-  `docs/CFS-PROTOCOL.md`.
-- Keep a known-good stock rollback and confirm that you can use it.
-- Never test new homing, heater, cutter, or CFS actuation unattended.
-- Change one motor or motion variable at a time.
-- Do not attach unknown-voltage CFS hardware to a controller.
-- Remove credentials, tokens, serial numbers, Wi-Fi details, and private
-  network information from logs.
-
-## Reporting results
-
-Use the hardware validation issue template. Include versions, exact config
-changes, the command or print phase, expected and observed results, sanitised
-logs, and any recovery action. A failed result is useful when it is
-reproducible and clearly documented.
-
-## Code changes
-
-1. Create a branch from `main`.
-2. Keep protocol transport separate from printer-specific motion where
-   practical.
-3. Preserve safety gates such as `CONFIRM=1`, homed-axis checks, temperature
-   checks, position validation, and best-effort CFS stop.
-4. Add or update tests for protocol and state-machine changes.
-5. Run:
-
-   ```text
-   python -m unittest discover -s tests -v
-   python -m compileall -q klippy
-   ```
-
-6. Explain live hardware testing separately from offline tests.
-
-Do not include proprietary firmware binaries, private Creality packages, or
-captured personal data in a contribution.
+The repository remains public for inspection and use under its existing license.
