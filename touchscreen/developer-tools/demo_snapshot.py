@@ -147,6 +147,8 @@ SCENARIOS = (
     "notice",
     "recovery",
     "disconnected",
+    "wifi-connected",
+    "wifi-failed",
 )
 
 
@@ -244,6 +246,20 @@ def preview_scenario(name="idle", printing=False):
                 "title": "USB drive ejected",
                 "detail": "You can remove the USB drive.",
                 "fault": False,
+            }
+        ]
+    elif name in ("wifi-connected", "wifi-failed"):
+        data["notices"] = [
+            {
+                "id": 1,
+                "title": "Wi-Fi connected"
+                if name == "wifi-connected"
+                else "Wi-Fi connection failed",
+                "detail": "Connected to Demo network (192.0.2.21)"
+                if name == "wifi-connected"
+                else "Could not join the network. Check the password and try again.",
+                "fault": name == "wifi-failed",
+                "timed": name == "wifi-connected",
             }
         ]
     elif name == "recovery":

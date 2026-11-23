@@ -399,7 +399,13 @@ class Service:
                 self.event(spec.label + " complete")
         except Exception as error:
             failure = str(error)
-            self.event(spec.label + " failed", failure, fault=True)
+            self.event(
+                "Wi-Fi connection failed"
+                if action == "wifi_join"
+                else spec.label + " failed",
+                failure,
+                fault=True,
+            )
         finally:
             with self.lock:
                 result = {
@@ -835,6 +841,12 @@ class Service:
             self.wifi.connect(ssid, password, joined)
             if not done.wait(45) or not outcome or not outcome[0]:
                 raise RuntimeError(self.wifi.message or "Wi-Fi connection timed out")
+            self.platform["wifi"] = self.wifi.status()
+            self.event(
+                "Wi-Fi connected",
+                self.wifi.message or "Connected to " + ssid,
+                timed=True,
+            )
         elif action == "timezone":
             name = r["name"]
             if name not in storage.timezones():

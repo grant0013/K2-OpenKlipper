@@ -120,6 +120,8 @@ sh touchscreen/developer-tools/preview.sh --scenario heated --page move
 sh touchscreen/developer-tools/preview.sh --scenario error
 sh touchscreen/developer-tools/preview.sh --scenario loading
 sh touchscreen/developer-tools/preview.sh --scenario homing
+sh touchscreen/developer-tools/preview.sh --scenario wifi-connected --page wifi
+sh touchscreen/developer-tools/preview.sh --scenario wifi-failed --page wifi
 ```
 
 The printing and heating scenarios include three sample objects. Open the jump

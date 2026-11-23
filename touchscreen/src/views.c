@@ -891,10 +891,10 @@ static void files_view(void) {
     const char *refresh = *S("files_refresh.error") ? "Refresh failed — tap refresh to retry"
                           : B("files_refresh.busy") ? "Refreshing…"
                                                     : "";
-    lv_obj_t *status = text(app.content, refresh, 100, 32, 500, &font_ui_14, true);
+    lv_obj_t *status = text(app.content, refresh, 100, 32, 484, &font_ui_14, true);
     lv_obj_set_height(status, 22);
     lv_label_set_long_mode(status, LV_LABEL_LONG_DOT);
-    lv_obj_t *list = scroll_area(77, 462);
+    lv_obj_t *list = scroll_area(83, 462);
     cJSON *f;
     int y = 0;
     cJSON_ArrayForEach(f, J("files")) {
@@ -1071,27 +1071,36 @@ static void mapping_view(void) {
         lv_obj_set_style_border_width(card, 0, 0);
         lv_obj_t *required = box(card, 0, 6, 286, 96, false);
         lv_obj_clear_flag(required, LV_OBJ_FLAG_CLICKABLE);
-        text(required, caption, 12, 3, 262, &font_ui_16, true);
+        text(required, caption, 16, 6, 258, &font_ui_16, true);
         colour_swatch(required, 16, 42, jstr(filament, "colour", jstr(filament, "color", "828b98")),
                       32);
-        text(required, jstr(filament, "type", "Unknown material"), 60, 44, 214, &font_ui_20, false);
-        icon(card, "arrow-right", 300, 45, 24, colour("a4aebb"));
+        lv_obj_t *required_type = text(required, jstr(filament, "type", "Unknown material"), 60, 44,
+                                       214, &font_ui_20, false);
+        lv_label_set_long_mode(required_type, LV_LABEL_LONG_DOT);
+        lv_obj_set_height(required_type, 26);
+        icon(card, "arrow-right", 300, 52, 24, colour("a4aebb"));
         lv_obj_t *pick = button_fixed(card, "", 348, 6, 320, 96, action, false);
         if (known) {
             char source[80];
             source_label(source, sizeof(source), target);
-            colour_swatch(pick, 14, 18, jstr(record, "color", "828b98"), 32);
-            text(pick, jstr(record, "type", "Unknown material"), 60, 17, 212, &font_ui_20, false);
-            text(pick, source, 60, mismatch ? 42 : 56, 230, &font_ui_14, true);
+            colour_swatch(pick, 16, 42, jstr(record, "color", "828b98"), 32);
+            lv_obj_t *selected_type = text(pick, jstr(record, "type", "Unknown material"), 60, 44,
+                                           208, &font_ui_20, false);
+            lv_label_set_long_mode(selected_type, LV_LABEL_LONG_DOT);
+            lv_obj_set_height(selected_type, 26);
+            text(pick, source, 16, 6, 252, &font_ui_16, true);
             if (mismatch) {
                 lv_obj_set_style_border_color(pick, colour("e35d6a"), 0);
                 lv_obj_t *warning =
-                    text(pick, "Material mismatch", 60, 65, 230, &font_ui_14, false);
+                    text(pick, "Material mismatch", 60, 74, 230, &font_ui_12, false);
                 lv_obj_set_style_text_color(warning, colour("e35d6a"), 0);
             }
-        } else
-            text(pick, "Select filament", 18, 34, 260, &font_ui_20, false);
-        icon(pick, "chevron-down", 284, 37, 20, colour("a4aebb"));
+        } else {
+            text(pick, "Printer filament", 16, 6, 252, &font_ui_16, true);
+            colour_swatch(pick, 16, 42, "343e4b", 32);
+            text(pick, "Select filament", 60, 44, 208, &font_ui_20, true);
+        }
+        icon(pick, "chevron-down", 284, 48, 20, colour("a4aebb"));
         y += 120;
     }
     if (!y)
@@ -1855,14 +1864,23 @@ static void keyboard_draw(void) {
     lv_textarea_set_text(keyboard_input, app.keyboard_value);
     lv_textarea_set_password_mode(keyboard_input,
                                   !strcmp(app.keyboard_kind, "wifi") && !app.password_visible);
+    if (!strcmp(app.keyboard_kind, "wifi")) {
+        lv_textarea_set_placeholder_text(keyboard_input, "Wi-Fi password");
+        lv_obj_set_style_pad_right(keyboard_input, 76, 0);
+    }
     lv_obj_set_style_text_font(keyboard_input, &font_ui_20, 0);
     lv_obj_set_style_bg_color(keyboard_input, colour("151a22"), 0);
     lv_obj_set_style_bg_opa(keyboard_input, 255, 0);
     lv_obj_set_style_text_color(keyboard_input, colour("f0f3f7"), 0);
     lv_obj_set_style_border_color(keyboard_input, colour("343e4b"), 0);
-    if (!strcmp(app.keyboard_kind, "wifi"))
-        button(app.body, app.password_visible ? "icon:eye" : "icon:eye-off", 634, 73, 60, 54,
-               "key_eye", false);
+    lv_obj_set_style_border_width(keyboard_input, 1, 0);
+    lv_obj_set_style_radius(keyboard_input, 12, 0);
+    if (!strcmp(app.keyboard_kind, "wifi")) {
+        lv_obj_t *eye = button(app.body, app.password_visible ? "icon:eye" : "icon:eye-off", 634,
+                               73, 60, 54, "key_eye", false);
+        lv_obj_set_style_bg_opa(eye, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(eye, 0, 0);
+    }
     const char *letters[] = {"qwertyuiop", "asdfghjkl", "zxcvbnm"},
                *symbols[] = {"1234567890", "!@#$%^&*()", "-_=+[]{};:"};
     for (int r = 0; r < 3; r++) {

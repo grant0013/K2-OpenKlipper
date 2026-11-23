@@ -181,7 +181,7 @@ class FlowTests(unittest.TestCase):
         self.render("file", ["review_mapping"], data=data)
         image = Image.open(self.path / "screen.ppm").convert("RGB")
         self.assertEqual(image.getpixel((135, 152)), (227, 76, 85))
-        self.assertEqual(image.getpixel((482, 129)), (80, 53, 206))
+        self.assertEqual(image.getpixel((484, 152)), (80, 53, 206))
         for unit in (2, 3):
             for letter in "ABCD":
                 data["slots"].append(dict(data["slots"][0], slot=str(unit) + letter))
