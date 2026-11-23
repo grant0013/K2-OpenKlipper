@@ -1,0 +1,7 @@
+{
+  "description": "Blocking MCU/Klipper failure screen with restart actions.",
+  "scenario": "shutdown",
+  "page": "home",
+  "printer_image": "assets/demo-printer-combo.png",
+  "actions": []
+}

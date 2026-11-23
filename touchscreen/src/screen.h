@@ -46,7 +46,7 @@ typedef struct {
     cJSON *draft, *mapping;
     double number_min, number_max, step, zoom, plate_x, plate_y;
     bool number_replace, number_open, keyboard_visible, password_visible, dirty, edit_dirty,
-        connected, rendered, printer_fault_open;
+        connected, rendered, printer_fault_open, ever_ready, service_link, ever_service;
     uint64_t last_notice;
     char last_fault[4096], last_static_stamp[80];
     cJSON *object_selection;
@@ -56,6 +56,12 @@ typedef struct {
     char command_record[1024];
 } NativeScreen;
 extern NativeScreen app;
+typedef enum {
+    CONNECTION_STARTING,
+    CONNECTION_READY,
+    CONNECTION_LOST,
+    CONNECTION_SERVICE_LOST
+} ConnectionMode;
 cJSON *jget(const cJSON *, const char *);
 const char *jstr(const cJSON *, const char *, const char *);
 double jnum(const cJSON *, const char *, double);
@@ -74,6 +80,7 @@ bool platform_pressed(void);
 void platform_snapshot(const char *);
 bool platform_send(const char *);
 char *platform_receive(void);
+bool platform_linked(void);
 void platform_shutdown(void);
 uint64_t platform_millis(void);
 void ui_geometry(const char *);
@@ -81,6 +88,8 @@ void ui_init(const char *assets, const char *socket);
 void ui_data(cJSON *);
 void ui_route(const char *, bool);
 void ui_render(void);
+ConnectionMode ui_connection_mode(void);
+void ui_transport_lost(void);
 void ui_update(void);
 void ui_action(const char *);
 void ui_send(cJSON *);

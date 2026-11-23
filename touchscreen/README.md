@@ -51,6 +51,25 @@ operation become unavailable.
 
 ![Operation in progress](screenshots/executing.png)
 
+### Startup and connection recovery
+
+- During startup, a full-screen indicator stays visible until printer control,
+  configuration and the initial motor handshake are ready.
+- If Klipper or an MCU stops responding after connection, a blocking recovery
+  screen replaces all printer controls. Restart Klipper or controller firmware
+  using the two actions, each with confirmation.
+- When a healthy connection returns, the previous page comes back automatically.
+- If the local touchscreen service is unavailable, a separate reconnecting screen
+  appears without Klipper restart controls.
+
+![Printer startup](screenshots/startup.png)
+
+![Connection lost after startup](screenshots/connection-lost.png)
+
+![MCU or Klipper shutdown](screenshots/shutdown.png)
+
+![Touchscreen service unavailable](screenshots/service-lost.png)
+
 ## Printer controls
 
 ### Move
@@ -225,8 +244,8 @@ Faults and notices appear separately, with a clear dismissal action.
 | File deletion confirmation | Stop-print confirmation |
 | --- | --- |
 | ![Confirm deleting a file](screenshots/delete-file.png) | ![Confirm stopping a print](screenshots/stop-print.png) |
-| Unlock motors | Printer connection unavailable |
-| ![Unlock motors warning](screenshots/unlock-motors.png) | ![Waiting for printer connection](screenshots/startup.png) |
+| Unlock motors | Printer startup |
+| ![Unlock motors warning](screenshots/unlock-motors.png) | ![Waiting for printer startup](screenshots/startup.png) |
 
 ### Filament editing and unit selection
 

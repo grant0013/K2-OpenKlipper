@@ -109,6 +109,9 @@ def main():
             ("stop-print", "home", "printing", ["cancel_print"]),
             ("unlock-motors", "move", "heated", ["motor_toggle"]),
             ("startup", "home", "disconnected", []),
+            ("connection-lost", "filament", "idle", []),
+            ("shutdown", "home", "shutdown", []),
+            ("service-lost", "filament", "idle", [{"transport_lost": True}]),
         ]
         for name, page, scenario, actions in cases:
             data = (
@@ -181,6 +184,8 @@ def main():
                         "fault": False,
                     },
                 ]
+            if name == "connection-lost":
+                actions = [{"snapshot": preview_scenario("disconnected")}]
             fixture = directory / "snapshot.json"
             fixture.write_text(json.dumps(data))
             steps = directory / "actions.json"

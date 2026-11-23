@@ -2504,6 +2504,8 @@ static void error_message(const char *message) {
     text(area, message, 4, 6, 500, &font_ui_18, false);
 }
 void views_overlay(void) {
+    if (ui_connection_mode() != CONNECTION_READY)
+        return;
     const char *error = S("error");
     if (!*error && app.connected && !strcmp(S("status.webhooks.state"), "ready")) {
         app.last_fault[0] = 0;

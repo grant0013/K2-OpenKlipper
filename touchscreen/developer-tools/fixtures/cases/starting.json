@@ -1,0 +1,7 @@
+{
+  "description": "Full-screen startup while waiting for printer readiness.",
+  "scenario": "disconnected",
+  "page": "home",
+  "printer_image": "assets/demo-printer-combo.png",
+  "actions": []
+}

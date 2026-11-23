@@ -101,6 +101,40 @@ void icon(lv_obj_t *parent, const char *name, int x, int y, int size, lv_color_t
     lv_obj_set_style_img_recolor_opa(o, *override ? 0 : 255, 0);
     lv_obj_clear_flag(o, LV_OBJ_FLAG_CLICKABLE);
 }
+/* Connection handling owns the whole screen, independently of page layout. */
+ConnectionMode ui_connection_mode(void) {
+    if (!app.service_link && app.ever_service)
+        return CONNECTION_SERVICE_LOST;
+    const char *state = S("status.webhooks.state");
+    bool complete = app.connected && !strcmp(state, "ready") &&
+                    cJSON_GetArraySize(J("settings")) > 0 && cJSON_GetArraySize(J("heaters")) > 0;
+    if (complete && (app.ever_ready || !cJSON_IsObject(J("status.k2_motor_bus")) ||
+                     B("status.k2_motor_bus.motors_ready")))
+        return CONNECTION_READY;
+    return app.ever_ready || !strcmp(state, "error") || !strcmp(state, "shutdown")
+               ? CONNECTION_LOST
+               : CONNECTION_STARTING;
+}
+void ui_transport_lost(void) {
+    if (!app.connected && !app.service_link)
+        return;
+    app.connected = false;
+    app.service_link = false;
+    app.rendered = false;
+    close_modal();
+    app.dirty = true;
+}
+static bool recovery_action(const char *action) {
+    const char *command = !strcmp(action, "confirmed") ? app.confirm : action;
+    if (!strcmp(command, "restart:klipper") || !strcmp(command, "restart:firmware"))
+        return true;
+    cJSON *request = cJSON_Parse(command);
+    const char *name = jstr(request, "action", "");
+    bool allowed = (!strcmp(name, "restart") || !strcmp(name, "firmware_restart")) &&
+                   jbool(request, "confirm", false);
+    cJSON_Delete(request);
+    return allowed;
+}
 const char *ui_control_reason(const char *action) {
     char key[160], path[200];
     if (!action || !views_control_key(action, key, sizeof(key)))
@@ -465,6 +499,10 @@ static void fixture_action(const char *command) {
     cJSON_Delete(request);
 }
 void ui_command(const char *command) {
+    if (ui_connection_mode() != CONNECTION_READY &&
+        (ui_connection_mode() != CONNECTION_LOST || command[0] != '{' ||
+         !recovery_action(command) || !app.service_link))
+        return;
     if (*ui_control_reason(command))
         return;
     if (app.fixture) {
@@ -479,8 +517,7 @@ void ui_command(const char *command) {
         return;
     }
     if (!platform_send(command))
-        ui_notice("Printer service unavailable",
-                  "The request was not sent. Wait for the connection and try again.");
+        ui_transport_lost();
 }
 static void number_draw(void) {
     modal_frame(app.number_title, 150, 22, 500, 436, false);
@@ -659,14 +696,21 @@ void ui_route(const char *route, bool back) {
     app.dirty = true;
 }
 void ui_action(const char *action) {
+    ConnectionMode mode = ui_connection_mode();
+    if (mode == CONNECTION_STARTING || mode == CONNECTION_SERVICE_LOST)
+        return;
+    if (mode == CONNECTION_LOST && strcmp(action, "close") && !recovery_action(action))
+        return;
     if (*ui_control_reason(action))
         return;
-    if (!app.fixture && B("platform.asleep")) {
-        platform_send("{\"action\":\"activity\"}");
-        return;
+    if (!app.fixture) {
+        if (!platform_send("{\"action\":\"activity\"}")) {
+            ui_transport_lost();
+            return;
+        }
+        if (B("platform.asleep"))
+            return;
     }
-    if (!app.fixture)
-        platform_send("{\"action\":\"activity\"}");
     if (!strncmp(action, "route:", 6)) {
         ui_route(action + 6, false);
         return;
@@ -767,6 +811,8 @@ void ui_data(cJSON *data) {
     }
     static uint64_t result_ids[32];
     static unsigned result_cursor;
+    ConnectionMode previous_connection = ui_connection_mode();
+    bool previous_link = app.service_link;
     char *previous_view = ui_view_signature();
     char *previous_policy = cJSON_PrintUnformatted(J("availability"));
     char *previous_operations = cJSON_PrintUnformatted(J("operations"));
@@ -785,6 +831,16 @@ void ui_data(cJSON *data) {
     cJSON_Delete(app.data);
     app.data = data;
     app.connected = B("connected");
+    app.service_link = true;
+    app.ever_service = true;
+    ConnectionMode connection = ui_connection_mode();
+    if (connection == CONNECTION_READY)
+        app.ever_ready = true;
+    if (connection != previous_connection || !previous_link) {
+        app.rendered = false;
+        close_modal();
+        app.dirty = true;
+    }
     char *new_view = ui_view_signature();
     if (strcmp(previous_view ? previous_view : "", new_view ? new_view : ""))
         app.dirty = true;
@@ -972,6 +1028,51 @@ static void navigation(void) {
         lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
     }
 }
+static void connection_center(lv_obj_t *label) {
+    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+}
+static void connection_screen(ConnectionMode mode) {
+    bool starting = mode == CONNECTION_STARTING;
+    bool service_lost = mode == CONNECTION_SERVICE_LOST;
+    if (starting || service_lost) {
+        lv_obj_t *spinner = lv_spinner_create(app.content, 1000, 60);
+        lv_obj_set_pos(spinner, 376, 116);
+        lv_obj_set_size(spinner, 48, 48);
+        lv_obj_set_style_arc_width(spinner, 4, LV_PART_MAIN);
+        lv_obj_set_style_arc_width(spinner, 4, LV_PART_INDICATOR);
+        lv_obj_set_style_arc_color(spinner, edge, LV_PART_MAIN);
+        lv_obj_set_style_arc_color(spinner, app.accent, LV_PART_INDICATOR);
+        lv_obj_clear_flag(spinner, LV_OBJ_FLAG_CLICKABLE);
+    } else
+        icon(app.content, "printer-3d", 378, 118, 44, muted);
+    connection_center(text(app.content,
+                           starting       ? "Printer is starting up"
+                           : service_lost ? "Cannot connect to touchscreen service"
+                                          : "Printer connection lost",
+                           60, 190, 680, &font_ui_28, false));
+    const char *state = S("status.webhooks.state");
+    bool fatal = !strcmp(state, "error") || !strcmp(state, "shutdown");
+    const char *detail =
+        service_lost ? "Waiting for the local touchscreen service to reconnect…"
+        : starting   ? "Waiting for printer control to become ready…"
+        : fatal && *S("status.webhooks.state_message") ? S("status.webhooks.state_message")
+        : !app.service_link ? "Waiting for the touchscreen service to reconnect…"
+        : !app.connected    ? "Waiting for the connection to printer control to return."
+        : *S("error")       ? S("error")
+                            : "Printer control is restarting. Waiting for reconnection…";
+    const char *result_action = S("result.action");
+    if (!starting && !service_lost && !B("result.success") && *S("result.error") &&
+        (!strcmp(result_action, "restart") || !strcmp(result_action, "firmware_restart")))
+        detail = S("result.error");
+    lv_obj_t *message = text(app.content, detail, 90, 240, 620, &font_ui_18, true);
+    connection_center(message);
+    lv_obj_set_height(message, 82);
+    lv_label_set_long_mode(message, LV_LABEL_LONG_DOT);
+    if (starting || service_lost)
+        return;
+    button_fixed(app.content, "Restart Klipper", 74, 352, 312, 70, "restart:klipper", false);
+    button_fixed(app.content, "Firmware restart", 414, 352, 312, 70, "restart:firmware", false);
+}
 void ui_render(void) {
     save_scroll();
     current_scroll = NULL;
@@ -986,6 +1087,21 @@ void ui_render(void) {
     app.status_label = app.status_dot = app.time_label = app.layer_label = app.progress =
         app.percent = NULL;
     lv_obj_clean(app.content);
+    ConnectionMode connection = ui_connection_mode();
+    if (connection != CONNECTION_READY) {
+        if (app.nav) {
+            lv_obj_del(app.nav);
+            app.nav = NULL;
+        }
+        lv_obj_set_pos(app.content, 0, 0);
+        lv_obj_set_size(app.content, 800, 480);
+        connection_screen(connection);
+        app.rendered = true;
+        lv_obj_update_layout(app.screen);
+        return;
+    }
+    lv_obj_set_pos(app.content, LEFT, 0);
+    lv_obj_set_size(app.content, 678, 480);
     navigation();
     if (!strcmp(app.route, "home"))
         view_home();
@@ -998,7 +1114,8 @@ void ui_render(void) {
     lv_obj_update_layout(app.screen);
 }
 void ui_update(void) {
-    views_refresh();
+    if (ui_connection_mode() == CONNECTION_READY)
+        views_refresh();
 }
 void ui_tick(void) {
     bool pressing = platform_pressed();

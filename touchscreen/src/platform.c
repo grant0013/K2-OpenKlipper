@@ -299,6 +299,7 @@ static bool connect_ipc(void) {
     if (connect(ipc, (struct sockaddr *)&addr, sizeof(addr))) {
         close(ipc);
         ipc = -1;
+        receive_length = 0;
         return false;
     }
     fcntl(ipc, F_SETFL, O_NONBLOCK);
@@ -317,9 +318,13 @@ bool platform_send(const char *text) {
     if (sent != (ssize_t)n + 1) {
         close(ipc);
         ipc = -1;
+        receive_length = 0;
         return false;
     }
     return true;
+}
+bool platform_linked(void) {
+    return ipc >= 0;
 }
 char *platform_receive(void) {
     if (!connect_ipc())
@@ -345,6 +350,8 @@ char *platform_receive(void) {
             if (!n || (errno != EAGAIN && errno != EWOULDBLOCK)) {
                 close(ipc);
                 ipc = -1;
+                receive_length = 0;
+                return NULL;
             }
             break;
         }

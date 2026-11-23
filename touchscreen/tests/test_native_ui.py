@@ -120,14 +120,81 @@ class NativeUI(unittest.TestCase):
    self.assertTrue(all(c['action']=='files' for c in commands))
 
  def test_error_popup_has_one_centered_acknowledgment_without_restart(self):
-  data=copy.deepcopy(self.data);data['error']='Example printer fault';data['status']['webhooks']['state']='error'
+  data=copy.deepcopy(self.data);data['error']='Example printer fault'
   items,commands=self.render(data=data)
   self.assertFalse(any(i['action'] in ('error_details','restart:firmware') for i in items))
   rect=next(i['rect'] for i in items if i['action']=='error_ack')
   self.assertLessEqual(abs(rect[0]+rect[2]/2-400),1)
   items,commands=self.render('move',['error_ack'],data=data)
   self.assertEqual(commands,[])
-  self.assertFalse(any(i['action'].startswith('jog:') for i in items))
+  self.assertTrue(any(i['action'].startswith('jog:') for i in items))
+
+ def test_startup_hides_all_pages_until_a_complete_ready_snapshot(self):
+  for mutation in ('disconnected','starting','settings','heaters','motors'):
+   data=copy.deepcopy(self.data)
+   if mutation=='disconnected':data['connected']=False
+   elif mutation=='starting':data['status']['webhooks']['state']='startup'
+   elif mutation=='settings':data['settings']={}
+   elif mutation=='heaters':data['heaters']=[]
+   else:data['status']['k2_motor_bus']={'motors_ready':False}
+   items,commands=self.render('move',data=data)
+   self.assertEqual(items,[])
+   self.assertEqual(commands,[])
+   items,_=self.render('move',[{'snapshot':self.data}],data)
+   self.assertTrue(any(i['action'].startswith('jog:') for i in items))
+
+ def test_notice_after_startup_opens_over_complete_home_page(self):
+  starting=copy.deepcopy(self.data);starting['connected']=False
+  ready=copy.deepcopy(self.data)
+  ready['notices']=[{'id':1,'title':'Ready','detail':'Example notice','fault':False}]
+  items,_=self.render(actions=[{'snapshot':ready}],data=starting)
+  self.assertTrue(any(i['action']=='open_files' for i in items))
+  self.assertTrue(any(i['action']=='notice_ack:1' for i in items))
+
+ def test_connection_loss_replaces_the_page_and_blocks_non_restart_actions(self):
+  lost=copy.deepcopy(self.data);lost['connected']=False
+  items,commands=self.render('filament',[{'snapshot':lost},'route:move','load','edit_slot'])
+  self.assertEqual({i['action'] for i in items},{'restart:klipper','restart:firmware'})
+  self.assertEqual(commands,[])
+  items,_=self.render('filament',[{'snapshot':lost},{'snapshot':self.data}])
+  self.assertTrue(any(i['action']=='edit_slot' for i in items))
+
+ def test_loss_dismisses_open_dialog_and_restart_requires_confirmation(self):
+  lost=copy.deepcopy(self.data);lost['connected']=False
+  items,commands=self.render(actions=['temperature:extruder',{'snapshot':lost},'temp_set'])
+  self.assertEqual({i['action'] for i in items},{'restart:klipper','restart:firmware'})
+  self.assertEqual(commands,[])
+  for choice,key in [('klipper','restart'),('firmware','firmware_restart')]:
+   items,commands=self.render(actions=[{'snapshot':lost},'restart:'+choice,'close'])
+   self.assertEqual(commands,[])
+   items,commands=self.render(actions=[{'snapshot':lost},'restart:'+choice,'confirmed'])
+   self.assertEqual(commands,[{'action':key,'confirm':True}])
+
+ def test_socket_loss_has_its_own_screen_without_restart_actions(self):
+  items,commands=self.render('move',[{'transport_lost':True},'restart:klipper','confirmed'])
+  self.assertEqual(items,[])
+  self.assertEqual(commands,[])
+  items,_=self.render('move',[{'transport_lost':True},{'snapshot':self.data}])
+  self.assertTrue(any(i['action'].startswith('jog:') for i in items))
+
+ def test_service_loss_during_startup_is_distinct_from_waiting_for_klipper(self):
+  from PIL import Image
+  data=copy.deepcopy(self.data);data['connected']=False
+  self.render(data=data)
+  starting=Image.open(self.path/'screen.ppm').crop((60,190,740,230)).tobytes()
+  items,commands=self.render(actions=[{'transport_lost':True}],data=data)
+  lost=Image.open(self.path/'screen.ppm').crop((60,190,740,230)).tobytes()
+  self.assertNotEqual(starting,lost)
+  self.assertEqual(items,[])
+  self.assertEqual(commands,[])
+
+ def test_unloading_keeps_sidebar_and_tabs_when_connection_is_healthy(self):
+  data=copy.deepcopy(self.data)
+  op={'id':1,'action':'unload','label':'Unloading filament'}
+  data['operation']=op;data['operations']=[op]
+  items,_=self.render('filament',data=data)
+  for action in ('route:home','route:files','route:settings','route:fans'):
+   self.assertTrue(any(i['action']==action for i in items))
 
  def test_display_options_and_highlights_use_available_space(self):
   items,_=self.render('display')
@@ -400,7 +467,7 @@ class NativeUI(unittest.TestCase):
  def test_initial_printer_fault_is_visible_and_resolves_after_restart(self):
   fault=copy.deepcopy(self.data);fault['error']='Test shutdown';fault['status']['webhooks']['state']='shutdown'
   items,_=self.render(data=fault)
-  self.assertTrue(any(item['action']=='error_ack' for item in items))
+  self.assertEqual({item['action'] for item in items},{'restart:klipper','restart:firmware'})
   items,_=self.render(actions=[{'snapshot':fault},{'snapshot':self.data}])
   self.assertFalse(any(item['action']=='error_ack' for item in items))
   self.assertTrue(any(item['action']=='open_files' for item in items))

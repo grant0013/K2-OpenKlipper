@@ -127,6 +127,8 @@ int main(int argc, char **argv) {
                 ui_action(step->valuestring);
             else if (cJSON_IsObject(step) && cJSON_GetObjectItemCaseSensitive(step, "snapshot"))
                 ui_data(cJSON_Duplicate(cJSON_GetObjectItemCaseSensitive(step, "snapshot"), true));
+            else if (cJSON_IsObject(step) && jbool(step, "transport_lost", false))
+                ui_transport_lost();
             ui_tick();
             lv_tick_inc(20);
             lv_timer_handler();
@@ -155,6 +157,8 @@ int main(int argc, char **argv) {
                 ui_data(cJSON_Parse(raw));
                 free(raw);
             }
+            if (!platform_linked())
+                ui_transport_lost();
         }
         ui_tick();
         uint32_t wait = lv_timer_handler();

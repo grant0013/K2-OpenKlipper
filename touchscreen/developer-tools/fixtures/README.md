@@ -42,7 +42,7 @@ Copy a JSON file in `cases/` and edit these fields:
 For example, `mapping.json` opens the selected file and runs `review_mapping`.
 `wifi-password.json` selects a synthetic secured network to open its keyboard.
 Actions use the same format as `tests/test_native_ui.py`; they never send printer
-commands. The recipes share the generator so changing the service snapshot schema
+commands. `{"transport_lost": true}` simulates loss of the local touchscreen service. The recipes share the generator so changing the service snapshot schema
 does not require maintaining many large JSON copies. For different status data,
 add a scenario to `demo_snapshot.py`; keep recipes focused on artwork, pages and
 action sequences.

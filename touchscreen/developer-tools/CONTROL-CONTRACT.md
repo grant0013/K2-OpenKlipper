@@ -157,3 +157,15 @@ confirmation and runs M84, which clears Klipper homing. Lock enables configured
 XYZ steppers without homing or restoring position. Motor enable state considers
 axis steppers, not the extruder's enable pin. No model-specific axis list or
 motion limits are embedded in the service.
+
+## Connection lifecycle
+
+`ui_connection_mode()` is the single page-level gate: initial startup, ready, or
+connection lost. Startup waits for connected Klipper, ready webhooks, populated
+settings/heaters and the initial motor handshake when that capability exists.
+Ordinary G-code failures with ready Klipper remain dismissible notices. Shutdown
+or disconnection replaces the whole page and dismisses obsolete open dialogs.
+Only restart actions and their confirmation/cancellation are available; commands
+for navigation, movement, filament or temperature are rejected by the UI guard.
+If the backend socket is unavailable, a separate service-reconnection screen
+hides restart buttons until the service reconnects. Recovery returns to the previous route without issuing motion.

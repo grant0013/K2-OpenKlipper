@@ -54,7 +54,9 @@ static bool contains(const char *list, const char *route) {
 }
 char *ui_view_signature(void) {
     cJSON *value = cJSON_CreateObject();
-    const char *base[] = {"connected", "status.webhooks.state", "status.print_stats.state"};
+    const char *base[] = {"connected", "status.webhooks.state",         "status.print_stats.state",
+                          "error",     "status.webhooks.state_message", "platform.connection_error",
+                          "result"};
     for (unsigned i = 0; i < sizeof(base) / sizeof(base[0]); i++)
         cJSON_AddItemToObject(value, base[i], cJSON_Duplicate(J(base[i]), true));
     bool found = false;

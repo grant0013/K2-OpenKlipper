@@ -150,6 +150,7 @@ SCENARIOS = (
     "notice",
     "recovery",
     "disconnected",
+    "shutdown",
     "wifi-connected",
     "wifi-failed",
 )
@@ -268,7 +269,12 @@ def preview_scenario(name="idle", printing=False):
         )
         data["materials"] = [
             {"name": "Demo " + kind, "type": kind, "nozzle_temp": temperature}
-            for kind, temperature in (("PLA", 220), ("PETG", 250), ("ASA", 260), ("ABS", 260))
+            for kind, temperature in (
+                ("PLA", 220),
+                ("PETG", 250),
+                ("ASA", 260),
+                ("ABS", 260),
+            )
         ]
         data["metadata"]["filaments"] = [
             {"tool": i, "type": kind, "colour": palette[i][i]}
@@ -288,7 +294,12 @@ def preview_scenario(name="idle", printing=False):
         data["error"] = (
             "No trigger on probe after full movement. Check the nozzle and bed before retrying."
         )
-        data["status"]["webhooks"]["state"] = "error"
+        data["status"]["webhooks"]["state"] = "ready"
+    elif name == "shutdown":
+        data["status"]["webhooks"].update(
+            state="shutdown", state_message="Lost communication with the toolhead MCU."
+        )
+        data["error"] = "Lost communication with the toolhead MCU."
     elif name == "notice":
         data["notices"] = [
             {

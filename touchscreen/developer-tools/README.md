@@ -108,7 +108,9 @@ sh touchscreen/developer-tools/preview.sh --list
 | `no-cfs` | Printer without CFS and spool-holder controls |
 | `wifi-password` | Secured network password keyboard |
 | `wifi-connected`, `wifi-failed` | Network result notices |
-| `homing`, `error` | Activity indicator and fault dialog |
+| `homing`, `error` | Activity indicator and recoverable fault dialog |
+| `starting`, `shutdown` | Initial loading screen and blocking connection recovery |
+| `service-lost` | Separate local touchscreen-service reconnecting screen |
 
 To inspect another page using a case's state, add `--page`:
 
@@ -175,6 +177,15 @@ Reuse the existing UI helpers:
   thumbnails fall back to the file icon.
 - Shared keyboard and numeric-entry controls. Single-line keyboard mode must be
   set before final field dimensions; preserve all printable password characters.
+
+Connection state is owned by `ui_connection_mode()` above all page layouts.
+Before the first complete ready snapshot, show the startup screen. After a usable
+connection, loss or Klipper shutdown replaces the entire page with recovery
+controls. Only confirmed restart requests may pass the UI action guard in that
+state; backend policy still validates requests. `platform_linked()` detects a lost
+local socket so stale snapshots cannot leave controls enabled. Local service loss has its own reconnecting screen without firmware controls.
+Reconnection restores the previous route. Fixture actions support `{"transport_lost": true}`
+for testing socket-loss UI behavior without touching a real service.
 
 Keep state distinctions explicit: a spool being present differs from filament
 feeding the nozzle; the nozzle marker requires the extruder sensor and active
