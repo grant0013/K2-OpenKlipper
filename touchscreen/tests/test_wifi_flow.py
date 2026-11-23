@@ -50,10 +50,74 @@ class WifiUITests(unittest.TestCase):
         items, commands = self.render("networks", [select])
         self.assertTrue(any(i["action"] == "key_eye" for i in items))
         self.assertEqual(commands, [])
-        actions = [select] + ["key:" + letter for letter in "testpass"] + ["key_done"]
+        actions = (
+            [select]
+            + ["key:" + letter for letter in "testpass"]
+            + ["key_eye", "key_done"]
+        )
         items, commands = self.render("networks", actions)
         self.assertEqual(
             commands,
             [{"action": "wifi_join", "ssid": "Demo network", "password": "testpass"}],
         )
         self.assertTrue(any(i["action"] == "scan_wifi" for i in items))
+
+    def test_single_symbols_page_covers_printable_password_characters_without_more(
+        self,
+    ):
+        select = 'wifi_select:{"ssid":"Demo network","secured":true}'
+        characters = set()
+        for modifiers in ([], ["key_shift"], ["key_symbols"]):
+            items, _ = self.render("networks", [select] + modifiers)
+            characters.update(
+                i["action"][4:] for i in items if i["action"].startswith("key:")
+            )
+            self.assertFalse(any(i["action"] == "key_more" for i in items))
+            for item in items:
+                self.assertGreaterEqual(min(item["rect"][2:]), 52)
+        self.assertEqual(characters, {chr(code) for code in range(32, 127)})
+
+    def test_password_length_stays_in_sync_with_the_field_limit(self):
+        select = 'wifi_select:{"ssid":"Demo network","secured":true}'
+        _, commands = self.render(
+            "networks", [select] + ["key:x"] * 65 + ["key_back", "key:z", "key_done"]
+        )
+        self.assertEqual(
+            commands,
+            [
+                {
+                    "action": "wifi_join",
+                    "ssid": "Demo network",
+                    "password": "x" * 62 + "z",
+                }
+            ],
+        )
+
+    def test_password_field_keeps_its_height_and_centers_text_with_visibility_control(
+        self,
+    ):
+        from PIL import Image
+
+        items, _ = self.render(
+            "networks", ['wifi_select:{"ssid":"Demo network","secured":true}']
+        )
+        eye = next(i["rect"] for i in items if i["action"] == "key_eye")
+        image = Image.open(self.path / "screen.ppm").convert("RGB")
+        accent = tuple(
+            bytes.fromhex(self.data["prefs"].get("accent", "#3d8bfd").lstrip("#"))
+        )
+        borders = [y for y in range(60, 150) if image.getpixel((400, y)) == accent]
+        self.assertTrue(borders)
+        top, bottom = min(borders), max(borders) + 1
+        self.assertGreaterEqual(bottom - top, eye[3] + 8)
+        self.assertLessEqual(abs((top + bottom) / 2 - (eye[1] + eye[3] / 2)), 1)
+        ink = (
+            image.crop((30, top + 2, 350, bottom - 2))
+            .convert("L")
+            .point(lambda v: 255 if v > 200 else 0)
+            .getbbox()
+        )
+        self.assertIsNotNone(ink)
+        self.assertLessEqual(
+            abs(top + 2 + (ink[1] + ink[3]) / 2 - (eye[1] + eye[3] / 2)), 3
+        )

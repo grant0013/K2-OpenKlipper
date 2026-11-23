@@ -128,7 +128,7 @@ static void sync_availability(lv_obj_t *object) {
 static lv_obj_t *make_button(lv_obj_t *parent, const char *label, int x, int y, int width,
                              int height, const char *action, bool selected, bool large_caption) {
     /* Compact controls grow around their centres. Keep the on-screen keyboard
-     * on its 54px row pitch; Home retains its reviewed control dimensions. */
+     * touch targets within its own row pitch; Home retains its reviewed control dimensions. */
     if ((strcmp(app.route, "home") || (app.overlay && parent == app.body)) && height >= 40 &&
         height < 60) {
         int target = app.keyboard_visible ? 52 : 60;

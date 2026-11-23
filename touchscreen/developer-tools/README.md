@@ -143,7 +143,9 @@ header reports refresh progress or failure without opening an operation modal.
 Time-zone rows select a draft value. The highlighted row shows the selection. A pending row reveals its own **Apply** button; Back discards it.
 The compact current-zone summary and full-height list keep browsing space available.
 
-The window is 800 by 480 pixels. Mouse presses represent touches. For printing
+The window is 800 by 480 pixels. Mouse presses represent touches. Text entry
+uses a full-width keyboard: the capital-arrow key changes case, `?123` shows
+numbers and all punctuation on one page, and `ABC` returns to letters. For printing
 layouts, generate the snapshot with `--printing`.
 
 Fixture mode never connects to the printer service or sends printer commands.

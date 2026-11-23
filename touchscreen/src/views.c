@@ -1854,60 +1854,85 @@ static void temperature_sheet(void) {
 }
 static lv_obj_t *keyboard_input;
 static bool keyboard_symbols, keyboard_shift;
+static lv_obj_t *keyboard_key(const char *label, const char *action, int x, int y, int width,
+                              int height, bool selected) {
+    lv_obj_t *key = button_fixed(app.body, "", x, y, width, height, action, selected);
+    if (!strncmp(label, "icon:", 5)) {
+        icon(key, label + 5, 0, 0, 28, selected ? app.accent : colour("f0f3f7"));
+        lv_obj_align(lv_obj_get_child(key, -1), LV_ALIGN_CENTER, 0, 0);
+    } else {
+        lv_obj_t *caption =
+            text(key, label, 0, 0, width, strlen(label) == 1 ? &font_ui_24 : &font_ui_20, false);
+        centered(caption);
+        lv_obj_align(caption, LV_ALIGN_CENTER, 0, 0);
+    }
+    return key;
+}
 static void keyboard_draw(void) {
-    modal_frame(app.keyboard_title, 84, 0, 716, 480, false);
+    modal_frame(app.keyboard_title, 0, 0, WIDTH, HEIGHT, false);
+    lv_obj_set_style_radius(app.body, 0, 0);
+    lv_obj_set_style_border_width(app.body, 0, 0);
     app.keyboard_visible = true;
     keyboard_input = lv_textarea_create(app.body);
-    lv_obj_set_pos(keyboard_input, 18, 70);
-    lv_obj_set_size(keyboard_input, 680, 60);
+    /* Single-line mode resets height to content size. Apply the final field
+     * dimensions and padding afterward, keeping text clear of both borders. */
     lv_textarea_set_one_line(keyboard_input, true);
+    lv_obj_set_style_text_font(keyboard_input, &font_ui_24, 0);
+    lv_obj_set_style_pad_left(keyboard_input, 18, 0);
+    lv_obj_set_style_pad_right(keyboard_input, !strcmp(app.keyboard_kind, "wifi") ? 92 : 18, 0);
+    lv_obj_set_style_pad_top(keyboard_input, 20, 0);
+    lv_obj_set_style_pad_bottom(keyboard_input, 21, 0);
+    lv_obj_set_style_bg_color(keyboard_input, colour("202b3a"), 0);
+    lv_obj_set_style_bg_opa(keyboard_input, LV_OPA_COVER, 0);
+    lv_obj_set_style_text_color(keyboard_input, colour("f0f3f7"), 0);
+    lv_obj_set_style_border_color(keyboard_input, app.accent, 0);
+    lv_obj_set_style_border_width(keyboard_input, 2, 0);
+    lv_obj_set_style_radius(keyboard_input, 12, 0);
+    lv_obj_set_pos(keyboard_input, 16, 70);
+    lv_obj_set_size(keyboard_input, 768, 76);
     lv_textarea_set_text(keyboard_input, app.keyboard_value);
     lv_textarea_set_password_mode(keyboard_input,
                                   !strcmp(app.keyboard_kind, "wifi") && !app.password_visible);
     if (!strcmp(app.keyboard_kind, "wifi")) {
         lv_textarea_set_placeholder_text(keyboard_input, "Wi-Fi password");
-        lv_obj_set_style_pad_right(keyboard_input, 76, 0);
-    }
-    lv_obj_set_style_text_font(keyboard_input, &font_ui_20, 0);
-    lv_obj_set_style_bg_color(keyboard_input, colour("151a22"), 0);
-    lv_obj_set_style_bg_opa(keyboard_input, 255, 0);
-    lv_obj_set_style_text_color(keyboard_input, colour("f0f3f7"), 0);
-    lv_obj_set_style_border_color(keyboard_input, colour("343e4b"), 0);
-    lv_obj_set_style_border_width(keyboard_input, 1, 0);
-    lv_obj_set_style_radius(keyboard_input, 12, 0);
-    if (!strcmp(app.keyboard_kind, "wifi")) {
-        lv_obj_t *eye = button(app.body, app.password_visible ? "icon:eye" : "icon:eye-off", 634,
-                               73, 60, 54, "key_eye", false);
+        lv_textarea_set_max_length(keyboard_input, 63);
+        lv_obj_t *eye = keyboard_key(app.password_visible ? "icon:eye" : "icon:eye-off", "key_eye",
+                                     710, 76, 64, 64, false);
         lv_obj_set_style_bg_opa(eye, LV_OPA_TRANSP, 0);
         lv_obj_set_style_border_width(eye, 0, 0);
     }
-    const char *letters[] = {"qwertyuiop", "asdfghjkl", "zxcvbnm"},
-               *symbols[] = {"1234567890", "!@#$%^&*()", "-_=+[]{};:"};
-    for (int r = 0; r < 3; r++) {
-        const char *row = keyboard_symbols ? symbols[r] : letters[r];
-        int n = strlen(row), w = (680 - (n - 1) * 6) / n;
-        for (int i = 0; i < n; i++) {
-            char caption[2] = {row[i], 0}, action[20];
-            if (keyboard_shift && caption[0] >= 'a' && caption[0] <= 'z')
+    const char *letters[] = {"qwertyuiop", "asdfghjkl", "zxcvbnm"};
+    const char *symbols[] = {"1234567890!@#$", "%^&*()-_=+[]{}", ";:~`|\\<>?/\"',."};
+    for (int row = 0; row < 3; row++) {
+        const char *characters = keyboard_symbols ? symbols[row] : letters[row];
+        int count = strlen(characters), gap = keyboard_symbols ? 3 : 6;
+        int width = (768 - (count - 1) * gap) / count;
+        int start = (WIDTH - (count * width + (count - 1) * gap)) / 2;
+        for (int column = 0; column < count; column++) {
+            char caption[2] = {characters[column], 0}, action[20];
+            if (!keyboard_symbols && keyboard_shift && caption[0] >= 'a' && caption[0] <= 'z')
                 caption[0] -= 32;
             snprintf(action, sizeof(action), "key:%s", caption);
-            button(app.body, caption, 18 + i * (w + 6), 144 + r * 54, w, 48, action, false);
+            keyboard_key(caption, action, start + column * (width + gap), 158 + row * 62, width, 56,
+                         false);
         }
     }
-    button(app.body, keyboard_symbols ? "ABC" : "?123", 18, 310, 100, 48, "key_symbols", false);
-    button(app.body, "Shift", 128, 310, 100, 48, "key_shift", keyboard_shift);
-    button(app.body, "Space", 238, 310, 220, 48, "key: ", false);
-    button(app.body, "icon:delete", 468, 310, 100, 48, "key_back", false);
-    button(app.body, "More", 578, 310, 120, 48, "key_more", false);
-    button(app.body, "Cancel", 18, 402, 230, 60, "close", false);
-    button(app.body, !strcmp(app.keyboard_kind, "wifi") ? "Connect" : "Set colour", 458, 402, 240,
-           60, "key_done", true);
+    keyboard_key(keyboard_symbols ? "ABC" : "?123", "key_symbols", 16, 344, 112, 56, false);
+    if (!keyboard_symbols)
+        keyboard_key("icon:arrow-big-up", "key_shift", 136, 344, 112, 56, keyboard_shift);
+    keyboard_key("Space", "key: ", keyboard_symbols ? 136 : 256, 344, keyboard_symbols ? 524 : 404,
+                 56, false);
+    keyboard_key("icon:delete", "key_back", 668, 344, 116, 56, false);
+    keyboard_key("Cancel", "close", 16, 412, 378, 56, false);
+    keyboard_key(!strcmp(app.keyboard_kind, "wifi") ? "Connect" : "Set colour", "key_done", 406,
+                 412, 378, 56, true);
 }
 void ui_keyboard(const char *title, const char *kind, const char *value) {
     snprintf(app.keyboard_title, sizeof(app.keyboard_title), "%s", title);
     snprintf(app.keyboard_kind, sizeof(app.keyboard_kind), "%s", kind);
     snprintf(app.keyboard_value, sizeof(app.keyboard_value), "%s", value);
     keyboard_symbols = keyboard_shift = false;
+    app.password_visible = false;
     keyboard_draw();
 }
 bool views_control_key(const char *action, char *key, size_t size) {
@@ -2307,7 +2332,8 @@ void views_action(const char *a) {
         }
         cJSON_Delete(r);
     } else if (!strncmp(a, "key:", 4)) {
-        if (strlen(app.keyboard_value) + strlen(a + 4) < sizeof(app.keyboard_value) - 1)
+        size_t limit = !strcmp(app.keyboard_kind, "wifi") ? 63 : sizeof(app.keyboard_value) - 2;
+        if (strlen(app.keyboard_value) + strlen(a + 4) <= limit)
             strcat(app.keyboard_value, a + 4);
         lv_textarea_set_text(keyboard_input, app.keyboard_value);
     } else if (!strcmp(a, "key_back")) {
@@ -2323,18 +2349,6 @@ void views_action(const char *a) {
         keyboard_draw();
     } else if (!strcmp(a, "key_eye")) {
         app.password_visible = !app.password_visible;
-        keyboard_draw();
-    } else if (!strcmp(a, "key_more")) {
-        modal_frame("More symbols", 120, 60, 560, 360, false);
-        const char *chars = "\\|~`<>?,./\"'";
-        for (size_t i = 0; i < strlen(chars); i++) {
-            char label[2] = {chars[i], 0}, action[10];
-            snprintf(action, sizeof(action), "extra:%c", chars[i]);
-            button(app.body, label, 24 + (i % 6) * 86, 90 + (i / 6) * 74, 76, 60, action, false);
-        }
-    } else if (!strncmp(a, "extra:", 6)) {
-        if (strlen(app.keyboard_value) < sizeof(app.keyboard_value) - 2)
-            strcat(app.keyboard_value, a + 6);
         keyboard_draw();
     } else if (!strcmp(a, "key_done")) {
         close_modal();

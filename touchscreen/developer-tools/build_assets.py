@@ -72,6 +72,7 @@ icons = (
     "chevron-right",
     "chevron-down",
     "arrow-up",
+    "arrow-big-up",
     "arrow-down",
     "arrow-left",
     "arrow-right",
