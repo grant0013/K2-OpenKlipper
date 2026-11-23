@@ -1274,15 +1274,8 @@ class Service:
 
     def prepare_artwork(self):
         cfs = model.fitted(self.status)
-        key = "status_image" if cfs else "status_image_without_cfs"
-        source = self.config.get("brand", key, fallback="")
-        if source:
-            path = Path(source)
-            if not path.is_absolute():
-                path = self.config_path.parent / path
-        else:
-            filename = "printer-with-cfs.png" if cfs else "printer-without-cfs.png"
-            path = Path(__file__).resolve().parents[1] / "assets" / filename
+        filename = "printer-with-cfs.png" if cfs else "printer-without-cfs.png"
+        path = Path(__file__).resolve().parents[1] / "assets" / filename
         signature = (str(path), path.stat().st_mtime)
         if signature != self.artwork_key:
             self.platform["printer_image"] = storage.prepare_image(

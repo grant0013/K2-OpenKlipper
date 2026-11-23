@@ -12,12 +12,19 @@ spec.loader.exec_module(migration)
 
 
 class MigrationTest(unittest.TestCase):
+    def test_obsolete_image_paths_are_removed_without_rewriting_other_settings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "native-screen.cfg"
+            target.write_text("[brand]\n# Keep this comment\nmodel: My printer\nstatus_image: old.png\nstatus_image_without_cfs = old-bare.png\n[screen]\nrotate: 90\n")
+            migration.migrate(target, ROOT / "runtime/native-screen.cfg.example", Path(directory) / "missing.cfg")
+            self.assertEqual(target.read_text(), "[brand]\n# Keep this comment\nmodel: My printer\n[screen]\nrotate: 90\n")
+
     def test_display_settings_transfer_and_calibration_stays_untouched(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)
             legacy = path / "harkscreen.cfg"
             legacy.write_text(
-                "[brand]\nmodel: Custom model\n[screen]\nrotate: 270\n"
+                "[brand]\nmodel: Custom model\nstatus_image: obsolete.png\n[screen]\nrotate: 270\n"
                 "cutter_calibration_method: STALL\n[theme]\naccent: #d9434a\n"
             )
             overrides = path / "printer-overrides.cfg"
@@ -28,6 +35,7 @@ class MigrationTest(unittest.TestCase):
             )
             config = migration.configparser.ConfigParser()
             config.read(target)
+            self.assertFalse(config.has_option("brand", "status_image"))
             self.assertEqual(config.get("brand", "model"), "Custom model")
             self.assertEqual(config.getint("screen", "rotate"), 270)
             self.assertEqual(config.get("screen", "cutter_calibration_method"), "STALL")

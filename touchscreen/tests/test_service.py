@@ -89,10 +89,10 @@ class ServiceTests(unittest.TestCase):
         self.s.prepare_artwork()
         self.assertEqual(self.s.platform["printer_image"], with_cfs)
 
-    def test_custom_printer_artwork_remains_supported(self):
-        self.s.config.set("brand", "status_image", str(ROOT / "assets/printer-without-cfs.png"))
+    def test_legacy_image_override_does_not_change_automatic_artwork(self):
+        self.s.config.set("brand", "status_image", "/missing/obsolete-printer.png")
         self.s.prepare_artwork()
-        self.assertEqual(Path(self.s.artwork_key[0]).name, "printer-without-cfs.png")
+        self.assertEqual(Path(self.s.artwork_key[0]).name, "printer-with-cfs.png")
 
     def test_timelapse_can_be_toggled_during_print(self):
         self.state["print_stats"]["state"] = "printing"

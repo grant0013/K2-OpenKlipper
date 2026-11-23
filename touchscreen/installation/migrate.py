@@ -4,12 +4,22 @@
 import argparse
 import configparser
 import json
+import re
 from pathlib import Path
 
 
 def migrate(config, example, legacy, model=""):
     config = Path(config)
     if config.exists():
+        # Image selection is now automatic; keep all other settings and comments.
+        previous = config.read_text()
+        cleaned = re.sub(
+            r"(?m)^[ \t]*status_image(?:_without_cfs)?[ \t]*[:=][^\n]*(?:\n|$)",
+            "",
+            previous,
+        )
+        if cleaned != previous:
+            config.write_text(cleaned)
         return
     native = configparser.ConfigParser()
     native.read(example)
@@ -18,7 +28,7 @@ def migrate(config, example, legacy, model=""):
     if model:
         native.set("brand", "model", model)
     for section, keys in {
-        "brand": ("name", "model", "status_image", "status_image_without_cfs"),
+        "brand": ("name", "model"),
         "screen": (
             "moonraker",
             "rotate",

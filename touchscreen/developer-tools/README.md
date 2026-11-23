@@ -229,8 +229,8 @@ Its Node dependencies are pinned in `package.json` and `package-lock.json`.
 
 The original printer illustration lives in `assets/printer.svg`. The fixture
 generator creates both production PNGs (with and without CFS) and the matching
-preview copies. Blank brand image settings use these bundled runtime images;
-explicit custom paths remain supported.
+preview copies. The backend selects the bundled image automatically from CFS
+presence. Image paths are not printer configuration settings.
 
 Preview artwork has its own generator. After editing fixture SVGs, regenerate
 their committed PNGs; after changing visible layouts, refresh the user README's
