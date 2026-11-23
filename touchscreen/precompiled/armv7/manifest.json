@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "built_from_commit": "e381aa2bbf2e2e56ab7ab6f38e2ef115edc14cc3",
+  "built_from_commit": "f68d12a28c7114acc362b4ac2493b35bd0e68c43",
   "source_inputs": {
     "VERSION": "a12a1be3f3ee06a3159f695083ad52c3f3dc2ae1f071b7aece71cfe4c1f1e133",
     "install.sh": "2f47f109e1d906b94dbf6e4df29029537019ef7fb209d35689de61b10923084b",
@@ -19,10 +19,10 @@
     "touchscreen/assets/printer-without-cfs.png": "9fdf903c7c9e9e0f0a55458fbffda151234a0073901d4cf136d04b43531e1275",
     "touchscreen/assets/printer.svg": "0da7d0052b85e6ae02bdb565e4201662303e7449afdfd2c68fe6d92b2a9f897c",
     "touchscreen/assets/skip-object.svg": "29c065e8a63a2ebac8e8528bfa490c672a158d091497b2efc73ef39437d071bc",
-    "touchscreen/backend/action_policy.py": "58cc266c397d764dbf77177341dbb7d09660b8d031dfc52039b86e389769d617",
-    "touchscreen/backend/model.py": "dd97b0a4915de09bfa5d56f971cfcb46eda958e38e73c94cb952605795025d84",
-    "touchscreen/backend/platform_services.py": "e74d1eb0162e9a79ead36091bb4df334223ae7a244c60d106b9cce58d2ad0391",
-    "touchscreen/backend/service.py": "693db22cfdfdcd28cf880a104b3fcde7410da79af3f92566c82b2744d327d743",
+    "touchscreen/backend/action_policy.py": "f9a4d39485cc9a54be01642057ffefa616a5ad9f514a011482cacbc276e55035",
+    "touchscreen/backend/model.py": "cf583f164af6cfb0b24e04d12df8cc3a7241aeaefd8969bf33b3e078bbc8c013",
+    "touchscreen/backend/platform_services.py": "c4045b269ac0cdddf762c9d13f1a8355bd9cadf0ecafd3986abb9f9e8f108c7b",
+    "touchscreen/backend/service.py": "d07a0e2dc5b7cd3d28f1c7e41896d7ef271e37b7018715bb66aaba4c52801c01",
     "touchscreen/backend/storage.py": "3c94f250523894aedde00e401e53f390b6f72792ace517968b1b7c460b74436f",
     "touchscreen/build/CMakeLists.txt": "866150a63ecbe9ebe04a72e9e16b8706f59d5eb50a5d8d250a80bc2ffb0e2e20",
     "touchscreen/build/arm-linux.cmake": "9345345c5e2cc41053e1dd40ddeceac98a14bec13b8f2f68985e9eb48a6767be",
@@ -41,15 +41,15 @@
     "touchscreen/src/json.c": "78986758cd5e2c91ff366341f3a35144163e8d646cce878abd2bae1105d22195",
     "touchscreen/src/main.c": "2066b9899d5bd1a919ff6acf031055e55a7fcba56f0e82b490150283fdd0672a",
     "touchscreen/src/platform.c": "42ddda371a3e5d02841ea247d711d070356a04ee3e6f1ff4b7aef9fffa319911",
-    "touchscreen/src/screen.h": "ce71491d45c6c07ea142a66304026eb23af6113d9103d5ed3b6c21742783be54",
-    "touchscreen/src/ui.c": "b042fa46ca69427e79b7dcc825de2ebab700bea91d86acc098069fa0abb4589a",
+    "touchscreen/src/screen.h": "d9398e7a8e4b442671a9d3bbdee715f0f896ad7e474395984271194a56aaa623",
+    "touchscreen/src/ui.c": "ff4c6b9d1043c054cbb213efe71b6de3e8b0b286008ec9a314b5b5ef5f5c425b",
     "touchscreen/src/view_inputs.c": "dee7267ec1c569a81c2378855982465276b6b0eee8444a0b175c760a8372dc8e",
-    "touchscreen/src/views.c": "01a9f0b3b69746f446e471a18745ff11fc2c9fd71c00cc8d952b3a509c2cd512"
+    "touchscreen/src/views.c": "7f9fcf55c23838ce3975aeff1c4e6676f9238146ba52bd61e2e7376e0455620b"
   },
-  "source_fingerprint": "8758e6709747e3c917a0d7b61dfd0bce1d46fa7ea586dbc0433ec1deec721b85",
+  "source_fingerprint": "5b274e296e487bc416393ea08644d9bec5eec491c698477cfc9bfea0c30eacb9",
   "target": "armv7-linux-gnueabihf",
   "files": {
-    "VERSION": "fa9cfba4161a51904b70d6676b6f0ef13a78a85bd3c0f7647b74750f38cd0232",
+    "VERSION": "e07ea5e060dd894d6a33bf9ca6808721bcdf029fef46a76a99fff723256553db",
     "assets/activity-16.png": "c919d511ce9edcb9d429b0fd34c07992897427f344576e3d4205bdf884686734",
     "assets/activity-20.png": "992b40c4beea90f8f95d1e41f959c340754c47b8e16c69e13598e39af4a03222",
     "assets/activity-22.png": "c942aa5df3dcfc51374af5c9189d5de6ea824b3addebfb3f55c63de7e02538a7",
@@ -592,6 +592,6 @@
     "licenses/Lucide-LICENSE": "1e7290b35280a048667bbf0ebabac1c7fd52a75300e8b2946ac165715997f2bc",
     "licenses/Noto-LICENSE": "075f91382875da1c4b491f1facf2586f55448705133264d98ce15cab6211b125",
     "licenses/cJSON-LICENSE": "a36dda207c36db5818729c54e7ad4e8b0c6fba847491ba64f372c1a2037b6d5c",
-    "openklipper-screen": "296a1c14b4b4557682c337c53b4d638bb2b2c34d13e78de7676bae11995cc628"
+    "openklipper-screen": "02ade8bc67e63ca0d51e13cab659500fa73cd95e49cc13c69e140bc9c121b0ad"
   }
 }
