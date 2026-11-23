@@ -38,6 +38,7 @@ Paths below are relative to `touchscreen/`:
 | `backend/platform_services.py` | Network and printer-local services |
 | `backend/storage.py` | Image cache, file/export and time-zone helpers |
 | `backend/gcode_metadata.py` | Bounded fallback reader for embedded G-code metadata and PNGs |
+| `../klippy/extras/k2_cfs.py`, `hark_cfs_slots.py` | Slot-event history and persistent inventory invalidation |
 | `assets/` | Production SVGs, fonts and licenses |
 | `build/` | CMake, ARM toolchain and LVGL configuration |
 | `runtime/` | Startup scripts and example configuration |
@@ -107,6 +108,7 @@ sh touchscreen/developer-tools/preview.sh --list
 | `file` | File preview, metadata and calibration option |
 | `file-reading`, `file-no-preview`, `printing-no-preview` | Reading and missing-thumbnail states |
 | `idle-lit` | Light icon with visible rays |
+| `spool-inserted`, `spool-removed` | Filament-change prompt and empty CFS slot |
 | `mapping` | File filament requirements and source selection |
 | `objects` | Object outlines and skip confirmation |
 | `empty-extruder` | Spools present, no filament feeding the nozzle |
@@ -325,3 +327,23 @@ This installs the screen/service without reinstalling Klipper. Runtime diagnosti
 | PID files | Same base names as the logs, with `.pid` |
 | Display configuration | `native-screen.cfg` in the selected configuration directory |
 | Preferences | `native-screen-settings.json` beside the display configuration |
+
+## CFS inventory event integration
+
+The full installer must include the matching `k2_cfs.py` and `hark_cfs_slots.py`.
+A UI-only deployment cannot add the slot-event producer; updating these Klipper
+modules requires a Klipper restart. Do not restart an active print.
+
+The driver publishes a bounded sequence-numbered `slot_event_history` and sends
+`k2_cfs:slot_event`. Removal marks inventory unloaded while retaining the former
+profile internally for the current filament tail and existing refill macros.
+Native snapshots mask those details; the editor starts blank. Insertion adds a
+slot-specific notice whose OK action selects that unit/slot on the filament page.
+Startup/reconnect does not replay historical prompts; removal cancels a pending
+insertion notice. RFID-ready does not invent a material profile.
+
+Run driver integration tests with an environment containing CFFI:
+
+```sh
+python3 -m unittest discover -s tests -q
+```

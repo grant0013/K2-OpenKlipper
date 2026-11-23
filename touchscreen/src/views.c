@@ -609,6 +609,12 @@ static void fans_view(void) {
     }
 }
 static void filament_view(void) {
+    if (*app.notice_slot) {
+        snprintf(app.selected_slot, sizeof(app.selected_slot), "%s", app.notice_slot);
+        slot_unit(app.notice_slot, app.cfs_unit, sizeof(app.cfs_unit));
+        app.select_feeding_cfs = false;
+        app.notice_slot[0] = 0;
+    }
     ui_tabs(false, "filament");
     if ((!app.connected || strcmp(S("status.webhooks.state"), "ready")) &&
         ui_unavailable("Filament controls", "loading, retracting or editing filament"))
@@ -842,12 +848,9 @@ static void edit_view(void) {
             right(text(field, values[i], 230, 25, 320, &font_ui_20, false));
         icon(field, i == 2 ? "pencil" : "chevron-right", 560, 30, 16, colour("a4aebb"));
     }
-    if (!strcmp(app.selected_slot, "E")) {
-        button_fixed(app.content, "Cancel", 0, 402, 210, 64, "cancel_edit", false);
-        button_fixed(app.content, "Clear", 232, 402, 210, 64, "clear_spool", false);
-        button_fixed(app.content, "Save", 464, 402, 210, 64, "save_slot", true);
-    } else
-        footer("Cancel", "cancel_edit", "Save", "save_slot");
+    button_fixed(app.content, "Cancel", 0, 402, 210, 64, "cancel_edit", false);
+    button_fixed(app.content, "Reset", 232, 402, 210, 64, "reset_spool", false);
+    button_fixed(app.content, "Save", 464, 402, 210, 64, "save_slot", true);
 }
 static void materials_view(void) {
     const char *filters[] = {"All", "PLA", "PETG", "ABS", "TPU", "Other"};
@@ -1340,24 +1343,17 @@ static void refill_view(void) {
         center_message("No CFS installed", "CFS preferences require a connected CFS.", NULL, NULL);
         return;
     }
-    const char *labels[] = {"Insertion detection", "Startup detection", "Auto refill"},
-               *keys[] = {"cfs_insertion_read", "cfs_startup_read", "cfs_auto_refill"},
-               *details[] = {"Read filament information when a spool is inserted.",
-                             "Read filament information when the printer starts.", ""};
-    for (int i = 0; i < 3; i++) {
-        char path[80];
-        snprintf(path, sizeof(path), "prefs.%s", keys[i]);
-        bool enabled = jbool(app.data, path, i != 1);
-        cJSON *r = request("preference");
-        cJSON_AddStringToObject(r, "key", keys[i]);
-        cJSON_AddBoolToObject(r, "value", !enabled);
-        char *a = encode(r);
-        toggle_card(90 + i * SETTINGS_ROW_PITCH, SETTINGS_ROW_HEIGHT, labels[i], details[i],
-                    enabled, a);
-        free(a);
-    }
-    row(app.content, 90 + 3 * SETTINGS_ROW_PITCH, "Auto refill sequence", "›", "",
+    bool enabled = jbool(app.data, "prefs.cfs_auto_refill", true);
+    cJSON *r = request("preference");
+    cJSON_AddStringToObject(r, "key", "cfs_auto_refill");
+    cJSON_AddBoolToObject(r, "value", !enabled);
+    char *a = encode(r);
+    toggle_card(90, SETTINGS_ROW_HEIGHT, "Auto refill", "", enabled, a);
+    free(a);
+    row(app.content, 90 + SETTINGS_ROW_PITCH, "Auto refill sequence", "›", "",
         "route:refill_sequence");
+    centered(text(app.content, "Filament details are requested after a spool is inserted.", 20, 314,
+                  634, &font_ui_18, true));
 }
 static void refill_sequence(void) {
     lv_obj_t *list = scroll_area(88, 462);
@@ -2219,7 +2215,7 @@ bool views_control_key(const char *action, char *key, size_t size) {
                               {"load", "load"},
                               {"unload", "unload"},
                               {"edit_slot", "slot_save"},
-                              {"clear_spool", "slot_clear"},
+                              {"reset_spool", "slot_clear"},
                               {"save_slot", "slot_save"},
                               {"draft_temperature", "slot_save"},
                               {"motor_toggle", "motors"},
@@ -2331,10 +2327,10 @@ void views_action(const char *a) {
     } else if (!strncmp(a, "slot:", 5)) {
         snprintf(app.selected_slot, sizeof(app.selected_slot), "%s", a + 5);
         app.dirty = true;
-    } else if (!strcmp(a, "clear_spool")) {
+    } else if (!strcmp(a, "reset_spool")) {
         cJSON *clear = request("slot_clear");
-        cJSON_AddStringToObject(clear, "slot", "E");
-        confirmed("Clears spool holder details. Filament is not unloaded.", clear);
+        cJSON_AddStringToObject(clear, "slot", app.selected_slot);
+        confirmed("Resets saved filament details. Filament is not unloaded.", clear);
     } else if (!strcmp(a, "edit_slot")) {
         cJSON_Delete(app.draft);
         app.draft = cJSON_Duplicate(slot_record(app.selected_slot), true);
@@ -2654,6 +2650,19 @@ void views_action(const char *a) {
         cJSON *r = request("exclude");
         cJSON_AddItemToObject(r, "names", cJSON_Duplicate(app.object_selection, true));
         confirmed("Skip the selected objects for the rest of this print?", r);
+    } else if (!strncmp(a, "filament_notice:", 16)) {
+        cJSON *payload = cJSON_Parse(a + 16);
+        const char *slot = jstr(payload, "slot", "");
+        cJSON *r = request("ack");
+        cJSON_AddNumberToObject(r, "id", jnum(payload, "id", 0));
+        ui_send(r);
+        close_modal();
+        if (slot_record(slot)) {
+            snprintf(app.notice_slot, sizeof(app.notice_slot), "%s", slot);
+            ui_route("filament", false);
+            app.dirty = true;
+        }
+        cJSON_Delete(payload);
     } else if (!strncmp(a, "notice_ack:", 11)) {
         cJSON *r = request("ack");
         cJSON_AddNumberToObject(r, "id", strtod(a + 11, NULL));
@@ -2701,8 +2710,18 @@ void views_overlay(void) {
             } else {
                 modal_frame(title, 120, 60, 560, 360, true);
                 modal_message(detail);
-                char action[80];
-                snprintf(action, sizeof(action), "notice_ack:%llu", (unsigned long long)id);
+                char action[180];
+                const char *slot = jstr(notice, "filament_slot", "");
+                if (*slot) {
+                    app.filament_notice_id = id;
+                    cJSON *payload = cJSON_CreateObject();
+                    cJSON_AddNumberToObject(payload, "id", id);
+                    cJSON_AddStringToObject(payload, "slot", slot);
+                    char *encoded = encode(payload);
+                    snprintf(action, sizeof(action), "filament_notice:%s", encoded);
+                    free(encoded);
+                } else
+                    snprintf(action, sizeof(action), "notice_ack:%llu", (unsigned long long)id);
                 button(app.body, "OK", 160, 282, 240, 60, action, true);
                 return;
             }

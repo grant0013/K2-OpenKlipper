@@ -236,6 +236,7 @@ class Service:
         self.pending_fans = {}
         self.requested_values = {}
         self.selection_id = 0
+        self.cfs_event_id = None
         self.file_read = {"busy": False, "path": ""}
         self.files_preloaded = False
         self.files_ready = False
@@ -275,7 +276,7 @@ class Service:
         self.print_file = ""
         self.artwork_key = None
 
-    def event(self, title, detail="", fault=False, timed=False):
+    def event(self, title, detail="", fault=False, timed=False, filament_slot=None):
         with self.lock:
             if fault and any(
                 e.get("fault")
@@ -295,11 +296,13 @@ class Service:
                 "fault": fault,
                 "timed": timed,
             }
+            if filament_slot is not None:
+                event["filament_slot"] = filament_slot
             self.events = (self.events + [event])[-200:]
-            if fault or timed:
+            if fault or timed or filament_slot is not None:
                 self.notices.append(event)
             self.sequence += 1
-        if fault:
+        if fault or filament_slot is not None:
             self.wake_screen()
         return event
 
@@ -591,7 +594,10 @@ class Service:
                     status.setdefault(obj, {})[field] = desired
             slots = []
             for key, rec in model.records(status).items():
-                slots.append(dict(rec, slot=key, label=model.slot_label(key)))
+                # Removed spool data remains inside Klipper for the in-flight
+                # tail/refill only, never as the new spool's editable details.
+                visible = rec if rec.get("loaded") else {"loaded": False}
+                slots.append(dict(visible, slot=key, label=model.slot_label(key)))
             heaters = []
             for key, label, icon in model.available_heaters(settings, status):
                 limits = model.heater_limits(settings, key)
@@ -879,9 +885,12 @@ class Service:
         elif action in ("load", "unload"):
             self.filament_action(action, r, status)
         elif action == "slot_clear":
-            if r.get("slot") != "E" or r.get("confirm") is not True:
-                raise ValueError("Only the spool holder can be cleared here")
-            self.gcode("CFS_SLOT_CLEAR SLOT=E")
+            slot = str(r.get("slot", ""))
+            if r.get("confirm") is not True or (
+                slot != "E" and slot not in model.slots(status)
+            ):
+                raise ValueError("Choose a known filament slot and confirm reset")
+            self.gcode("CFS_SLOT_CLEAR SLOT=%s" % slot)
         elif action == "slot_save":
             self.save_slot(r, status, settings)
         elif action == "calibrate":
@@ -1297,6 +1306,33 @@ class Service:
         self.prefs[key] = value
         self.save_preferences()
 
+    def cfs_slot_notices(self):
+        history = self.status.get("k2_cfs", {}).get("slot_event_history", [])
+        latest = max((e.get("id", 0) for e in history), default=0)
+        if self.cfs_event_id is None or latest < self.cfs_event_id:
+            self.cfs_event_id = (
+                latest  # Initial/restarted driver: do not replay old prompts.
+            )
+            return
+        for item in history:
+            if item.get("id", 0) <= self.cfs_event_id:
+                continue
+            slot, kind = item.get("slot"), item.get("event")
+            if slot not in model.slots(self.status):
+                continue
+            if kind in ("removed", "inserted"):
+                self.notices = [
+                    n for n in self.notices if n.get("filament_slot") != slot
+                ]
+            if kind == "inserted":
+                self.event(
+                    "Filament changed",
+                    "Enter the material, color and nozzle temperature for %s."
+                    % model.slot_label(slot),
+                    filament_slot=slot,
+                )
+        self.cfs_event_id = latest
+
     def merge_status(self, delta, eventtime=None, full=False):
         with self.lock:
             initialized = bool(self.status)
@@ -1315,6 +1351,9 @@ class Service:
                 self.requested_values.clear()
                 self.pending_temperatures.clear()
                 self.pending_fans.clear()
+                self.cfs_event_id = None
+            elif "k2_cfs" in delta:
+                self.cfs_slot_notices()
             filename = self.status.get("print_stats", {}).get("filename", "")
             if filename != previous_file:
                 self.platform.pop("thumbnail", None)

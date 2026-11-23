@@ -230,3 +230,18 @@ The optional G-code fallback reads at most 512 KiB from each end via Moonraker,
 never guesses material from filenames, validates embedded PNG blocks, and feeds
 image decoding through the existing worker cache. `modal_message()` owns all
 confirmation/error body alignment and scroll behavior.
+
+## CFS removal and insertion
+
+The matching Klipper modules emit sequenced, bounded slot-event history and
+invalidate removed inventory independently of the UI. An unloaded record may
+retain the old tail's profile internally for refill matching and purge heat;
+native slot snapshots mask those fields so they cannot become a new spool's
+defaults. Manual Reset uses `CFS_SLOT_CLEAR`, with confirmation and idle guards.
+
+Insertion creates a slot-specific notice; OK opens the filament tab with that
+unit/slot selected. Historical startup events are not replayed, removals cancel
+obsolete notices, and navigation retains the existing unsaved-edit confirmation.
+The UI does not claim automatic RFID metadata updates: only supported refill
+controls are shown. Updating this feature requires the matching Klipper modules,
+not just a UI-only restart.

@@ -127,7 +127,7 @@ returns to the previous page automatically.
 - With one CFS, no unit selector is shown. With multiple reported units, two to four
   selectors share the available width; the spool holder remains separate.
 - Without CFS, edit the spool-holder card and feed filament manually. Load/Unload
-  buttons are hidden. **Clear** in the spool-holder editor removes its saved details
+  buttons are hidden. **Reset** in any spool editor removes its saved details
   with confirmation; it does not move or unload filament.
 
 | One CFS | No CFS |
@@ -154,16 +154,30 @@ returns to the previous page automatically.
 | --- | --- |
 | ![CFS preferences](screenshots/refill.png) | ![Automatic refill sequence](screenshots/refill-sequence.png) |
 
-| Spool-holder editor | Clear confirmation |
+| Spool-holder editor | Reset confirmation |
 | --- | --- |
-| ![Edit spool holder](screenshots/spool-holder-edit.png) | ![Clear spool-holder details](screenshots/clear-spool.png) |
+| ![Edit spool holder](screenshots/spool-holder-edit.png) | ![Reset spool-holder details](screenshots/reset-spool-holder.png) |
 
-Saved CFS slot details are not proof that the same spool is still installed. The
-current driver reports spool events but does not automatically clear or replace
-these records. Verify material and color after a physical spool change.
+![Reset a CFS slot](screenshots/reset-cfs-slot.png)
+
+Removing CFS filament makes its slot grey/empty and clears the editable details.
+Insertion shows **Filament changed**; press **OK** to open the filament page with
+that slot selected, then enter its material, color and nozzle temperature. This
+manual-entry workflow does not guess material or fill it from an RFID record.
+
+| Slot emptied on removal | Insertion notice |
+| --- | --- |
+| ![Empty slot after removal](screenshots/spool-removed.png) | ![Filament changed notice](screenshots/spool-inserted.png) |
+
+![Affected slot selected after OK](screenshots/spool-inserted-slot.png)
+
+The matching Klipper driver keeps the former profile internally for an in-flight
+filament tail's purge temperature and refill matching. It is not offered as the
+new spool's details. This flow requires the complete updated installation, not
+just replacing the touchscreen binary.
 
 Automatic refill uses loaded slots with matching material and color; the sequence
-page shows matching sources. Startup/insertion reading options follow backend support.
+page shows matching sources. Automatic RFID reading is not exposed as a setting until record updates are supported.
 
 **Multi-unit limitation:** the current OpenKlipper CFS driver operates one configured
 unit. Multi-unit screenshots demonstrate the UI; additional hardware support needs
@@ -233,7 +247,7 @@ backend work. A single unit's environmental readings are not copied to other uni
 - Change brightness and the interface highlight color.
 - Set screen sleep, light-off and idle timers. Printing, operations and urgent
   messages keep the screen awake; the first touch wakes it without activating a control.
-- Open CFS reading and refill preferences when connected.
+- Open CFS refill preferences when connected.
 
 | General | Display and appearance |
 | --- | --- |

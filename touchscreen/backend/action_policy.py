@@ -54,7 +54,7 @@ ACTIONS = {
         report=True,
     ),
     "save_config": rule("Saving configuration", {"*"}, idle=True, report=True),
-    "slot_clear": rule("Clearing spool holder", {"filament"}, idle=True),
+    "slot_clear": rule("Resetting filament", {"filament"}, idle=True),
     "slot_save": rule("Saving filament", {"filament"}, idle=True),
     "temperature": rule("Setting temperature"),
     "fan": rule("Setting fan"),

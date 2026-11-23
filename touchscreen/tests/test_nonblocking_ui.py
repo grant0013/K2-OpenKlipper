@@ -236,7 +236,7 @@ class FlowTests(unittest.TestCase):
         items, _ = self.render("refill")
         import json
 
-        keys = ("cfs_insertion_read", "cfs_startup_read", "cfs_auto_refill")
+        keys = ("cfs_auto_refill",)
         for index, key in enumerate(keys):
             item = next(
                 i
@@ -252,8 +252,8 @@ class FlowTests(unittest.TestCase):
         self.assertEqual(
             commands,
             [
-                {"action": "preference", "key": "cfs_insertion_read", "value": False},
-                {"action": "preference", "key": "cfs_insertion_read", "value": True},
+                {"action": "preference", "key": "cfs_auto_refill", "value": False},
+                {"action": "preference", "key": "cfs_auto_refill", "value": True},
             ],
         )
 

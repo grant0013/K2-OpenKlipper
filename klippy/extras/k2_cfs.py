@@ -604,7 +604,8 @@ class K2CFS:
                        'feed_slot': None, 'last_loaded_slot': None,
                        'running_out': None, 'runout_next': '',
                        'runout_warning': '', 'change_pending': None,
-                       'last_change_error': ''}
+                       'last_change_error': '', 'slot_event_seq': 0,
+                       'slot_event_history': []}
         self.status['slot_stats'] = self._stats_summary()
         buttons = self.printer.load_object(config, 'buttons')
         buttons.register_buttons(
@@ -1103,6 +1104,14 @@ class K2CFS:
                 text = ", ".join("%s %s" % (s, e)
                                  for s, e in sorted(events.items()))
                 self.status['last_slot_event'] = text
+                for slot, event in sorted(events.items()):
+                    seq = self.status.get('slot_event_seq', 0) + 1
+                    self.status['slot_event_seq'] = seq
+                    self.status['slot_event_history'] = (
+                        self.status.get('slot_event_history', []) +
+                        [dict(id=seq, slot=slot, event=event)])[-32:]
+                    # Preserve distinct/repeated events between UI snapshots.
+                    self.printer.send_event('k2_cfs:slot_event', slot, event)
                 logging.info("k2_cfs: slot event: %s", text)
         else:
             logging.info("k2_cfs: slot events did not drain after %d reads",

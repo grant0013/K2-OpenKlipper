@@ -377,6 +377,7 @@ void ui_tabs(bool settings, const char *selected) {
     }
 }
 void close_modal(void) {
+    app.filament_notice_id = 0;
     if (app.overlay) {
         lv_obj_del(app.overlay);
         app.overlay = NULL;
@@ -391,8 +392,11 @@ void ui_close(void) {
 }
 static void outside(lv_event_t *e) {
     if (lv_event_get_target(e) == app.overlay && strcmp(modal_kind, "fault") &&
-        strcmp(modal_kind, "operation"))
+        strcmp(modal_kind, "operation")) {
+        if (!strcmp(app.confirm, "discard"))
+            app.notice_slot[0] = 0;
         close_modal();
+    }
 }
 void modal_frame(const char *title, int x, int y, int w, int h, bool critical) {
     close_modal();
@@ -437,13 +441,14 @@ void ui_confirm(const char *message, const char *command) {
     snprintf(app.confirm_message, sizeof(app.confirm_message), "%s", message);
     cJSON *parsed = cJSON_Parse(command);
     const char *kind = jstr(parsed, "action", "");
-    const char *title = !strcmp(kind, "slot_clear") ? "Clear spool holder?"
-                        : !strcmp(kind, "motors")   ? "Unlock motors?"
-                        : !strcmp(kind, "restart")  ? "Restart printer control?"
-                        : (!strcmp(kind, "delete_file") || !strcmp(kind, "delete_recording"))
-                            ? "Delete file?"
-                        : !strcmp(kind, "firmware_restart") ? "Restart controller firmware?"
-                                                            : "Confirm";
+    const char *title =
+        !strcmp(kind, "slot_clear")
+            ? (!strcmp(jstr(parsed, "slot", ""), "E") ? "Reset spool holder?" : "Reset CFS slot?")
+        : !strcmp(kind, "motors")  ? "Unlock motors?"
+        : !strcmp(kind, "restart") ? "Restart printer control?"
+        : (!strcmp(kind, "delete_file") || !strcmp(kind, "delete_recording")) ? "Delete file?"
+        : !strcmp(kind, "firmware_restart") ? "Restart controller firmware?"
+                                            : "Confirm";
     modal_frame(title, 120, 60, 560, 360, false);
     modal_message(message);
     button(app.body, "Cancel", 24, 282, 230, 56, "close", false);
@@ -452,7 +457,7 @@ void ui_confirm(const char *message, const char *command) {
     if (!strcmp(command, "discard"))
         label = "Discard changes";
     else if (!strcmp(kind, "slot_clear"))
-        label = "Clear";
+        label = "Reset";
     else if (!strcmp(kind, "motors"))
         label = "Unlock motors";
     else if (!strcmp(kind, "cancel"))
@@ -736,6 +741,8 @@ void ui_action(const char *action) {
         return;
     }
     if (!strcmp(action, "close")) {
+        if (!strcmp(app.confirm, "discard"))
+            app.notice_slot[0] = 0;
         close_modal();
         return;
     }
@@ -849,6 +856,16 @@ void ui_data(cJSON *data) {
         app.nav_dirty = true;
     if (app.file_waiting && !strcmp(S("file"), app.file) && B("file_read.busy"))
         app.file_waiting = false;
+    if (app.filament_notice_id) {
+        bool pending = false;
+        cJSON *notice;
+        cJSON_ArrayForEach(notice, J("notices")) pending |=
+            (uint64_t)jnum(notice, "id", 0) == app.filament_notice_id;
+        if (!pending) {
+            close_modal();
+            app.dirty = true;
+        }
+    }
     app.connected = B("connected");
     app.service_link = true;
     app.ever_service = true;

@@ -137,6 +137,8 @@ def snapshot(printing=False):
 SCENARIOS = (
     "idle",
     "idle-lit",
+    "spool-inserted",
+    "spool-removed",
     "file-reading",
     "file-no-preview",
     "printing-no-preview",
@@ -316,6 +318,22 @@ def preview_scenario(name="idle", printing=False):
         data["print_stage"] = (
             "Preparing the printer: waiting for the bed temperature to stabilize before the next operation begins"
         )
+    if name in ("spool-inserted", "spool-removed"):
+        data["status"]["hark_cfs_slots"]["slots"]["D"]["loaded"] = False
+        for record in data["slots"]:
+            if record["slot"] == "D":
+                record.clear()
+                record.update(slot="D", loaded=False)
+        if name == "spool-inserted":
+            data["notices"] = [
+                {
+                    "id": 1,
+                    "title": "Filament changed",
+                    "detail": "Enter the material, color and nozzle temperature for slot D.",
+                    "fault": False,
+                    "filament_slot": "D",
+                }
+            ]
     if name == "idle-lit":
         data["status"]["output_pin chamber_led"] = {"value": 1}
     if name in ("file-reading", "file-no-preview"):

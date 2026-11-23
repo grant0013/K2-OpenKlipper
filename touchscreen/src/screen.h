@@ -35,7 +35,7 @@ typedef struct {
     bool select_feeding_cfs;
     int shown_temperature[3];
     bool temperature_shown[3], wifi_joining, file_waiting, nav_dirty;
-    char wifi_ssid[100];
+    char wifi_ssid[100], notice_slot[16];
     char assets[1024], socket[108], selected_slot[16], cfs_unit[16], file[1024], mapping_file[1024];
     char timezone_draft[128];
     char filter[20], number_text[32], number_title[100], number_kind[24], number_key[64];
@@ -45,7 +45,7 @@ typedef struct {
     double number_min, number_max, step, zoom, plate_x, plate_y;
     bool number_replace, number_open, keyboard_visible, password_visible, dirty, edit_dirty,
         connected, rendered, printer_fault_open, ever_ready, service_link, ever_service;
-    uint64_t last_notice;
+    uint64_t last_notice, filament_notice_id;
     char last_fault[4096], last_static_stamp[80];
     cJSON *object_selection;
     lv_color_t accent;

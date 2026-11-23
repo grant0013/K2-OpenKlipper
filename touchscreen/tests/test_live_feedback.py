@@ -26,6 +26,40 @@ class BackendFeedback(unittest.TestCase):
         status, _ = self.s.fresh()
         self.assertEqual(status["toolhead"]["homed_axes"], "xyz")
 
+    def test_spool_events_prompt_once_cancel_on_removal_and_hide_old_details(self):
+        self.s.wake_screen = mock.Mock()
+        self.s.merge_status({"k2_cfs": {"slot_event_history": []}})
+        history = [{"id": 1, "slot": "A", "event": "inserted"}]
+        self.s.merge_status({"k2_cfs": {"slot_event_history": history}})
+        self.assertEqual(self.s.notices[-1]["filament_slot"], "A")
+        count = self.s.history_id
+        self.s.merge_status({"k2_cfs": {"slot_event_history": history}})
+        self.assertEqual(self.s.history_id, count)
+        history = history + [{"id": 2, "slot": "A", "event": "removed"}]
+        self.s.merge_status({"k2_cfs": {"slot_event_history": history}})
+        self.assertFalse(self.s.notices)
+        self.s.status["hark_cfs_slots"]["slots"]["A"]["loaded"] = False
+        record = next(r for r in self.s.snapshot()["slots"] if r["slot"] == "A")
+        self.assertNotIn("type", record)
+        self.assertNotIn("color", record)
+        self.assertEqual(self.s.status["hark_cfs_slots"]["slots"]["A"]["type"], "PLA")
+        history += [{"id": 3, "slot": "A", "event": "inserted"}]
+        self.s.merge_status({"k2_cfs": {"slot_event_history": history}})
+        self.assertEqual(len(self.s.notices), 1)
+        self.assertEqual(self.s.notices[0]["filament_slot"], "A")
+
+    def test_startup_does_not_replay_old_spool_notices(self):
+        self.s.wake_screen = mock.Mock()
+        self.s.merge_status(
+            {
+                "k2_cfs": {
+                    "slot_event_history": [{"id": 8, "slot": "A", "event": "inserted"}]
+                }
+            }
+        )
+        self.assertFalse(self.s.notices)
+        self.assertEqual(self.s.cfs_event_id, 8)
+
     def test_klipper_print_state_not_idle_timer_controls_print_locks(self):
         self.state["idle_timeout"]["state"] = "Printing"
         available = action_policy.availability(self.state, True, [])
@@ -135,10 +169,12 @@ class BackendFeedback(unittest.TestCase):
         )
         self.assertNotIn("file_thumbnail", self.s.platform)
 
-    def test_spool_holder_clear_is_metadata_only_and_cfs_clear_is_rejected(self):
+    def test_slot_reset_is_metadata_only_and_rejects_unknown_slots(self):
         self.s.execute({"action": "slot_clear", "slot": "E", "confirm": True})
         self.mr.run_gcode.assert_called_once_with("CFS_SLOT_CLEAR SLOT=E")
-        for slot, confirmed in (("A", True), ("E", False)):
+        self.s.execute({"action": "slot_clear", "slot": "A", "confirm": True})
+        self.assertEqual(self.mr.run_gcode.call_args.args[0], "CFS_SLOT_CLEAR SLOT=A")
+        for slot, confirmed in (("Z", True), ("E", False)):
             with self.assertRaises(ValueError):
                 self.s.execute(
                     {"action": "slot_clear", "slot": slot, "confirm": confirmed}
@@ -223,17 +259,23 @@ class NativeFeedback(unittest.TestCase):
         self.assertEqual(start["rect"][2], pick["rect"][2])
         self.assertEqual(start["rect"][1:], [402, 320, 64])
 
-    def test_spool_holder_clear_is_available_only_in_external_editor(self):
+    def test_reset_is_available_in_external_and_cfs_editors(self):
         items, _ = self.render("filament", ["slot:E", "edit_slot"])
-        self.assertTrue(any(i["action"] == "clear_spool" for i in items))
+        self.assertTrue(any(i["action"] == "reset_spool" for i in items))
         _, commands = self.render(
-            "filament", ["slot:E", "edit_slot", "clear_spool", "confirmed"]
+            "filament", ["slot:E", "edit_slot", "reset_spool", "confirmed"]
         )
         self.assertEqual(
             commands[-1], {"action": "slot_clear", "slot": "E", "confirm": True}
         )
         items, _ = self.render("filament", ["slot:A", "edit_slot"])
-        self.assertFalse(any(i["action"] == "clear_spool" for i in items))
+        self.assertTrue(any(i["action"] == "reset_spool" for i in items))
+        _, commands = self.render(
+            "filament", ["slot:A", "edit_slot", "reset_spool", "confirmed"]
+        )
+        self.assertEqual(
+            commands[-1], {"action": "slot_clear", "slot": "A", "confirm": True}
+        )
 
     def test_preview_waits_for_new_file_instead_of_accepting_an_old_snapshot(self):
         data = copy.deepcopy(self.data)
@@ -349,4 +391,73 @@ class NativeFeedback(unittest.TestCase):
         self.assertEqual(
             first.crop((280, 342, 520, 402)).tobytes(),
             later.crop((280, 342, 520, 402)).tobytes(),
+        )
+
+    def test_filament_notice_ok_selects_the_affected_slot_and_cfs_tab(self):
+        data = copy.deepcopy(self.data)
+        data["notices"] = [
+            {
+                "id": 1,
+                "title": "Filament changed",
+                "detail": "Enter filament details for slot D.",
+                "fault": False,
+                "filament_slot": "D",
+            }
+        ]
+        items, _ = self.render("home", data=data)
+        action = next(
+            i["action"] for i in items if i["action"].startswith("filament_notice:")
+        )
+        items, commands = self.render(
+            "home", [action, "edit_slot", "reset_spool", "confirmed"], data
+        )
+        self.assertEqual(
+            commands[-1], {"action": "slot_clear", "slot": "D", "confirm": True}
+        )
+        self.assertTrue(any(c == {"action": "ack", "id": 1} for c in commands))
+
+    def test_removal_retracts_an_obsolete_insert_notice(self):
+        data = copy.deepcopy(self.data)
+        data["notices"] = [
+            {
+                "id": 1,
+                "title": "Filament changed",
+                "detail": "Enter filament details.",
+                "fault": False,
+                "filament_slot": "A",
+            }
+        ]
+        removed = copy.deepcopy(data)
+        removed["notices"] = []
+        items, _ = self.render("home", [{"snapshot": removed}], data)
+        self.assertFalse(any(i["action"].startswith("filament_notice:") for i in items))
+        self.assertTrue(any(i["action"] == "open_files" for i in items))
+
+    def test_spool_notice_preserves_unsaved_editor_slot_until_discard_is_confirmed(
+        self,
+    ):
+        notice = copy.deepcopy(self.data)
+        notice["notices"] = [
+            {
+                "id": 1,
+                "title": "Filament changed",
+                "detail": "Enter details for slot D.",
+                "fault": False,
+                "filament_slot": "D",
+            }
+        ]
+        initial = [
+            "slot:A",
+            "edit_slot",
+            "color:FF0000",
+            {"snapshot": notice},
+            'filament_notice:{"id":1,"slot":"D"}',
+        ]
+        _, commands = self.render("filament", initial + ["close", "save_slot"])
+        self.assertEqual(commands[-1]["slot"], "A")
+        _, commands = self.render(
+            "filament", initial + ["confirmed", "edit_slot", "reset_spool", "confirmed"]
+        )
+        self.assertEqual(
+            commands[-1], {"action": "slot_clear", "slot": "D", "confirm": True}
         )
