@@ -944,6 +944,7 @@ void ui_render(void) {
     rebuild = false;
     memset(app.current, 0, sizeof(app.current));
     memset(app.target, 0, sizeof(app.target));
+    memset(app.temperature_arrow, 0, sizeof(app.temperature_arrow));
     memset(app.positions, 0, sizeof(app.positions));
     app.extrusion_temp = NULL;
     app.status_label = app.status_dot = app.time_label = app.layer_label = app.progress =

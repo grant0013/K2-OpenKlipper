@@ -28,8 +28,8 @@ LV_FONT_DECLARE(font_heading_28);
 typedef struct {
     cJSON *data;
     lv_obj_t *screen, *nav, *content, *overlay, *title, *body, *footer;
-    lv_obj_t *current[3], *target[3], *positions[3], *extrusion_temp, *status_label, *status_dot,
-        *time_label, *layer_label, *progress, *percent;
+    lv_obj_t *current[3], *target[3], *temperature_arrow[3], *positions[3], *extrusion_temp,
+        *status_label, *status_dot, *time_label, *layer_label, *progress, *percent;
     char route[48], control_tab[24], settings_tab[24], history[80][48];
     int history_count;
     char assets[1024], socket[108], selected_slot[16], cfs_unit[16], file[1024], mapping_file[1024];

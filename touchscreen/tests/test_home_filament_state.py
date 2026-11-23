@@ -57,7 +57,7 @@ class HomeFilamentStateTests(unittest.TestCase):
             ImageChops.difference(a, b).crop((660, 325, 695, 360)).getbbox()
         )
 
-    def test_current_readings_start_at_same_position_for_different_digit_counts(self):
+    def test_current_readings_are_centered_for_different_digit_counts(self):
         data = copy.deepcopy(self.data)
         for h, current in zip(data["heaters"], (200, 58, 9)):
             h.update(current=current, target=0)
@@ -68,7 +68,8 @@ class HomeFilamentStateTests(unittest.TestCase):
             bounds.append(
                 crop.convert("L").point(lambda v: 255 if v > 100 else 0).getbbox()
             )
-        self.assertLessEqual(max(b[0] for b in bounds) - min(b[0] for b in bounds), 1)
+        for bounds_item in bounds:
+            self.assertLessEqual(abs((bounds_item[0] + bounds_item[2]) / 2 - 57), 1)
         self.assertLessEqual(max(b[1] for b in bounds) - min(b[1] for b in bounds), 1)
 
     def test_target_is_only_shown_while_approaching_it(self):

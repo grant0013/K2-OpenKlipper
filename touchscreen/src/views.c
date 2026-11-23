@@ -198,12 +198,24 @@ void view_home(void) {
         lv_obj_set_style_radius(tile, 0, 0);
         lv_obj_set_style_border_width(tile, i ? 1 : 0, 0);
         lv_obj_set_style_border_side(tile, LV_BORDER_SIDE_TOP, 0);
-        icon(tile, i == 0 ? "nozzle" : i == 1 ? "bed" : "chamber", 12, 15, 24, colour("a4aebb"));
-        text(tile, jstr(heater, "label", ""), 44, 17, 82, &font_ui_14, true);
-        /* Keep the reading anchored beneath the icon for every digit count.
-         * The optional destination follows it, without an empty target column. */
-        app.current[i] = text(tile, "", 12, 48, 114, &font_ui_20, false);
-        lv_label_set_recolor(app.current[i], true);
+        lv_point_t title_size;
+        const char *title = jstr(heater, "label", "");
+        lv_txt_get_size(&title_size, title, &font_ui_14, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+        int title_width = title_size.x < 94 ? title_size.x : 94;
+        int title_x = (138 - 24 - 8 - title_width) / 2;
+        icon(tile,
+             i == 0   ? "nozzle"
+             : i == 1 ? "bed"
+                      : "chamber",
+             title_x, 15, 24, colour("a4aebb"));
+        lv_obj_t *heading = text(tile, title, title_x + 32, 19, title_width, &font_ui_14, true);
+        lv_label_set_long_mode(heading, LV_LABEL_LONG_DOT);
+        /* Separate arrow artwork aligns with the numbers' visual centre,
+         * independent of the text font's arrow-glyph baseline. */
+        app.current[i] = text(tile, "", 0, 48, 48, &font_ui_20, false);
+        app.target[i] = text(tile, "", 0, 48, 48, &font_ui_20, true);
+        icon(tile, "arrow-right", 0, 54, 16, colour("a4aebb"));
+        app.temperature_arrow[i] = lv_obj_get_child(tile, -1);
     }
     lv_obj_t *light = button(app.content, "", 540, 307, 64, 70, "{\"action\":\"light\"}", false);
     const char *light_path =
@@ -279,9 +291,6 @@ void views_refresh(void) {
             if (!strcmp(app.route, "heat"))
                 snprintf(value, sizeof(value), target ? "%.0f° / %.0f°" : "%.0f°",
                          jnum(heater, "current", 0), target);
-            else if (target > 0 && fabs(jnum(heater, "current", 0) - target) > 1.0)
-                snprintf(value, sizeof(value), "%.0f° #a4aebb → %.0f°#", jnum(heater, "current", 0),
-                         target);
             else
                 snprintf(value, sizeof(value), "%.0f°", jnum(heater, "current", 0));
             lv_label_set_text(app.current[i], value);
@@ -297,6 +306,28 @@ void views_refresh(void) {
             } else
                 snprintf(value, sizeof(value), target ? "%.0f°" : "Off", target);
             lv_label_set_text(app.target[i], value);
+        }
+        if (app.temperature_arrow[i]) {
+            bool approaching = target > 0 && fabs(jnum(heater, "current", 0) - target) > 1.0;
+            lv_point_t current_size, target_size;
+            lv_txt_get_size(&current_size, lv_label_get_text(app.current[i]), &font_ui_20, 0, 0,
+                            LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+            lv_txt_get_size(&target_size, lv_label_get_text(app.target[i]), &font_ui_20, 0, 0,
+                            LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+            int width = current_size.x + (approaching ? 28 + target_size.x : 0);
+            int x = (138 - width) / 2;
+            lv_obj_set_width(app.current[i], current_size.x);
+            lv_obj_set_x(app.current[i], x);
+            if (approaching) {
+                lv_obj_clear_flag(app.target[i], LV_OBJ_FLAG_HIDDEN);
+                lv_obj_clear_flag(app.temperature_arrow[i], LV_OBJ_FLAG_HIDDEN);
+                lv_obj_set_x(app.temperature_arrow[i], x + current_size.x + 6);
+                lv_obj_set_width(app.target[i], target_size.x);
+                lv_obj_set_x(app.target[i], x + current_size.x + 28);
+            } else {
+                lv_obj_add_flag(app.target[i], LV_OBJ_FLAG_HIDDEN);
+                lv_obj_add_flag(app.temperature_arrow[i], LV_OBJ_FLAG_HIDDEN);
+            }
         }
         if (app.positions[i]) {
             cJSON *p = cJSON_GetArrayItem(J("status.gcode_move.gcode_position"), i);
