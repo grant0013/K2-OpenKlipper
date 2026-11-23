@@ -1,5 +1,7 @@
 # Native touchscreen
 
+Integrated from [K2 OpenKlipper Touchscreen](https://github.com/carmanspb/K2-OpenKlipper-Touchscreen).
+
 A fast, responsive native LVGL interface for **K2 OpenKlipper**. It installs and
 updates with K2 OpenKlipper using the included precompiled package; no separate
 installation or compilation on the printer is needed.
