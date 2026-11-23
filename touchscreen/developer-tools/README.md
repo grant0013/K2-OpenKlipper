@@ -16,7 +16,7 @@ checks current state and configuration, reserves the resources needed for the
 action, and calls Moonraker/Klipper or printer-local platform services. Motion,
 heating and CFS loading sequences belong to the firmware, not the UI.
 
-**Pillow is used.** `backend/storage.py:prepare_image()` uses it to decode, crop,
+`backend/storage.py:prepare_image()` uses **Pillow** to decode, crop,
 resize and cache images in a backend worker. LVGL renders the controls, text and
 frames; Pillow is not the screen renderer. Install Pillow for backend development
 and the complete test suite. The C preview executable does not import Python or
