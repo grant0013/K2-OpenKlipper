@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- **Power-loss recovery no longer pauses the printer while it saves.** The
+  journal used to be written and synced to disk inside Klipper's main loop
+  every 10 seconds. When the host's disk was busy with something else (a
+  package update, TRIM) one save took over a second, and on the Ender 5 Plus
+  port that stopped a 13 hour print with "Timer too close". The save now runs
+  on its own thread; only building the text stays in the main loop. A save
+  that takes over half a second is logged, and the last one still reaches the
+  disk on a restart.
+
 ## v0.4.25-alpha.1 (2026-11-09)
 
 Fixes from a code review of v0.4.24-alpha.1. RELEASE-NOTES-v0.4.25-alpha.1.md

@@ -4,6 +4,8 @@ import os
 import pathlib
 import sys
 import tempfile
+import threading
+import time
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).parents[1] / "klippy"))
@@ -204,6 +206,7 @@ class HarkPLRTest(unittest.TestCase):
         reactor.now += 20
         plr._tick(reactor.now)
         self.assertEqual(plr.safe['file_position'], 600)
+        plr.writer.wait_idle()
         with open(plr.state_path) as f:
             j = json.load(f)
         self.assertEqual(j['file']['position'], 600)
@@ -223,10 +226,12 @@ class HarkPLRTest(unittest.TestCase):
             objects['toolhead'].est = 99.
             reactor.now += 20
             plr._tick(reactor.now)
+            plr.writer.wait_idle()
             self.assertTrue(os.path.exists(plr.state_path))
             plr.printer.shutdown = shutdown
             objects['print_stats'].status['state'] = end
             plr._tick(reactor.now + 1)
+            plr.writer.wait_idle()
             self.assertEqual(os.path.exists(plr.state_path), kept, end)
 
     def test_restart_offers_the_journal(self):
@@ -237,6 +242,7 @@ class HarkPLRTest(unittest.TestCase):
         objects['toolhead'].est = 99.
         reactor.now += 20
         plr._tick(reactor.now)
+        plr.writer.close()              # klippy:disconnect on a restart
         again = plr_mod.HarkPLR(FakeConfig(plr.printer))
         again._ready()
         self.assertTrue(again.status['available'])
@@ -380,6 +386,83 @@ class HarkPLRTest(unittest.TestCase):
         plr, objects, reactor = make()
         watch = objects['virtual_sdcard'].gcode
         self.assertIsInstance(watch, plr_mod._LineWatch)
+
+
+class JournalWriterTest(unittest.TestCase):
+    """The journal's disk work runs off the reactor (Timer too close, 24 Nov
+    2026: a 1 s fsync inside _tick stopped a print)."""
+
+    def checkpoint(self):
+        plr, objects, reactor = make()
+        objects['print_stats'].status['state'] = 'printing'
+        plr._tick(reactor.now)
+        objects['virtual_sdcard'].next_file_position = 300
+        plr.after_line("G1 X1")
+        objects['toolhead'].est = 99.
+        reactor.now += 20
+        return plr, objects, reactor
+
+    def slow_fsync(self, seconds):
+        real = plr_mod.os.fsync
+        gate = threading.Event()
+
+        def fsync(fd):
+            gate.wait(seconds)
+            real(fd)
+        plr_mod.os.fsync = fsync
+        self.addCleanup(setattr, plr_mod.os, 'fsync', real)
+        return gate
+
+    def test_a_slow_fsync_does_not_hold_the_tick(self):
+        plr, objects, reactor = self.checkpoint()
+        gate = self.slow_fsync(2.)
+        start = time.monotonic()
+        plr._tick(reactor.now)
+        self.assertLess(time.monotonic() - start, .2)
+        self.assertEqual(plr.status['checkpoints'], 1)
+        gate.set()
+        self.assertTrue(plr.writer.wait_idle())
+        with open(plr.state_path) as f:
+            self.assertEqual(json.load(f)['file']['position'], 300)
+
+    def test_only_the_newest_waiting_write_lands(self):
+        plr = self.checkpoint()[0]
+        gate = self.slow_fsync(2.)
+        for n in range(5):
+            plr._write_journal({'version': 1, 'n': n})
+        gate.set()
+        plr.writer.wait_idle()
+        with open(plr.state_path) as f:
+            self.assertEqual(json.load(f)['n'], 4)
+
+    def test_a_delete_drops_writes_still_waiting(self):
+        plr = self.checkpoint()[0]
+        gate = self.slow_fsync(2.)
+        plr._write_journal({'version': 1, 'n': 1})   # on the disk thread
+        plr._write_journal({'version': 1, 'n': 2})   # still waiting
+        plr._delete_journal()
+        gate.set()
+        plr.writer.wait_idle()
+        self.assertFalse(os.path.exists(plr.state_path))
+        self.assertFalse(os.path.exists(plr.state_path + '.tmp'))
+
+    def test_close_finishes_the_queued_write(self):
+        plr = self.checkpoint()[0]
+        gate = self.slow_fsync(.3)
+        plr._write_journal({'version': 1, 'n': 7})
+        gate.set()
+        plr.writer.close()
+        self.assertFalse(plr.writer.thread.is_alive())
+        with open(plr.state_path) as f:
+            self.assertEqual(json.load(f)['n'], 7)
+
+    def test_a_failed_write_shows_in_status(self):
+        plr, objects, reactor = self.checkpoint()
+        plr.writer.state_path = os.path.join(plr.state_path, 'no', 'dir')
+        plr._tick(reactor.now)
+        plr.writer.wait_idle()
+        plr._tick(reactor.now + 1)
+        self.assertTrue(plr.status['last_error'])
 
 
 if __name__ == '__main__':

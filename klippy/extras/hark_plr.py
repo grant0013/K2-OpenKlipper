@@ -41,6 +41,7 @@ import json
 import logging
 import math
 import os
+import threading
 import time
 import uuid
 
@@ -65,6 +66,104 @@ class _LineWatch:
 HEIGHT_MARGIN = 1.
 
 
+class _JournalWriter:
+    """Writes and deletes the journal on its own thread, in order.
+
+    Each write ends in an fsync. During other heavy disk work on the host
+    (package updates, online TRIM) one fsync took over a second, and in the
+    reactor that stopped motion planning: "Timer too close" ended a 13 hour
+    print on 24 Nov 2026. Only the JSON text is built on the reactor now.
+    """
+
+    def __init__(self, state_path):
+        self.state_path = state_path
+        self.cond = threading.Condition()
+        self.ops = []          # ('write', text) / ('delete', None), in order
+        self.busy = False
+        self.running = True
+        self.last_error = ''
+        self.thread = threading.Thread(
+            target=self._run, name='hark_plr_journal', daemon=True)
+        self.thread.start()
+
+    def write(self, text):
+        with self.cond:
+            # Only the newest journal matters: replace a write still waiting
+            if self.ops and self.ops[-1][0] == 'write':
+                self.ops[-1] = ('write', text)
+            else:
+                self.ops.append(('write', text))
+            self.cond.notify_all()
+
+    def delete(self):
+        with self.cond:
+            # Writes still waiting would only bring the journal back
+            self.ops = [('delete', None)]
+            self.cond.notify_all()
+
+    def wait_idle(self, timeout=5.):
+        end = time.monotonic() + timeout
+        with self.cond:
+            while self.ops or self.busy:
+                left = end - time.monotonic()
+                if left <= 0.:
+                    return False
+                self.cond.wait(left)
+        return True
+
+    def close(self, timeout=5.):
+        # klippy:disconnect (restart or exit): finish what is queued, so the
+        # last checkpoint before a shutdown still reaches the disk
+        with self.cond:
+            self.running = False
+            self.cond.notify_all()
+        self.thread.join(timeout)
+
+    def _run(self):
+        while True:
+            with self.cond:
+                while not self.ops and self.running:
+                    self.cond.wait()
+                if not self.ops:
+                    return
+                op, text = self.ops.pop(0)
+                self.busy = True
+            start = time.monotonic()
+            error = ''
+            try:
+                if op == 'write':
+                    self._write(text)
+                else:
+                    self._delete()
+            except Exception as exc:
+                logging.exception("hark_plr: journal %s failed", op)
+                error = str(exc)[:200]
+            took = time.monotonic() - start
+            if took > .5:
+                logging.info("hark_plr: journal %s took %.2fs (off the"
+                             " reactor, motion unaffected)", op, took)
+            with self.cond:
+                self.busy = False
+                if error:
+                    self.last_error = error
+                self.cond.notify_all()
+
+    def _write(self, text):
+        tmp = self.state_path + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, self.state_path)
+
+    def _delete(self):
+        for path in (self.state_path, self.state_path + '.tmp'):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+
 class HarkPLR:
     def __init__(self, config):
         self.printer = config.get_printer()
@@ -76,6 +175,7 @@ class HarkPLR:
                 os.path.dirname(config_file)
                 or '/mnt/UDISK/printer_data_mainline/config',
                 'hark_plr.json'))
+        self.writer = _JournalWriter(self.state_path)
         self.enabled = config.getboolean('enabled', True)
         self.candidate_interval = config.getfloat(
             'candidate_interval', .5, minval=.1, maxval=5.)
@@ -111,6 +211,8 @@ class HarkPLR:
                        'filename': '', 'z': 0., 'saved_at': 0.,
                        'checkpoints': 0, 'last_error': ''}
         self.printer.register_event_handler('klippy:ready', self._ready)
+        self.printer.register_event_handler('klippy:disconnect',
+                                            self.writer.close)
         for name, fn, desc in (
                 ('PLR_STATUS', self.cmd_PLR_STATUS,
                  "Report the power-loss recovery journal"),
@@ -123,6 +225,8 @@ class HarkPLR:
     # --- journal ---------------------------------------------------------
 
     def _read_journal(self):
+        # Let a write or delete still on the journal thread land first
+        self.writer.wait_idle()
         try:
             with open(self.state_path, encoding='utf-8') as f:
                 data = json.load(f)
@@ -133,19 +237,12 @@ class HarkPLR:
         return data
 
     def _write_journal(self, data):
-        tmp = self.state_path + '.tmp'
-        with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump(data, f)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, self.state_path)
+        # Serialised here so later changes to the dicts can't leak in; the
+        # disk write and fsync run on the journal thread
+        self.writer.write(json.dumps(data))
 
     def _delete_journal(self):
-        for path in (self.state_path, self.state_path + '.tmp'):
-            try:
-                os.remove(path)
-            except OSError:
-                pass
+        self.writer.delete()
         self.journal = None
         self.status.update(available=False, filename='', z=0.,
                            saved_at=0.)
@@ -186,6 +283,9 @@ class HarkPLR:
         except Exception as exc:
             logging.exception("hark_plr: checkpoint failed")
             self.status['last_error'] = str(exc)[:200]
+        if self.writer.last_error:
+            self.status['last_error'] = self.writer.last_error
+            self.writer.last_error = ''
         return eventtime + self.candidate_interval
 
     def _follow(self, eventtime):
