@@ -268,7 +268,6 @@ class Service:
         self.last_poll_warning = 0.0
         self.read_policy = storage.FilamentReadPolicy()
         self.filaments = []
-        self.ready = False
         self.files_source = "gcodes"
         self.file_generation = 0
         self.file_lock = threading.RLock()
@@ -1533,25 +1532,37 @@ class Service:
                 "sleep_after", self.config.get("screen", "sleep_after", fallback="600")
             )
         )
+        # Printer state is authoritative. Saved screen preferences never replay
+        # printer commands when this service starts or reconnects.
         prefs["light_off"] = int(
             self.status.get("gcode_macro _LIGHT_IDLE", {}).get(
                 "off_after",
-                prefs.get(
-                    "light_off",
-                    self.settings.get("gcode_macro _LIGHT_IDLE", {}).get(
-                        "variable_off_after", 0
-                    ),
+                self.settings.get("gcode_macro _LIGHT_IDLE", {}).get(
+                    "variable_off_after", 0
                 ),
             )
         )
         prefs["idle"] = int(
             self.status.get("idle_timeout", {}).get(
                 "idle_timeout",
-                prefs.get(
-                    "idle", self.settings.get("idle_timeout", {}).get("timeout", 1800)
-                ),
+                self.settings.get("idle_timeout", {}).get("timeout", 1800),
             )
             or 86400
+        )
+        refill = self.status.get("gcode_macro _RUNOUT_REFILL", {}).get(
+            "enabled",
+            self.settings.get("gcode_macro _RUNOUT_REFILL", {}).get(
+                "variable_enabled", 0
+            ),
+        )
+        prefs["cfs_auto_refill"] = str(refill).lower() not in (
+            "",
+            "0",
+            "0.0",
+            "false",
+            "off",
+            "no",
+            "none",
         )
         return prefs
 
@@ -1884,21 +1895,7 @@ class Service:
                     except Exception:
                         self.platform.pop("timelapse", None)
                 self.update_screen_idle()
-                ready = self.status.get("webhooks", {}).get("state") == "ready"
                 self.preload_files()
-                # A screen-only restart must not change an active print.
-                if ready and not self.ready and not model.active(self.status):
-                    for key in ("idle", "light_off", "cfs_auto_refill"):
-                        if key in self.prefs:
-                            try:
-                                self.preference(
-                                    {"key": key, "value": self.prefs[key]},
-                                    self.status,
-                                    self.settings,
-                                )
-                            except Exception:
-                                pass
-                self.ready = ready
                 filename = self.status.get("print_stats", {}).get("filename", "")
                 if filename and filename != self.print_file:
                     if self.refresh_print_preview(filename):

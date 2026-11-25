@@ -341,24 +341,45 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(snap["settings"]["extruder"]["max_temp"], 350)
         self.assertTrue(self.s.settings_refresh_needed)
 
-    def test_screen_restart_does_not_replay_printer_preferences_during_print(self):
-        self.state["print_stats"]["state"] = "printing"
-        self.s.prefs.update(idle=1800, light_off=300, cfs_auto_refill=True)
-        self.s.preference = mock.Mock()
-        self.s.update_screen_idle = mock.Mock()
-        self.s.preload_files = mock.Mock()
-        self.s.refresh_platform = mock.Mock()
-        self.s.read_policy.update = mock.Mock()
-        with mock.patch("service.time.sleep", side_effect=StopIteration):
-            with self.assertRaises(StopIteration):
-                self.s.poll()
-        self.s.preference.assert_not_called()
-        self.mr.run_gcode.assert_not_called()
+    def test_screen_restart_never_replays_printer_preferences(self):
+        for state in ("standby", "printing", "paused"):
+            with self.subTest(state=state):
+                self.state["print_stats"]["state"] = state
+                self.s.stream_connected = True
+                self.s.prefs.update(idle=1800, light_off=300, cfs_auto_refill=True)
+                self.s.preference = mock.Mock()
+                self.s.update_screen_idle = mock.Mock()
+                self.s.preload_files = mock.Mock()
+                self.s.refresh_platform = mock.Mock()
+                self.s.read_policy.update = mock.Mock()
+                with mock.patch("service.time.sleep", side_effect=StopIteration):
+                    with self.assertRaises(StopIteration):
+                        self.s.poll()
+                self.s.preference.assert_not_called()
+                self.mr.run_gcode.assert_not_called()
+
+    def test_live_printer_preferences_override_saved_screen_values(self):
+        self.s.prefs.update(idle=900, light_off=300, cfs_auto_refill=True)
+        self.s.status.update(
+            {
+                "idle_timeout": {"idle_timeout": 3600},
+                "gcode_macro _LIGHT_IDLE": {"off_after": 0},
+                "gcode_macro _RUNOUT_REFILL": {"enabled": 0},
+            }
+        )
+        prefs = self.s.current_preferences()
+        self.assertEqual(prefs["idle"], 3600)
+        self.assertEqual(prefs["light_off"], 0)
+        self.assertFalse(prefs["cfs_auto_refill"])
+        self.s.status["gcode_macro _RUNOUT_REFILL"]["enabled"] = 1
+        self.assertTrue(self.s.current_preferences()["cfs_auto_refill"])
+        self.s.status.pop("gcode_macro _RUNOUT_REFILL")
+        self.s.settings["gcode_macro _RUNOUT_REFILL"]["variable_enabled"] = 0
+        self.assertFalse(self.s.current_preferences()["cfs_auto_refill"])
 
     def test_background_refresh_failure_does_not_disconnect_live_printer(self):
         self.s.merge_status(self.state, 10)
         self.s.stream_connected = True
-        self.s.ready = True
         self.s.update_screen_idle = mock.Mock()
         self.s.preload_files = mock.Mock()
         self.s.refresh_platform = mock.Mock(side_effect=OSError("USB query failed"))

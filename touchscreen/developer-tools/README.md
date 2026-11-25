@@ -340,7 +340,9 @@ Routine snapshots are sent at up to five updates per second; incoming commands
 wake the socket loop immediately. A failed peripheral refresh does not invalidate
 a healthy printer stream. Same-host reconnects retain cached settings while
 refreshing them; a remote clock reset still invalidates the old configuration.
-The backend validates current settings again before printer actions.
+The backend validates current settings again before printer actions. Connecting
+the screen never replays saved idle, light or CFS settings; it reads their live
+printer values. Only explicit user changes send preference commands.
 
 Touch state is cancelled on connection transitions and input-event loss. A press
 with no new input events for five seconds is cancelled without activating its
