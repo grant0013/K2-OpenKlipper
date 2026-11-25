@@ -30,6 +30,39 @@ class RestoreTests(unittest.TestCase):
         mock.patch.object(restore, "CONF", self.conf).start()
         mock.patch.object(restore.os, "geteuid", return_value=0).start()
 
+    def test_default_uses_newest_public_release_including_prereleases(self):
+        data = [
+            {"tag_name": "draft", "draft": True},
+            {"tag_name": "newest", "prerelease": True},
+            {"tag_name": "older"},
+        ]
+        with mock.patch.object(
+            restore, "urlopen", return_value=io.BytesIO(json.dumps(data).encode())
+        ):
+            self.assertEqual(restore.resolve_ref(), "newest")
+
+    def test_explicit_ref_does_not_query_releases_and_empty_list_uses_main(self):
+        with mock.patch.object(restore, "urlopen") as request:
+            self.assertEqual(restore.resolve_ref("chosen-tag"), "chosen-tag")
+            request.assert_not_called()
+        with mock.patch.object(restore, "urlopen", return_value=io.BytesIO(b"[]")):
+            self.assertEqual(restore.resolve_ref(), "main")
+
+    def test_release_lookup_failure_leaves_native_processes_and_files_untouched(self):
+        with (
+            mock.patch.object(restore, "ensure_idle"),
+            mock.patch.object(
+                restore, "urlopen", side_effect=OSError("GitHub unavailable")
+            ),
+            mock.patch.object(restore, "stop_native") as stop,
+            mock.patch.object(restore, "remove_native") as remove,
+            self.assertRaises(OSError),
+        ):
+            restore.restore()
+        stop.assert_not_called()
+        remove.assert_not_called()
+        self.assertTrue(self.screen.exists())
+
     def test_idle_guard_rejects_printing_paused_and_motion(self):
         for stats, busy in (("printing", False), ("paused", False), ("standby", True)):
             data = {

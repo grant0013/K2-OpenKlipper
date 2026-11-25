@@ -11,7 +11,7 @@ import tempfile
 import time
 from pathlib import Path
 from urllib.parse import quote
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 SCREEN = Path("/mnt/UDISK/openklipper-screen")
 BUILD = Path("/mnt/UDISK/k2-mainline-20260729-v62")
@@ -21,7 +21,27 @@ PIDFILES = [
     Path("/tmp/" + name + ".pid")
     for name in ("openklipper-screen", "openklipper-screen-service")
 ]
-DEFAULT_REF = "v0.4.25-alpha.1"
+
+
+def resolve_ref(ref=None):
+    """Match the upstream installer's newest public release, including prereleases."""
+    if ref:
+        return ref
+    request = Request(
+        "https://api.github.com/repos/grant0013/K2-OpenKlipper/releases?per_page=10",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "k2-openklipper-touchscreen",
+        },
+    )
+    with urlopen(request, timeout=30) as response:
+        releases = json.load(response)
+    if not isinstance(releases, list):
+        raise TypeError("Could not resolve the latest upstream release.")
+    for release in releases:
+        if not release.get("draft") and release.get("tag_name"):
+            return release["tag_name"]
+    return "main"
 
 
 def ensure_idle():
@@ -151,12 +171,14 @@ def remove_native():
             pass
 
 
-def restore(ref, check=False):
+def restore(ref=None, check=False):
     if os.geteuid() != 0 or not SCREEN.is_dir():
         raise RuntimeError(
             "Run this on the printer as root while the native screen is installed."
         )
     ensure_idle()
+    ref = resolve_ref(ref)
+    print("Selected upstream version: " + ref)
     with tempfile.TemporaryDirectory(prefix="okl-harkscreen-") as directory:
         installer = download_installer(ref, directory)
         env = dict(os.environ, OKL_REF=ref)
@@ -199,8 +221,8 @@ def main():
     )
     parser.add_argument(
         "--ref",
-        default=os.environ.get("OKL_HARK_REF", DEFAULT_REF),
-        help="Upstream version containing HarkScreen",
+        default=os.environ.get("OKL_HARK_REF"),
+        help="Override the latest upstream release with a tag or branch containing HarkScreen",
     )
     args = parser.parse_args()
     try:
@@ -209,6 +231,7 @@ def main():
         OSError,
         RuntimeError,
         ValueError,
+        TypeError,
         KeyError,
         subprocess.CalledProcessError,
     ) as error:

@@ -130,13 +130,22 @@ returns to the previous page automatically.
 ### Bed mesh
 
 - Open the viewer from Move. Drag the shaded surface to rotate it; the X/Y/Z direction markers follow the same view. Reset the view with one tap.
-- Review the current profile, probe grid, height range and saved profiles.
+- Review the mesh name, probe grid, minimum/maximum height and total Z range. Saved profiles stay in a scrollable list.
 - Probe again or save a named mesh. Each saved-profile row shows its Z range with inline Load and Delete controls; the active row has Rename instead of Load. Saving configuration remains available in Calibrate.
-- During printing, viewing remains available and changes are disabled. Meshing displays progress in place of the previous surface.
+- During printing, viewing and rotation remain available while probing and profile changes are disabled. Probing shows progress in place of the previous surface.
+- If no mesh is loaded, saved profiles remain available to load. If none are saved, probe the bed to create the first mesh.
 
 | Bed mesh | Delete confirmation |
 | --- | --- |
 | ![Bed mesh](screenshots/mesh.png) | ![Delete confirmation](screenshots/mesh-delete.png) |
+
+| Saved profiles, no active mesh | No measured or saved mesh |
+| --- | --- |
+| ![Saved profiles without an active mesh](screenshots/mesh-unloaded.png) | ![No measured or saved mesh](screenshots/mesh-empty.png) |
+
+| Probing in progress | Viewing during printing |
+| --- | --- |
+| ![Probing in progress](screenshots/meshing.png) | ![Viewing during printing](screenshots/mesh-printing.png) |
 
 ### Thermals and fans
 
@@ -242,6 +251,10 @@ backend work. A single unit's environmental readings are not copied to other uni
 | Loading a spool | Unloading a spool |
 | --- | --- |
 | ![Loading a spool](screenshots/cfs-loading.png) | ![Unloading a spool](screenshots/cfs-unloading.png) |
+
+| Home sidebar and colour ring | Activity across CFS units |
+| --- | --- |
+| ![Home filament activity](screenshots/cfs-loading-home.png) | ![Multiple CFS units](screenshots/multi-cfs-loading.png) |
 
 ## Files and starting a print
 
@@ -373,7 +386,7 @@ sh /mnt/UDISK/openklipper-screen/uninstall.sh --check
 sh /mnt/UDISK/openklipper-screen/uninstall.sh
 ```
 
-- Downloads and checks upstream `v0.4.25-alpha.1`, a verified HarkScreen release.
+- Selects and checks the latest public upstream release, including prereleases, using the upstream installer’s release-selection order.
 - Stops the native screen and backend, then performs a full upstream reinstall.
 - Verifies HarkScreen startup before deleting the native runtime and its display settings.
 - Retains printer configuration, G-code files and the existing installer backups.
@@ -381,11 +394,11 @@ sh /mnt/UDISK/openklipper-screen/uninstall.sh
 Why the helper is needed: the upstream installer restores HarkScreen and its
 boot path, but does not know about our native renderer and backend processes.
 Reinstalling without stopping them can leave two interfaces drawing on the same
-display. The helper checks the selected upstream version first, stops those two
-processes, reinstalls K2 OpenKlipper, and removes the native files only after
-HarkScreen stays running. If replacement
-fails, the native files are retained. To choose another upstream version that
-includes HarkScreen, pass `--ref <tag>`; the script checks its startup implementation.
+display. The helper resolves the latest release once, checks that it contains HarkScreen,
+and uses that same version for preflight and reinstall. Only after HarkScreen
+stays running are the native files removed. If release lookup or replacement
+fails, the native files are retained. With no published releases it checks
+upstream `main`. To choose a version explicitly, pass `--ref <tag>`.
 The full reinstall can restart printer control, so do not run it during a print.
 
 ## For developers
