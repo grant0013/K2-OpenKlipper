@@ -341,6 +341,20 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(snap["settings"]["extruder"]["max_temp"], 350)
         self.assertTrue(self.s.settings_refresh_needed)
 
+    def test_screen_restart_does_not_replay_printer_preferences_during_print(self):
+        self.state["print_stats"]["state"] = "printing"
+        self.s.prefs.update(idle=1800, light_off=300, cfs_auto_refill=True)
+        self.s.preference = mock.Mock()
+        self.s.update_screen_idle = mock.Mock()
+        self.s.preload_files = mock.Mock()
+        self.s.refresh_platform = mock.Mock()
+        self.s.read_policy.update = mock.Mock()
+        with mock.patch("service.time.sleep", side_effect=StopIteration):
+            with self.assertRaises(StopIteration):
+                self.s.poll()
+        self.s.preference.assert_not_called()
+        self.mr.run_gcode.assert_not_called()
+
     def test_background_refresh_failure_does_not_disconnect_live_printer(self):
         self.s.merge_status(self.state, 10)
         self.s.stream_connected = True

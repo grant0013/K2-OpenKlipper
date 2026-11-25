@@ -1886,7 +1886,8 @@ class Service:
                 self.update_screen_idle()
                 ready = self.status.get("webhooks", {}).get("state") == "ready"
                 self.preload_files()
-                if ready and not self.ready:
+                # A screen-only restart must not change an active print.
+                if ready and not self.ready and not model.active(self.status):
                     for key in ("idle", "light_off", "cfs_auto_refill"):
                         if key in self.prefs:
                             try:
