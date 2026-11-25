@@ -122,6 +122,25 @@ class BackendReview(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.run_action("calibrate", kind="shaper", confirm=True)
 
+    def test_calibrations_only_home_when_required_axes_are_unknown(self):
+        cases = {
+            "mesh": ("bed_mesh", "BED_MESH_CALIBRATE"),
+            "tilt": ("z_tilt", "Z_TILT_ADJUST"),
+            "shaper": ("resonance_tester", "SHAPER_CALIBRATE"),
+        }
+        for kind, (capability, command) in cases.items():
+            self.config[capability] = {}
+            for axes in ("", "x", "y", "z", "xy", "xz", "yz", "xyz"):
+                with self.subTest(kind=kind, homed_axes=axes):
+                    self.state["toolhead"]["homed_axes"] = axes
+                    self.run_action("calibrate", kind=kind, confirm=True)
+                    prefix = "" if axes == "xyz" else "G28\n"
+                    self.mr.run_gcode.assert_called_with(prefix + command)
+        # An explicit Home request must still re-home known axes.
+        self.state["toolhead"]["homed_axes"] = "xyz"
+        self.run_action("calibrate", kind="home", confirm=True)
+        self.mr.run_gcode.assert_called_with("G28")
+
     def test_lowercase_macro_settings_advertise_print_calibration(self):
         self.s.settings["gcode_macro start_print"] = self.s.settings.pop(
             "gcode_macro START_PRINT"
