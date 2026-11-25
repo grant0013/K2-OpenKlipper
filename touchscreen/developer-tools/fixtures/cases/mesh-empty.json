@@ -1,0 +1,7 @@
+{
+  "description": "No mesh measured yet.",
+  "scenario": "mesh-empty",
+  "page": "mesh",
+  "printer_image": "assets/demo-printer-combo.png",
+  "actions": []
+}

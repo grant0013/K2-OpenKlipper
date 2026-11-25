@@ -1,0 +1,11 @@
+{
+  "description": "Dedicated local touchscreen-service connection-loss screen.",
+  "scenario": "idle",
+  "page": "home",
+  "printer_image": "assets/demo-printer-combo.png",
+  "actions": [
+    {
+      "transport_lost": true
+    }
+  ]
+}

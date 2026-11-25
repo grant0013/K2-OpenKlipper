@@ -1,0 +1,9 @@
+{
+  "description": "Map PLA, PETG and ASA to spools across four CFS units.",
+  "scenario": "multi-cfs",
+  "page": "file",
+  "printer_image": "assets/demo-printer-combo.png",
+  "actions": [
+    "review_mapping"
+  ]
+}

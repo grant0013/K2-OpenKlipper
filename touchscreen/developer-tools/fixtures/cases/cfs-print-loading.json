@@ -1,0 +1,7 @@
+{
+  "description": "Driver-reported filament phase during a multicolour print, without a screen-issued command.",
+  "scenario": "cfs-print-loading",
+  "page": "home",
+  "printer_image": "assets/demo-printer-combo.png",
+  "actions": []
+}

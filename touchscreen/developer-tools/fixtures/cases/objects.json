@@ -1,0 +1,7 @@
+{
+  "description": "Select and skip outlines of three print objects.",
+  "scenario": "printing",
+  "page": "objects",
+  "printer_image": "assets/demo-printer-combo.png",
+  "actions": []
+}

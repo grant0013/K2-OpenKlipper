@@ -3,7 +3,9 @@
 [ -f /tmp/harkcam.pid ] && kill $(cat /tmp/harkcam.pid) 2>/dev/null
 /etc/init.d/webrtc start 2>/dev/null
 # Hand the panel back to the stock UI
-[ -f /tmp/harkscreen.pid ] && kill $(cat /tmp/harkscreen.pid) 2>/dev/null
+for name in openklipper-screen openklipper-screen-service; do
+    [ -f /tmp/$name.pid ] && kill $(cat /tmp/$name.pid) 2>/dev/null
+done
 pidof display-server >/dev/null || HOME=/root /usr/bin/display-server >/dev/null 2>&1 &
 # Switch K2 back from mainline instance to stock Creality Klipper.
 [ -f /var/run/klippy_mainline.pid ] && kill "$(cat /var/run/klippy_mainline.pid)" 2>/dev/null

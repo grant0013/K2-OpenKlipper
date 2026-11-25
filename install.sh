@@ -19,7 +19,7 @@
 # (default: found automatically at each start).
 set -eu
 
-REPO=grant0013/K2-OpenKlipper
+REPO=${OKL_REPO:-grant0013/K2-OpenKlipper}
 REF=${OKL_REF:-}
 BUILD=/mnt/UDISK/k2-mainline-20260729-v62
 PDATA=/mnt/UDISK/printer_data_mainline
@@ -272,17 +272,20 @@ fi
 # ever get versions that were tested and tagged; main is not installed by
 # default.
 if [ -z "$REF" ]; then
-    REF=$(python3 - "$REPO" <<'PY'
+    REF=$(python3 - "$REPO" <<'PY_RELEASE'
 import json, sys, urllib.request
 try:
     req = urllib.request.Request("https://api.github.com/repos/%s/releases?per_page=10" % sys.argv[1],
                                  headers={"Accept": "application/vnd.github+json", "User-Agent": "k2-openklipper"})
-    rel = [r for r in json.load(urllib.request.urlopen(req, timeout=30)) if not r.get("draft")]
-    print(rel[0]["tag_name"] if rel else "main")
-except Exception:
-    print("main")
-PY
-)
+    releases = [r for r in json.load(urllib.request.urlopen(req, timeout=30)) if not r.get("draft")]
+    if not releases:
+        raise ValueError("No published releases were found")
+    print(releases[0]["tag_name"])
+except Exception as error:
+    print("Cannot select the newest published release: %s" % error, file=sys.stderr)
+    sys.exit(1)
+PY_RELEASE
+) || die "release lookup failed; retry later or explicitly set OKL_REF to a tag or development branch"
 fi
 echo "    version to install: $REF"
 if [ "$MODE" = update ] && [ -z "${OKL_REF:-}" ]; then
@@ -342,6 +345,23 @@ PY
     [ -n "$SRC" ] && [ -f "$SRC/klippy/klippy.py" ] || die "download did not unpack as expected"
 fi
 NEW_VERSION=$(cat "$SRC/VERSION" 2>/dev/null || echo "$REF")
+if [ -f "$SRC/SHA256SUMS" ]; then
+    say "Verifying the complete installation bundle"
+    (cd "$SRC" && sha256sum -c SHA256SUMS >/dev/null) || die "installation bundle checksum failed"
+fi
+
+
+# Fail before changing the installation if the selected native UI package is absent.
+[ ! -d "$SRC/harkscreen" ] || die "source contains the superseded renderer; unpack the native bundle into a fresh directory"
+case "${OKL_TOUCHSCREEN:-native}" in
+    native)
+        SCREEN_PACKAGE=${OKL_SCREEN_PACKAGE:-$SRC/touchscreen/precompiled/armv7}
+        python3 "$SRC/touchscreen/installation/validate_package.py" --source "$SRC/touchscreen" --package "$SCREEN_PACKAGE" \
+            || die "precompiled touchscreen does not match this source; use a version with an updated precompiled package"
+        ;;
+    none) ;;
+    *) die "OKL_TOUCHSCREEN must be native or none" ;;
+esac
 
 # ---------------------------------------------------------------- backup
 say "Backing up to $BACKUP"
@@ -367,7 +387,19 @@ if [ "$APPINIT" = already ] && [ -n "$PREV" ] && [ -f "$PREV/app.init" ]; then
 fi
 [ -d "$CONF" ] && cp -a "$CONF" "$BACKUP/printer_data_mainline-config"
 [ -e "$BUILD" ] && mv "$BUILD" "$BACKUP/build.previous"
-for d in mainsail-mainline harkscreen harkcam; do
+# One-time migration: stop the superseded renderer only when its PID still
+# belongs to that program. Its code is not included in the new source tree.
+if [ -f /tmp/harkscreen.pid ]; then
+    OLD_SCREEN_PID=$(cat /tmp/harkscreen.pid)
+    case "$OLD_SCREEN_PID" in
+        ''|*[!0-9]*) ;;
+        *) if tr '\000' ' ' < "/proc/$OLD_SCREEN_PID/cmdline" 2>/dev/null | grep -q '/harkscreen/'; then
+               kill "$OLD_SCREEN_PID" 2>/dev/null || true
+           fi ;;
+    esac
+    rm -f /tmp/harkscreen.pid
+fi
+for d in mainsail-mainline openklipper-screen harkcam harkscreen; do
     [ -e "/mnt/UDISK/$d" ] && mv "/mnt/UDISK/$d" "$BACKUP/$d.previous"
 done
 echo "$BACKUP" > /mnt/UDISK/openklipper-backups/LATEST
@@ -500,25 +532,16 @@ case "$SETTINGS" in
         ;;
 esac
 
-# Touchscreen and camera
-cp -a "$BUILD/harkscreen" /mnt/UDISK/harkscreen
-# The screen's own version (a host-driven K2 brings its screen in step with it)
-cp "$BUILD/VERSION" /mnt/UDISK/harkscreen/VERSION
-# Default look: Klipper logo and colours. An existing harkscreen.cfg (your own
-# theme) is kept. See docs/SCREEN-CUSTOMISE.md.
-if [ ! -f "$CONF/harkscreen.cfg" ]; then
-    cp "$BUILD/harkscreen/harkscreen.cfg.example" "$CONF/harkscreen.cfg"
-    cp "$BUILD/harkscreen/klipper-logo.png" "$CONF/klipper-logo.png"
-fi
-# Screen clock: the shipped "timezone: uk" becomes "auto" (the time zone set
-# in Creality's settings) when the printer has one set
-if grep -q "^timezone: uk$" "$CONF/harkscreen.cfg" 2>/dev/null \
-        && [ -n "$(uci -q get system.@system[0].zonename 2>/dev/null)" ]; then
-    sed -i 's/^timezone: uk$/timezone: auto/' "$CONF/harkscreen.cfg"
-    echo "    harkscreen.cfg: clock follows the printer's time zone ($(uci -q get system.@system[0].zonename))"
+# The native touchscreen is included by default; use the matching precompiled
+# package and preserve existing screen preferences during migration.
+if [ "${OKL_TOUCHSCREEN:-native}" = native ]; then
+    sh "$BUILD/touchscreen/installation/install.sh" "$CONF" "$MODEL"
+    for f in harkscreen.cfg harkscreen-settings.json; do
+        [ ! -f "$CONF/$f" ] || mv "$CONF/$f" "$BACKUP/$f.previous"
+    done
 fi
 cp -a "$BUILD/harkcam" /mnt/UDISK/harkcam
-chmod 755 /mnt/UDISK/harkscreen/start.sh /mnt/UDISK/harkcam/start.sh
+chmod 755 /mnt/UDISK/harkcam/start.sh
 # Camera settings (size, frame rate, viewer cap), editable in Mainsail. An
 # existing harkcam.cfg is kept.
 if [ ! -f "$CONF/harkcam.cfg" ]; then
@@ -530,25 +553,7 @@ if [ -f /tmp/harkcam.pid ] && kill -0 "$(cat /tmp/harkcam.pid)" 2>/dev/null; the
     sh /mnt/UDISK/harkcam/start.sh >/dev/null 2>&1 && echo "    camera restarted"
 fi
 
-# Boot animation: the frames the panel shows while the printer boots, before
-# the touchscreen app starts. Ours (harkscreen/bootanim, the Hark Tech badge
-# and "K2 OpenKlipper") replaces Creality's; the stock set is kept at
-# /mnt/UDISK/mainline-backups/boot-play-stock.tar and uninstall.sh puts it
-# back. OKL_BOOTANIM=keep leaves whatever is there; OKL_BOOTANIM=/a/folder
-# installs your own (made with tools/bootanim/make_bootanim.py, see
-# docs/SCREEN-CUSTOMISE.md). boot.mp3 is never touched.
-BOOTANIM="${OKL_BOOTANIM:-$BUILD/harkscreen/bootanim}"
-if [ "$BOOTANIM" != keep ] && [ -f "$BOOTANIM/desc.txt" ] && [ -d /usr/res/boot-play ]; then
-    mkdir -p /mnt/UDISK/mainline-backups
-    if [ ! -f /mnt/UDISK/mainline-backups/boot-play-stock.tar ] \
-            && ! grep -q "K2 OpenKlipper" /usr/res/boot-play/desc.txt 2>/dev/null; then
-        tar -cf /mnt/UDISK/mainline-backups/boot-play-stock.tar -C /usr/res boot-play
-    fi
-    rm -rf /usr/res/boot-play/part0 /usr/res/boot-play/part1
-    cp -a "$BOOTANIM/part0" "$BOOTANIM/part1" /usr/res/boot-play/
-    cp "$BOOTANIM/desc.txt" /usr/res/boot-play/desc.txt
-    echo "    boot animation: $( [ "$BOOTANIM" = "$BUILD/harkscreen/bootanim" ] && echo "K2 OpenKlipper (OKL_BOOTANIM=keep keeps the printer's own)" || echo "$BOOTANIM" )"
-fi
+# Keep the printer's existing boot animation.
 
 # Nginx: validate the new config before it goes live
 cp "$BUILD/system-nginx.conf" /etc/nginx/nginx.conf.okl-new

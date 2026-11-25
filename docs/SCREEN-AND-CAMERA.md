@@ -1,74 +1,8 @@
-# Touchscreen (Hark Screen) and camera
+# Touchscreen and camera
 
-With Creality's `master-server` disabled, the stock touchscreen has nothing to
-talk to. `harkscreen/harkscreen.py` is a replacement UI that draws straight to
-the framebuffer and talks to Moonraker.
-
-## Hark Screen
-
-- Landscape layout (the panel is portrait, 480x800; the UI rotates 90°).
-- Pages: status (progress, temperatures, ETA from the slicer's M73), CFS
-  slots, controls, machine, Wi-Fi.
-- **Print a file** (Status page, when idle): the print files newest first,
-  four to a page with the slicer's thumbnail, age, print time and filament;
-  tap one for its preview and details, then **Print** to start it. After a
-  print, **Print again** opens the same file's details (clear the bed
-  first) and **Other file** the list. Starting goes through Moonraker
-  (`/printer/print/start`); a refusal is shown under the preview.
-
-  | | |
-  | --- | --- |
-  | ![Status page with Print a file](img/screen/print-a-file-1-status.png) | ![The file list](img/screen/print-a-file-2-list.png) |
-  | ![A file's details and Print](img/screen/print-a-file-3-detail.png) | ![A finished print: Print again or Other file](img/screen/print-a-file-4-finished.png) |
-- **Choosing the slots** (the detail view, like Creality's mapping step): a
-  file that lists its filaments shows a row for each one it prints (its
-  colour, number and material) with the slot it will print from. The guess
-  is a loaded CFS slot of the same material and the nearest colour (a free
-  slot before a taken one when they are as close); a one-filament file
-  whose material only the rear spool has gets the rear spool. Tap a slot to
-  open a box of every slot and the rear **Spool**, then tap the one you
-  want (empty slots show but cannot be chosen). A slot holding a different
-  material is shown amber with a line saying so (the print can still
-  start). **Print** sets the map for that
-  file (`CFS_TOOL_MAP RESET=1 FILE=... T0=...`, see
-  [choosing the slots](INSTALL.md#choosing-the-slots-and-the-external-spool))
-  and starts it; the map is dropped if the print does not start, and after
-  it ends. A map set from Mainsail or the console for the same file (or for
-  any file) is the screen's starting point.
-- **The rear spool with a CFS fitted** prints every filament of the file,
-  as on Creality's firmware: picking Spool for one filament moves them all,
-  and picking a CFS slot again puts the others back on their slots. Until
-  the spool is in the toolhead, Print waits and **Load spool** runs
-  `LOAD_FILAMENT SLOT=E`: it unloads the CFS slot that is in, then (tapped
-  again once you have pushed the spool in from the back) loads the spool.
-  Without a CFS the slots are not tappable: every filament prints from the
-  rear spool. The rows and the slots offered come from the printer
-  (`hark_cfs_slots.map_tools` / `map_targets`), not from the screen, so
-  more CFS boxes need no screen change.
-
-  | | |
-  | --- | --- |
-  | ![Filaments and the slots they print from](img/screen/print-a-file-5-filaments.png) | ![Every filament from the rear spool](img/screen/print-a-file-6-rear-spool.png) |
-- CFS slot sheet: edit the filament record, Load & purge, Purge, Unload, and
-  **Calibrate PA** for the loaded slot.
-- Wi-Fi selection with an on-screen keyboard, through `wpa_supplicant`'s
-  control socket, with rollback if the new network fails.
-- Themeable: `harkscreen.cfg` sets the name, logo, colours, font, page order,
-  sleep and timezone. Changes are picked up within a second.
-- Light on the K2's 2-core CPU: redraws only on change, partial blits for
-  animations, pinned to CPU0 at nice 10. About 6% CPU when idle.
-
-`install.sh` sets it up: it copies `harkscreen/` to `/mnt/UDISK/harkscreen/`
-and puts `harkscreen.cfg` (from the `.example`) and `klipper-logo.png` in the
-Klipper config folder. The switch script starts it (`start.sh`);
-`switch-to-stock.sh` stops it.
-
-The default look is Klipper's logo and colours. To change the name, logo,
-colours, font or pages, see **[customising the screen](SCREEN-CUSTOMISE.md)**.
-`harkscreen/themes/hark-tech.cfg` is a second example theme.
-
-`tools/bootanim/make_bootanim.py` builds a custom boot animation for
-`/usr/res/boot-play`. Back up the stock one first.
+The touchscreen on this branch is a native LVGL application. Its code, build,
+configuration and simulator are documented in [touchscreen/README.md](../touchscreen/README.md).
+The previous Pillow renderer and its themes are removed from this branch.
 
 ## Camera (harkcam)
 

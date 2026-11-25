@@ -43,6 +43,7 @@
 # retry motion, the measuring-wheel clog check, the flush matrix purge and
 # the RFID record decode.
 
+import functools
 import json
 import math
 import os
@@ -234,6 +235,28 @@ def decode_rfid_records(p):
                           for name, o, n in RFID_RECORD_FIELDS)
         records[slot.strip()] = {'record': record, 'fields': fields}
     return {'records': records}
+
+
+def _filament_activity(action):
+    """Publish an immutable, balanced phase for UI and non-UI CFS commands."""
+    def decorate(method):
+        @functools.wraps(method)
+        def tracked(self, gcmd, *args, **kwargs):
+            status = getattr(self, 'status', None)
+            if status is None:
+                return method(self, gcmd, *args, **kwargs)
+            slot = (gcmd.get('SLOT', '') or status.get('active_slot')
+                    or status.get('feed_slot') or '').upper()
+            previous = status.get('filament_activity')
+            status['filament_activity'] = dict(action=action, slot=slot)
+            try:
+                return method(self, gcmd, *args, **kwargs)
+            finally:
+                # A nested load/purge restores its outer transaction. An
+                # exception never leaves a completed operation spinning.
+                status['filament_activity'] = previous
+        return tracked
+    return decorate
 
 
 class K2CFS:
@@ -604,7 +627,9 @@ class K2CFS:
                        'feed_slot': None, 'last_loaded_slot': None,
                        'running_out': None, 'runout_next': '',
                        'runout_warning': '', 'change_pending': None,
-                       'last_change_error': ''}
+                       'filament_activity': None,
+                       'last_change_error': '', 'slot_event_seq': 0,
+                       'slot_event_history': []}
         self.status['slot_stats'] = self._stats_summary()
         buttons = self.printer.load_object(config, 'buttons')
         buttons.register_buttons(
@@ -1103,6 +1128,14 @@ class K2CFS:
                 text = ", ".join("%s %s" % (s, e)
                                  for s, e in sorted(events.items()))
                 self.status['last_slot_event'] = text
+                for slot, event in sorted(events.items()):
+                    seq = self.status.get('slot_event_seq', 0) + 1
+                    self.status['slot_event_seq'] = seq
+                    self.status['slot_event_history'] = (
+                        self.status.get('slot_event_history', []) +
+                        [dict(id=seq, slot=slot, event=event)])[-32:]
+                    # Preserve distinct/repeated events between UI snapshots.
+                    self.printer.send_event('k2_cfs:slot_event', slot, event)
                 logging.info("k2_cfs: slot event: %s", text)
         else:
             logging.info("k2_cfs: slot events did not drain after %d reads",
@@ -2261,6 +2294,7 @@ class K2CFS:
             self.status.get('stall_retry_motions', 0) + 1
         return True
 
+    @_filament_activity('unload')
     def cmd_CFS_CUT_UNLOAD(self, gcmd):
         self._require_cfs(gcmd)
         self._require_actuation(gcmd)
@@ -2435,6 +2469,7 @@ class K2CFS:
                 raise
             return None
 
+    @_filament_activity('load')
     def cmd_CFS_LOAD(self, gcmd):
         self._require_cfs(gcmd)
         self._require_actuation(gcmd)
@@ -2687,6 +2722,7 @@ class K2CFS:
         count = int(math.ceil(actual_length / self.purge_chunk_length - 1e-6))
         return actual_length, [actual_length / count] * count
 
+    @_filament_activity('load')
     def cmd_CFS_PURGE(self, gcmd):
         self._require_cfs(gcmd)
         self._require_actuation(gcmd)
@@ -2838,6 +2874,7 @@ class K2CFS:
         except (TypeError, ValueError):
             return 30
 
+    @_filament_activity('load')
     def _load_with_retries(self, gcmd):
         # CFS_LOAD, tried again after a failure: a failed load leaves the
         # box idle and the hub rewound, so a fresh load can follow. Only a
@@ -3456,6 +3493,7 @@ class K2CFS:
         self._require_idle(gcmd)
         self._load_and_purge(gcmd, "CFS_CHANGE_SLOT")
 
+    @_filament_activity('load')
     def _load_and_purge(self, gcmd, command):
         self._require_actuation(gcmd)
         if gcmd.get_int('CONFIRM', 0, minval=0, maxval=1) != 1:

@@ -1,0 +1,7 @@
+{
+  "description": "Review a file, its thumbnail and calibration option.",
+  "scenario": "idle",
+  "page": "file",
+  "printer_image": "assets/demo-printer-combo.png",
+  "actions": []
+}

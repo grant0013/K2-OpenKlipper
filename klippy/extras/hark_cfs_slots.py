@@ -166,6 +166,8 @@ class HarkCfsSlots:
         self._lanes_thread = None
         self._load_database()
         self._load_store()
+        self.printer.register_event_handler('k2_cfs:slot_event',
+                                            self.handle_slot_event)
         self.printer.register_event_handler('klippy:ready',
                                             self._publish_lanes)
         self.printer.register_event_handler('klippy:ready',
@@ -293,6 +295,15 @@ class HarkCfsSlots:
                 " is lost at the next restart" % (exc,))
         if slots_changed:
             self._publish_lanes()
+
+    def handle_slot_event(self, slot, event):
+        if event != 'removed' or slot not in self.slots or slot == EXTERNAL:
+            return
+        # Empty for selection/UI/Orca immediately. Keep the former profile
+        # internally for the old tail's purge temperature and runout matching;
+        # a new CFS_SLOT_SET replaces it. Never move filament from this callback.
+        self.slots[slot] = dict(self.slots[slot], loaded=False)
+        self._save()
 
     def get_status(self, eventtime):
         # Klipper sends subscribers only the fields whose value changed since

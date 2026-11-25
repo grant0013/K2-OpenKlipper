@@ -24,6 +24,21 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ env.TAG }}
+      - name: Set up native touchscreen build tools
+        if: hashFiles('touchscreen/developer-tools/build.sh') != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake gcc-arm-linux-gnueabihf libc6-dev-armhf-cross imagemagick librsvg2-bin
+      - uses: actions/setup-node@v4
+        if: hashFiles('touchscreen/developer-tools/build.sh') != ''
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: touchscreen/developer-tools/package-lock.json
+      - name: Compile native touchscreen for the K2 panel
+        if: hashFiles('touchscreen/developer-tools/build.sh') != ''
+        run: sh touchscreen/developer-tools/build.sh arm
       - name: Build k2-openklipper-host.zip
         run: python3 tools/release/make_host_zip.py "$TAG" k2-openklipper-host.zip
       - name: Attach it to the release

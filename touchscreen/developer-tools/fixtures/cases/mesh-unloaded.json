@@ -1,0 +1,7 @@
+{
+  "description": "No active mesh, with saved profiles available to load.",
+  "scenario": "mesh-unloaded",
+  "page": "mesh",
+  "printer_image": "assets/demo-printer-combo.png",
+  "actions": []
+}

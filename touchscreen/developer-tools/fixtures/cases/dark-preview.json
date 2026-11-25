@@ -1,0 +1,7 @@
+{
+  "description": "Dark print artwork on a neutral preview surface.",
+  "scenario": "dark-preview",
+  "page": "home",
+  "printer_image": "assets/demo-printer-combo.png",
+  "actions": []
+}

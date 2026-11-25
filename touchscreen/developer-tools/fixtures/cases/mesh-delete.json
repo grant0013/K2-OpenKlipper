@@ -1,0 +1,9 @@
+{
+  "description": "Delete confirmation opened directly from a saved mesh row.",
+  "scenario": "mesh",
+  "page": "mesh",
+  "printer_image": "assets/demo-printer-combo.png",
+  "actions": [
+    "mesh:delete:1"
+  ]
+}

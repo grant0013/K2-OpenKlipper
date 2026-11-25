@@ -68,12 +68,14 @@ K2 side (as root over SSH):
 4. Unplug the internal camera: it shares the USB0 controller (`usbc0`) with the
    mini-USB port. The camera is a normal UVC webcam (a108:2240) and works on the
    host PC with a USB-A lead soldered on (see `host/linux/systemd/k2-camera.service`).
-5. Point Hark Screen at the host: `moonraker: http://<host>:7126` in harkscreen.cfg.
-6. Once, copy the screen from the release you install on the host:
-   `harkscreen/harkscreen.py` to `/mnt/UDISK/harkscreen/harkscreen.py` and
-   `VERSION` to `/mnt/UDISK/harkscreen/VERSION`, then
-   `sh /mnt/UDISK/harkscreen/start.sh`. From v0.4.11 the screen keeps itself
-   in step with the host (see Updates).
+5. Set `moonraker: http://<host>:7126` in `native-screen.cfg`. Build and
+   install the native touchscreen package described in
+   [its README](../touchscreen/README.md). The service uses Moonraker's
+   WebSocket status stream and HTTP command API.
+
+6. Install the matching native screen package on the printer as described in
+   the touchscreen developer guide. Screen packages are currently built manually.
+
 
 Host side (Debian/Ubuntu; replace `USER` in the files):
 
@@ -142,14 +144,8 @@ installs onto the K2 board, so the host overrides switch it off
 (`[hark_update]`). The K2 side (`host/k2/`) only needs copying again when a
 release says it changed.
 
-The touchscreen program runs on the K2 board, which a host update does not
-touch. From v0.4.11 it updates itself: while the printer is idle it compares
-the version the host's Klipper reports with its own, downloads that release's
-`harkscreen.py` from GitHub (the K2 board needs Internet access), checks it,
-keeps the old copy as `harkscreen.py.prev` and restarts. If the new copy fails
-to start, the old one comes back and that release is not fetched again
-(`/mnt/UDISK/harkscreen/.bad_version`). Log: `/tmp/harkscreen.log`. Before
-v0.4.11 the screen stayed on whatever was copied at setup.
+Native screen updates install a complete versioned binary, service and asset package;
+there is no single-file Python renderer synchronization on this branch.
 
 ## Things that bit us
 
@@ -181,6 +177,6 @@ v0.4.11 the screen stayed on whatever was copied at setup.
 rm /mnt/UDISK/.system/boot-hostlink
 mv /mnt/UDISK/.system/boot-mainline.off /mnt/UDISK/.system/boot-mainline
 /etc/init.d/moonraker-mainline enable
-# set harkscreen.cfg back to moonraker: http://127.0.0.1:7126
+# set native-screen.cfg back to moonraker: http://127.0.0.1:7126
 reboot
 ```

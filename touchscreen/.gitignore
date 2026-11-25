@@ -1,0 +1,15 @@
+/build-host/
+/build-arm/
+/build-asan/
+/out/
+/.cache/
+/__pycache__/
+/backend/__pycache__/
+/tests/__pycache__/
+/assets/generated/
+/package-arm/
+/developer-tools/node_modules/
+
+# Python caches in any component folder
+__pycache__/
+*.py[cod]

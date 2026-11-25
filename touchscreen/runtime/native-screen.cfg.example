@@ -1,0 +1,29 @@
+[brand]
+# Installation identity; unknown profiles should supply their own name/model.
+name: OpenKlipper
+model:
+[screen]
+moonraker: http://127.0.0.1:7126
+rotate: 90
+touch_device: /dev/input/event0
+touch_max_x: 480
+touch_max_y: 800
+touch_swap_xy: no
+touch_invert_x: no
+touch_invert_y: no
+sleep_after: 600
+# Supported cutter calibration method for the actual installed hardware.
+cutter_calibration_method: SENSOR
+
+[icons]
+# Optional installation-supplied PNG assets. Leave blank for the original,
+# open-source default skin. These files are not required to build the UI.
+nozzle:
+bed:
+chamber:
+lightbulb:
+lightbulb-off:
+home_fan:
+pause:
+play:
+skip-object:

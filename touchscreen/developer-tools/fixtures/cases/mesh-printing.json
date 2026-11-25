@@ -1,0 +1,7 @@
+{
+  "description": "Mesh remains viewable while measuring is disabled during printing.",
+  "scenario": "mesh-printing",
+  "page": "mesh",
+  "printer_image": "assets/demo-printer-combo.png",
+  "actions": []
+}

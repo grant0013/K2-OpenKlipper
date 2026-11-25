@@ -1,0 +1,7 @@
+{
+  "description": "Motors disabled: plain motor icon offers Motors on; axes need homing.",
+  "scenario": "motors-off",
+  "page": "move",
+  "printer_image": "assets/demo-printer-combo.png",
+  "actions": []
+}

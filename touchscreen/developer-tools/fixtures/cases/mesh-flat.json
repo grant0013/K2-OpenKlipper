@@ -1,0 +1,7 @@
+{
+  "description": "Perfectly flat surface with zero height variation.",
+  "scenario": "mesh-flat",
+  "page": "mesh",
+  "printer_image": "assets/demo-printer-combo.png",
+  "actions": []
+}

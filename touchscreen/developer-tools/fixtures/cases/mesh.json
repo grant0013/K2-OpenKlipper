@@ -1,0 +1,7 @@
+{
+  "description": "Measured 9-by-9 bed surface: drag to rotate, reset view and inspect statistics.",
+  "scenario": "mesh",
+  "page": "mesh",
+  "printer_image": "assets/demo-printer-combo.png",
+  "actions": []
+}

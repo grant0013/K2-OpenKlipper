@@ -1,0 +1,7 @@
+{
+  "description": "Printing no preview.",
+  "scenario": "printing-no-preview",
+  "page": "home",
+  "printer_image": "assets/demo-printer-combo.png",
+  "actions": []
+}

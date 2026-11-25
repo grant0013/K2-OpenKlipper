@@ -1,0 +1,7 @@
+{
+  "description": "Spool removed.",
+  "scenario": "spool-removed",
+  "page": "filament",
+  "printer_image": "assets/demo-printer-combo.png",
+  "actions": []
+}
