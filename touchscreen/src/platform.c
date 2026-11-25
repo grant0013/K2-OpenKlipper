@@ -39,6 +39,8 @@ static unsigned sample_read, sample_write;
 static uint64_t last_touch_event, input_retry_at;
 static char input_device[1024];
 static void queue_sample(void) {
+    /* Mouse, panel and simulator events share the stuck-touch watchdog clock. */
+    last_touch_event = platform_millis();
     unsigned next = (sample_write + 1) % 256;
     if (next == sample_read)
         sample_read = (sample_read + 1) % 256;
@@ -53,7 +55,6 @@ void platform_cancel_touch(void) {
     lv_indev_reset(NULL, NULL);
 }
 void platform_test_touch(int x, int y, bool down) {
-    last_touch_event = platform_millis();
     tx = x;
     ty = y;
     pressed = down;
@@ -280,7 +281,8 @@ void platform_pump(void) {
         XNextEvent(xd, &e);
         if (e.type == Expose) {
             XPutImage(xd, window, gc, xi, 0, 0, 0, 0, WIDTH, HEIGHT);
-        } else if (e.type == ButtonPress || e.type == ButtonRelease) {
+        } else if ((e.type == ButtonPress || e.type == ButtonRelease) &&
+                   e.xbutton.button == Button1) {
             tx = e.xbutton.x;
             ty = e.xbutton.y;
             pressed = e.type == ButtonPress;

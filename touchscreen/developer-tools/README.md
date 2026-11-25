@@ -30,6 +30,8 @@ Paths below are relative to `touchscreen/`:
 | `src/platform.c` | Framebuffer/touch, X11, socket transport and capture |
 | `src/ui.c` | Shared controls, navigation, dialogs and fixture-only updates |
 | `src/views.c` | Screen layouts, keyboard and UI actions |
+| `installation/uninstall.sh`, `installation/uninstall.py` | Verified return to upstream HarkScreen; installed beside the native runtime |
+| `src/mesh.c` | Shaded bed mesh, touch rotation, statistics and profile controls |
 | `src/view_inputs.c` | State dependencies for efficient live updates |
 | `src/json.c`, `src/screen.h` | JSON helpers, UI state and layout constants |
 | `backend/service.py` | Moonraker integration, requests, operations and thumbnails |
@@ -105,6 +107,10 @@ sh touchscreen/developer-tools/preview.sh --list
 | `printing` | Progress, holding temperatures and three print objects |
 | `heating` | Current-to-target temperature arrows |
 | `multi-cfs` | Four units and sixteen spools |
+| `mesh`, `mesh-flat`, `mesh-empty`, `mesh-unloaded` | Rotatable sample mesh, flat surface, no data, and saved profiles with no active mesh |
+| `mesh-delete` | Inline saved-profile delete confirmation |
+| `mesh-printing`, `meshing` | Read-only viewing during a print and measurement progress |
+| `motors-on`, `motors-off` | Crossed/plain motor action icons and homing restrictions |
 | `file` | File preview, metadata and calibration option |
 | `file-reading`, `file-no-preview`, `printing-no-preview` | Reading and missing-thumbnail states |
 | `idle-lit` | Light icon with visible rays |
@@ -137,6 +143,39 @@ The preview runs in fixture mode and never connects to a printer. Navigation,
 dialogs, mapping and object selection work locally. Confirmed demo deletions and
 preference switches affect only fixture state; reopening the case resets it.
 Motion, heating, network changes and exports are not simulated to completion.
+
+### Preview the bed mesh and motor icons
+
+```sh
+sh touchscreen/developer-tools/preview.sh --case mesh
+sh touchscreen/developer-tools/preview.sh --case meshing
+sh touchscreen/developer-tools/preview.sh --case mesh-printing
+sh touchscreen/developer-tools/preview.sh --case motors-on
+sh touchscreen/developer-tools/preview.sh --case motors-off
+```
+
+The mesh case contains a synthetic 9-by-9 surface and three saved profiles.
+The layout pairs a shaded surface with current-mesh statistics and a scrollable
+profile list, following the useful arrangement in [HelixScreen](https://helixscreen.org/guide/calibration/).
+Its renderer and controls are implemented independently for our LVGL 8 application.
+
+Drag the surface to rotate; use the
+reset-view icon to restore the initial angle. Probe opens the existing
+calibration confirmation. The preview never sends commands to a printer and
+does not simulate physical probing; use `meshing` to inspect its progress state.
+The normal idle case also includes the sample mesh, accessible from Move.
+Profile rows show their Z range and inline Load/Delete controls. The active row
+uses Rename instead of Load. Loading does not open another screen; deleting asks
+for confirmation. Save creates a named copy of the current mesh. Use Calibrate >
+Save configuration for a persistent save and confirmed restart. During printing,
+viewing and scrolling remain available, while probing and profile changes are
+disabled. The simulator applies profile edits to its local fixture; reopening the case
+restores the sample profiles. It never connects to the printer.
+The X/Y/Z orientation key uses the same camera projection as the surface.
+
+
+Motor icons show the **available action**: crossed means turn the motors off;
+plain means turn them on. Turning them off still asks for confirmation.
 
 ### Capture a screenshot
 
@@ -193,6 +232,11 @@ Reuse the existing UI helpers:
 - Shared keyboard and numeric-entry controls. Single-line keyboard mode must be
   set before final field dimensions; preserve all printable password characters.
 
+After a confirmed Klipper or firmware restart, hide recovery actions while waiting
+for a disconnect/ready cycle or a new printer generation. Unchanged cached ready
+status does not complete a restart. After 60 seconds, offer retry while continuing
+to reconnect; a failed request releases the wait immediately.
+
 Connection state is owned by `ui_connection_mode()` above all page layouts.
 Before the first complete ready snapshot, show the startup screen. After a usable
 connection, loss or Klipper shutdown replaces the entire page with recovery
@@ -210,6 +254,15 @@ The preview supports four units; it does not establish multi-unit driver support
 
 Read heater limits and printer identity from the backend configuration. Material
 compatibility must be checked both in the selector and before starting a print.
+
+### File-list refresh lifecycle
+
+The backend preloads files after its first ready connection. Entering Files from
+another section requests a background refresh while retaining the visible list.
+Returning from file details or filament mapping reuses that list. Automatic
+requests reuse a successful refresh for 15 seconds and coalesce while a read is
+in progress; the refresh button always requests a new read. Failed startup reads
+retry after 30 seconds without clearing cached files.
 
 ## 5. Verify the change
 

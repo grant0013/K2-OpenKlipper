@@ -16,7 +16,8 @@ mkdir -p "$STAGE" "$CONF"
 cp -a "$PACKAGE/." "$STAGE/"
 cp -a "$SRC/backend" "$STAGE/backend"
 cp "$SRC/runtime/start.sh" "$SRC/runtime/launch.py" "$STAGE/"
-chmod 755 "$STAGE/openklipper-screen" "$STAGE/start.sh"
+cp "$SRC/installation/uninstall.sh" "$SRC/installation/uninstall.py" "$STAGE/"
+chmod 755 "$STAGE/openklipper-screen" "$STAGE/start.sh" "$STAGE/uninstall.sh"
 # Keep the previous complete installation until the new one is verified.
 if [ -d "$ROOT" ]; then
     PREVIOUS=$ROOT.previous.$(date +%Y%m%d%H%M%S)

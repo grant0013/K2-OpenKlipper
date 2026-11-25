@@ -452,8 +452,11 @@ static bool axis_homed(char axis) {
 }
 static void move_view(void) {
     ui_tabs(false, "move");
-    if (ui_unavailable("Movement", "moving the axes"))
+    if (ui_unavailable("Movement", "moving the axes")) {
+        if (has("settings.bed_mesh"))
+            button_fixed(app.content, "Bed mesh", 212, 410, 250, 60, "route:mesh", false);
         return;
+    }
     const char *icons[] = {"arrow-up", "arrow-left", "house", "arrow-right", "arrow-down"};
     int xs[] = {80, 0, 80, 160, 80}, ys[] = {108, 192, 192, 192, 276};
     const char *actions[] = {"jog:Y:1", "jog:X:-1", "{\"action\":\"home\",\"axis\":\"XY\"}",
@@ -508,10 +511,11 @@ static void move_view(void) {
         icon(field, "pencil", 194, 30, 16, colour("a4aebb"));
     }
     bool enabled = motors_locked();
-    lv_obj_t *motor = button_fixed(app.content, "", 452, 398, 222, 64, "motor_toggle", false);
-    icon(motor, enabled ? "lock-keyhole" : "lock-keyhole-open", 18, 20, 24, colour("f0f3f7"));
-    centered(
-        text(motor, enabled ? "Unlock motors" : "Lock motors", 50, 21, 162, &font_ui_18, false));
+    lv_obj_t *mesh = button(app.content, "", 452, 398, 105, 64,
+                            has("settings.bed_mesh") ? "route:mesh" : NULL, false);
+    icon(mesh, "bed-mesh", 34, 14, 36, colour("f0f3f7"));
+    lv_obj_t *motor = button_fixed(app.content, "", 569, 398, 105, 64, "motor_toggle", false);
+    icon(motor, enabled ? "motor-off" : "motor-on", 34, 14, 36, colour("f0f3f7"));
 }
 static void heat_view(void) {
     ui_tabs(false, "heat");
@@ -1849,6 +1853,8 @@ void views_render(void) {
     if (!strcmp(p, "move") || !strcmp(p, "heat") || !strcmp(p, "fans") || !strcmp(p, "filament") ||
         !strcmp(p, "tune") || !strcmp(p, "calibration"))
         title = "Printer controls";
+    else if (!strcmp(p, "mesh"))
+        title = "Bed mesh";
     else if (!strcmp(p, "files"))
         title = "Files";
     else if (!strcmp(p, "file"))
@@ -1915,6 +1921,8 @@ void views_render(void) {
         ui_header(title);
     if (!strcmp(p, "move"))
         move_view();
+    else if (!strcmp(p, "mesh"))
+        mesh_view();
     else if (!strcmp(p, "heat"))
         heat_view();
     else if (!strcmp(p, "fans"))
@@ -2133,8 +2141,10 @@ static void keyboard_draw(void) {
                  56, false);
     keyboard_key("icon:delete", "key_back", 668, 344, 116, 56, false);
     keyboard_key("Cancel", "close", 16, 412, 378, 56, false);
-    keyboard_key(!strcmp(app.keyboard_kind, "wifi") ? "Connect" : "Set colour", "key_done", 406,
-                 412, 378, 56, true);
+    keyboard_key(!strcmp(app.keyboard_kind, "wifi")        ? "Connect"
+                 : !strncmp(app.keyboard_kind, "mesh_", 5) ? "Save"
+                                                           : "Set colour",
+                 "key_done", 406, 412, 378, 56, true);
 }
 void ui_keyboard(const char *title, const char *kind, const char *value) {
     snprintf(app.keyboard_title, sizeof(app.keyboard_title), "%s", title);
@@ -2147,6 +2157,8 @@ void ui_keyboard(const char *title, const char *kind, const char *value) {
 }
 bool views_control_key(const char *action, char *key, size_t size) {
     const char *a = !strcmp(action, "confirmed") ? app.confirm : action;
+    if (mesh_control_key(a, key, size))
+        return true;
     if (!strncmp(a, "file_open:", 10))
         a += 10;
     else if (!strncmp(a, "file_delete:", 12)) {
@@ -2266,6 +2278,8 @@ bool views_control_key(const char *action, char *key, size_t size) {
     return false;
 }
 void views_action(const char *a) {
+    if (mesh_action(a))
+        return;
     if (!strncmp(a, "timezone_pick:", 14)) {
         cJSON *zone;
         cJSON_ArrayForEach(zone, J("timezone_presets")) {

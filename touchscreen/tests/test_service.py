@@ -268,6 +268,104 @@ class ServiceTests(unittest.TestCase):
         self.run_action("unload")
         self.mr.run_gcode.assert_called_with("UNLOAD_FILAMENT")
 
+    def prepare_mesh(self):
+        self.config["bed_mesh"] = {}
+        self.state["bed_mesh"] = {
+            "profile_name": "PLA 60C",
+            "probed_matrix": [[0, 0.1], [0.2, 0.3]],
+            "profiles": {
+                "PLA 60C": {"points": [[0, 0.1], [0.2, 0.3]]},
+                "PETG 80C": {"points": [[0.1, 0.2], [0.2, 0.4]]},
+            },
+        }
+
+    def test_mesh_profile_commands_require_confirmation_and_do_not_restart(self):
+        self.prepare_mesh()
+        with self.assertRaises(ValueError):
+            self.run_action("mesh_profile", operation="load", name="PETG 80C")
+        self.run_action("mesh_profile", operation="load", name="PETG 80C", confirm=True)
+        self.mr.run_gcode.assert_called_once_with('BED_MESH_PROFILE LOAD="PETG 80C"')
+        self.mr.run_gcode.reset_mock()
+        self.run_action(
+            "mesh_profile",
+            operation="rename",
+            name="PLA 60C",
+            new_name="PLA warm",
+            confirm=True,
+        )
+        self.mr.run_gcode.assert_called_once_with(
+            'BED_MESH_PROFILE SAVE="PLA warm"\nBED_MESH_PROFILE LOAD="PLA warm"\nBED_MESH_PROFILE REMOVE="PLA 60C"'
+        )
+        self.assertNotIn("SAVE_CONFIG", self.mr.run_gcode.call_args.args[0])
+
+    def test_mesh_profile_changes_reject_printing_stale_names_and_command_injection(
+        self,
+    ):
+        self.prepare_mesh()
+        for operation, name, new_name in (
+            ("load", "missing", ""),
+            ("save", "bad\nM112", ""),
+            ("save", "default", ""),
+            ("save", "PLA 60C", ""),
+            ("rename", "PLA 60C", 'name";M112'),
+            ("rename", "PETG 80C", "new"),
+        ):
+            with self.subTest(operation=operation, name=name):
+                with self.assertRaises((ValueError, RuntimeError)):
+                    self.run_action(
+                        "mesh_profile",
+                        operation=operation,
+                        name=name,
+                        new_name=new_name,
+                        confirm=True,
+                    )
+        self.state["print_stats"]["state"] = "printing"
+        with self.assertRaises(RuntimeError):
+            self.run_action(
+                "mesh_profile", operation="delete", name="PLA 60C", confirm=True
+            )
+        self.mr.run_gcode.assert_not_called()
+
+    def test_automatic_file_refresh_uses_recent_cache_manual_refresh_does_not(self):
+        self.s.files_refreshed_at = 100
+        with (
+            mock.patch("service.time.monotonic", return_value=110),
+            mock.patch("service.threading.Thread") as thread,
+        ):
+            self.s.submit({"action": "files", "automatic": True})
+            thread.assert_not_called()
+            self.s.submit({"action": "files"})
+            thread.assert_called_once()
+        self.s.files_refreshing = False
+        with (
+            mock.patch("service.time.monotonic", return_value=116),
+            mock.patch("service.threading.Thread") as thread,
+        ):
+            self.s.submit({"action": "files", "automatic": True})
+            thread.assert_called_once()
+
+    def test_startup_file_preload_retries_failed_reads_without_looping(self):
+        self.s.files_error = "Unavailable"
+        with (
+            mock.patch("service.time.monotonic", return_value=100),
+            mock.patch.object(self.s, "submit") as submit,
+        ):
+            self.s.preload_files()
+            self.s.preload_files()
+            submit.assert_called_once_with(
+                {"action": "files", "source": "gcodes", "automatic": True}
+            )
+        with (
+            mock.patch("service.time.monotonic", return_value=131),
+            mock.patch.object(self.s, "submit") as submit,
+        ):
+            self.s.preload_files()
+            submit.assert_called_once()
+        self.s.files_preloaded = True
+        with mock.patch.object(self.s, "submit") as submit:
+            self.s.preload_files()
+            submit.assert_not_called()
+
     def test_files_always_use_configured_printer_root(self):
         self.mr.files.return_value = [
             {"path": "folder/old.gcode", "modified": 1},
@@ -498,6 +596,13 @@ class ServiceTests(unittest.TestCase):
         )
         self.assertEqual(self.s.status["extruder"]["temperature"], 25)
         self.assertNotIn("toolhead", self.s.status)
+
+    def test_ready_notification_advances_printer_generation(self):
+        self.assertEqual(self.s.snapshot()["printer_generation"], 0)
+        with self.assertRaises(EOFError):
+            self.s.stream_message({"method": "notify_klippy_ready"})
+        self.assertEqual(self.s.snapshot()["printer_generation"], 1)
+        self.assertFalse(self.s.connected)
 
     def test_restart_invalidates_subscription_and_accepts_fresh_status(self):
         self.s.stream_connected = True

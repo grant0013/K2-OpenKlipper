@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import math
 import sys
 import tempfile
 from pathlib import Path
@@ -49,6 +50,9 @@ def snapshot(printing=False):
             },
             "virtual_sdcard": {"progress": 0.4 if printing else 0},
             "toolhead": {"homed_axes": "xyz"},
+            "stepper_enable": {
+                "steppers": {"stepper_x": True, "stepper_y": True, "stepper_z": True}
+            },
             "gcode_move": {
                 "position": [150, 150, 10],
                 "gcode_position": [150, 150, 10],
@@ -151,6 +155,12 @@ SCENARIOS = (
     "loading",
     "homing",
     "meshing",
+    "mesh",
+    "mesh-empty",
+    "mesh-unloaded",
+    "mesh-flat",
+    "mesh-printing",
+    "motors-off",
     "load",
     "unload",
     "notice",
@@ -172,7 +182,56 @@ SCENARIOS = (
 
 
 def preview_scenario(name="idle", printing=False):
-    data = snapshot(printing or name in ("printing", "heating"))
+    data = snapshot(printing or name in ("printing", "heating", "mesh-printing"))
+    # Synthetic 9-by-9 surface: a small tilt, central rise and shallow valley.
+    points = [
+        [
+            round(
+                0.05 * x
+                + 0.035 * y
+                + 0.10 * math.sin(math.pi * x) * math.cos(math.pi * y / 2),
+                3,
+            )
+            for x in (-1 + c / 4 for c in range(9))
+        ]
+        for y in (-1 + r / 4 for r in range(9))
+    ]
+    if name == "mesh-flat":
+        points = [[0.025] * 9 for _ in range(9)]
+    data["status"]["bed_mesh"] = {
+        "profile_name": "Demo bed",
+        "mesh_min": [10, 10],
+        "mesh_max": [290, 290],
+        "probed_matrix": points,
+        "mesh_matrix": points,
+    }
+    data["status"]["bed_mesh"]["profiles"] = {
+        title: {
+            "points": [[round(value + offset, 3) for value in row] for row in points],
+            "mesh_params": {
+                "min_x": 10,
+                "max_x": 290,
+                "min_y": 10,
+                "max_y": 290,
+                "x_count": 9,
+                "y_count": 9,
+            },
+        }
+        for title, offset in (("Demo bed", 0), ("PLA 60C", -0.02), ("PETG 80C", 0.035))
+    }
+    if name in ("mesh-empty", "mesh-unloaded"):
+        data["status"]["bed_mesh"].update(
+            profile_name="", probed_matrix=[], mesh_matrix=[]
+        )
+        if name == "mesh-empty":
+            data["status"]["bed_mesh"]["profiles"] = {}
+    if name == "motors-off":
+        data["status"]["stepper_enable"]["steppers"] = {
+            "stepper_x": False,
+            "stepper_y": False,
+            "stepper_z": False,
+        }
+        data["status"]["toolhead"]["homed_axes"] = ""
     data["platform"].update(
         estimated_time=4500,
         printer_image=str(FIXTURES / "assets/demo-printer-combo.png"),
@@ -417,6 +476,8 @@ def preview_scenario(name="idle", printing=False):
     elif name == "disconnected":
         data["connected"] = False
     data["wifi"].update(data["platform"]["wifi"])
+    if name == "meshing":
+        data["operation"]["kind"] = "mesh"
     if data.get("operation"):
         operation = data["operation"]
         operation["resources"] = sorted(

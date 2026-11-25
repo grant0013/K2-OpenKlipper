@@ -38,14 +38,14 @@ class NativeUI(unittest.TestCase):
   service.platform={'wifi':{},'timelapse':{'enabled':False},'free':'12 GB free','serial':'TEST','timezone':'America/Detroit'}
   self.data=service.snapshot()
 
- def render(self,page='home',actions=None,data=None):
+ def render(self,page='home',actions=None,data=None,timeout=20):
   fixture=self.path/'fixture.json';fixture.write_text(json.dumps(data or self.data))
   action_file=self.path/'actions.json';action_file.write_text(json.dumps(actions or []))
   output=self.path/'screen.ppm';geometry=self.path/'geometry.json';record=self.path/'commands.jsonl'
   if record.exists():record.unlink()
   result=subprocess.run([str(BINARY),'--assets',str(ASSETS),'--fixture',str(fixture),'--page',page,
                          '--actions',str(action_file),'--record-commands',str(record),
-                         '--snapshot',str(output),'--geometry',str(geometry)],capture_output=True,timeout=20)
+                         '--snapshot',str(output),'--geometry',str(geometry)],capture_output=True,timeout=timeout)
   self.assertEqual(result.returncode,0,result.stderr.decode()+result.stdout.decode())
   commands=[json.loads(line) for line in record.read_text().splitlines()] if record.exists() else []
   return json.loads(geometry.read_text()),commands
@@ -182,6 +182,144 @@ class NativeUI(unittest.TestCase):
    items,commands=self.render(actions=[{'snapshot':lost},'restart:'+choice,'confirmed'])
    self.assertEqual(commands,[{'action':key,'confirm':True}])
 
+ def test_restart_waits_for_reconnection_and_hides_retry_buttons(self):
+  for action in ('restart','firmware_restart'):
+   choice='klipper' if action=='restart' else 'firmware'
+   steps=['restart:'+choice,'confirmed']
+   items,commands=self.render(actions=steps)
+   self.assertEqual(items,[])
+   self.assertEqual(commands,[{'action':action,'confirm':True}])
+   # The pre-restart ready snapshot must not expose controls again.
+   items,_=self.render(actions=steps+[{'snapshot':self.data}])
+   self.assertEqual(items,[])
+   lost=copy.deepcopy(self.data);lost['connected']=False
+   items,_=self.render(actions=steps+[{'snapshot':lost},{'snapshot':self.data}])
+   self.assertTrue(any(i['action']=='open_files' for i in items))
+   # A new Klipper generation also covers a disconnect between snapshots.
+   ready=copy.deepcopy(self.data);ready['printer_generation']=1
+   items,_=self.render(actions=steps+[{'snapshot':ready}])
+   self.assertTrue(any(i['action']=='open_files' for i in items))
+
+ def test_restart_timeout_offers_retry_and_still_recovers(self):
+  steps=['restart:klipper','confirmed',{'advance_ms':60001}]
+  items,_=self.render(actions=steps)
+  self.assertEqual({i['action'] for i in items},{'restart:klipper','restart:firmware'})
+  items,commands=self.render(actions=steps+['restart:firmware','confirmed'])
+  self.assertEqual(items,[])
+  self.assertEqual([c['action'] for c in commands],['restart','firmware_restart'])
+  lost=copy.deepcopy(self.data);lost['connected']=False
+  items,_=self.render(actions=steps+[{'snapshot':lost},{'snapshot':self.data}])
+  self.assertTrue(any(i['action']=='open_files' for i in items))
+
+ def test_initial_startup_timeout_allows_restart(self):
+  starting=copy.deepcopy(self.data);starting['connected']=False
+  items,commands=self.render(data=starting,actions=[{'advance_ms':60001},'restart:klipper','confirmed'])
+  self.assertEqual(commands,[{'action':'restart','confirm':True}])
+  self.assertEqual(items,[])
+
+ def test_restart_failure_restores_controls_immediately(self):
+  failed=copy.deepcopy(self.data)
+  failed['results']=[{'id':1,'action':'restart','success':False,'error':'Request failed'}]
+  items,_=self.render(actions=['restart:klipper','confirmed',{'snapshot':failed}])
+  self.assertTrue(any(i['action']=='open_files' for i in items))
+
+ def test_dismissed_confirmation_cannot_replay_its_command(self):
+  _,commands=self.render('move',['motor_toggle','confirmed','confirmed'])
+  self.assertEqual(len([c for c in commands if c['action']=='motors']),1)
+
+ def test_mesh_profile_flow_uses_confirmed_backend_action_and_printing_is_read_only(self):
+  import sys
+  sys.path.insert(0,str(ROOT/'developer-tools'))
+  import demo_snapshot
+  data=demo_snapshot.preview_case('mesh')
+  items,commands=self.render('mesh',['mesh:load:1'],data)
+  self.assertEqual(commands,[{'action':'mesh_profile','operation':'load','name':'PLA 60C','confirm':True}])
+  self.assertTrue(any(i['action']=='mesh:rename:1' for i in items))
+  self.assertFalse(any(i['action']=='mesh:load:1' for i in items))
+  items,commands=self.render('mesh',['mesh:delete:1','close'],data)
+  self.assertEqual(commands,[])
+  items,commands=self.render('mesh',['mesh:delete:1','confirmed'],data)
+  self.assertEqual(commands,[{'action':'mesh_profile','operation':'delete','name':'PLA 60C','confirm':True}])
+  self.assertEqual(len([i for i in items if i['action'].startswith('mesh:delete:')]),2)
+  data=demo_snapshot.preview_case('mesh-printing')
+  items,commands=self.render('mesh',['mesh:save','mesh:load:1','mesh:delete:1','confirmed'],data)
+  self.assertEqual(commands,[])
+  self.assertTrue(all(not i['enabled'] for i in items if i['action'].startswith('mesh:')))
+
+ def test_mesh_saved_profiles_remain_accessible_without_active_mesh(self):
+  import sys
+  sys.path.insert(0,str(ROOT/'developer-tools'))
+  import demo_snapshot
+  for case,count in [('mesh-unloaded',3),('mesh-empty',0)]:
+   with self.subTest(case=case):
+    data=demo_snapshot.preview_case(case)
+    items,commands=self.render('mesh',data=data)
+    self.assertEqual(len([i for i in items if i['action'].startswith('mesh:delete:')]),count)
+    self.assertFalse(any(i['action']=='mesh_reset' for i in items))
+    self.assertEqual(commands,[])
+  data=demo_snapshot.preview_case('mesh')
+  profile=next(iter(data['status']['bed_mesh']['profiles'].values()))
+  data['status']['bed_mesh']['profiles']={str(n):profile for n in range(20)}
+  items,_=self.render('mesh',data=data)
+  self.assertEqual(len([i for i in items if i['action'].startswith('mesh:delete:')]),20)
+  self.assertTrue(any(i['action']=='mesh:delete:19' for i in items))
+  before=next(i['rect'][1] for i in items if i['action']=='mesh:delete:0')
+  drag=[{'queue_touch':[650,y,True]} for y in (430,410,390,370,350)]
+  drag.append({'queue_touch':[650,350,False]})
+  items,commands=self.render('mesh',drag,data)
+  after=next(i['rect'][1] for i in items if i['action']=='mesh:delete:0')
+  self.assertLess(after,before)
+  self.assertEqual(commands,[])
+
+ def test_mesh_rotation_does_not_hang_on_concave_or_edge_on_cells(self):
+  import sys
+  sys.path.insert(0,str(ROOT/'developer-tools'))
+  import demo_snapshot
+  data=demo_snapshot.preview_case('mesh')
+  for dx,dy in ((75,0),(100,100),(-300,-100),(350,100),(0,-100),(300,0),(-150,100)):
+   with self.subTest(dx=dx,dy=dy):
+    drag=[{'queue_touch':[300,240,True]}]
+    drag += [{'queue_touch':[300+int(dx*i/10),240+int(dy*i/10),True]} for i in range(1,11)]
+    drag += [{'queue_touch':[300+dx,240+dy,False]},'route:move']
+    items,commands=self.render('mesh',drag,data,timeout=5)
+    self.assertEqual(commands,[])
+    self.assertTrue(any(i['action']=='position:X' for i in items))
+
+ def test_mesh_demo_drag_rotates_and_reset_restores_view_without_commands(self):
+  import sys
+  sys.path.insert(0,str(ROOT/'developer-tools'))
+  import demo_snapshot
+  data=demo_snapshot.preview_case('mesh')
+  self.render('mesh',data=data)
+  original=(self.path/'screen.ppm').read_bytes()
+  drag=[{'queue_touch':[350,245,True]},{'queue_touch':[410,260,True]},
+        {'queue_touch':[450,280,True]},{'queue_touch':[450,280,False]}]
+  _,commands=self.render('mesh',drag,data)
+  self.assertEqual(commands,[])
+  self.assertNotEqual((self.path/'screen.ppm').read_bytes(),original)
+  _,commands=self.render('mesh',drag+['mesh_reset'],data)
+  self.assertEqual(commands,[])
+  self.assertEqual((self.path/'screen.ppm').read_bytes(),original)
+
+ def test_move_bottom_icons_align_with_step_selector(self):
+  items,_=self.render('move')
+  self.assert_rect(items,'route:mesh',[555,398,105,64])
+  self.assert_rect(items,'motor_toggle',[672,398,105,64])
+  self.assert_rect(items,'position:X',[555,108,222,76])
+  self.assert_rect(items,'position:Y',[555,192,222,76])
+  self.assert_rect(items,'position:Z',[555,276,222,76])
+
+ def test_mesh_view_hides_previous_mesh_and_actions_during_measurement(self):
+  data=copy.deepcopy(self.data)
+  data['status']['bed_mesh']={'probed_matrix':[[0,.1],[.2,.3]],'mesh_min':[0,0],'mesh_max':[350,350]}
+  items,commands=self.render('mesh',data=data)
+  self.assertTrue(any(i['action']=='calibrate:mesh' for i in items))
+  self.assertEqual(commands,[])
+  data['operations']=[{'id':1,'action':'calibrate','kind':'mesh','label':'Meshing','resources':['motion']}]
+  items,commands=self.render('mesh',data=data)
+  self.assertFalse(any(i['action'] in ('calibrate:mesh','mesh_reset') for i in items))
+  self.assertEqual(commands,[])
+
  def test_socket_loss_has_its_own_screen_without_restart_actions(self):
   items,commands=self.render('move',[{'transport_lost':True},'restart:klipper','confirmed'])
   self.assertEqual(items,[])
@@ -272,7 +410,7 @@ class NativeUI(unittest.TestCase):
   awake=copy.deepcopy(data);awake['platform']['asleep']=False
   items,commands=self.render(data=data,actions=[{'tap':[43,281]},{'snapshot':awake},{'tap':[43,281]}])
   self.assertTrue(any(i['action'].startswith('file_open:') for i in items))
-  self.assertEqual(commands,[{'action':'files','source':'gcodes'}])
+  self.assertEqual(commands,[{'action':'files','source':'gcodes','automatic':True}])
 
  def test_temperature_layout_is_aligned_for_off_and_numeric_targets(self):
   for heater in ('extruder','heater_bed','chamber'):
@@ -385,7 +523,7 @@ class NativeUI(unittest.TestCase):
  def test_sidebar_files_refreshes_printer_storage(self):
   data=copy.deepcopy(self.data);data['source']='usb';data['platform']['usb']={'mounted':True}
   items,commands=self.render('home',['route:files'],data)
-  self.assertEqual(commands,[{'action':'files','source':'gcodes'}])
+  self.assertEqual(commands,[{'action':'files','source':'gcodes','automatic':True}])
   self.assertFalse(any(item['action'].startswith('files:') for item in items))
 
  def test_calibration_grid_never_overlaps_save(self):
@@ -455,6 +593,16 @@ class NativeUI(unittest.TestCase):
   drag.append({'queue_touch':[x,y-60,False]})
   _,commands=self.render('timezone',['timezone_pick:Europe/Athens']+drag,data=data)
   self.assertEqual(commands,[])
+
+ def test_file_list_refreshes_on_entry_but_not_on_backtracking(self):
+  _,commands=self.render('home',['route:files','route:file','back'])
+  refreshes=[c for c in commands if c['action']=='files']
+  self.assertEqual(len(refreshes),1)
+  self.assertTrue(refreshes[0]['automatic'])
+  _,commands=self.render('home',['route:files','route:home','route:files'])
+  self.assertEqual(len([c for c in commands if c['action']=='files']),2)
+  _,commands=self.render('files',['route:file','route:files'])
+  self.assertFalse(any(c['action']=='files' for c in commands))
 
  def test_files_refresh_keeps_list_visible_and_navigation_available(self):
   from PIL import Image

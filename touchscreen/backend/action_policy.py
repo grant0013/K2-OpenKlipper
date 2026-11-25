@@ -53,6 +53,7 @@ ACTIONS = {
         idle=True,
         report=True,
     ),
+    "mesh_profile": rule("Updating mesh profile", MACHINE, idle=True, report=True),
     "save_config": rule("Saving configuration", {"*"}, idle=True, report=True),
     "slot_clear": rule("Resetting filament", {"filament"}, idle=True),
     "slot_save": rule("Saving filament", {"filament"}, idle=True),

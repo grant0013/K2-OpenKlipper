@@ -124,7 +124,9 @@ class BackendReview(unittest.TestCase):
             self.s.connected = True
             self.s.preload_files()
             self.s.preload_files()
-            submit.assert_called_once_with({"action": "files", "source": "gcodes"})
+            submit.assert_called_once_with(
+                {"action": "files", "source": "gcodes", "automatic": True}
+            )
 
     def test_ejection_immediately_marks_physically_present_drive_unmounted(self):
         with (

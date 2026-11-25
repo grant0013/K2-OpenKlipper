@@ -13,6 +13,7 @@ Run a case from the repository root:
 ```sh
 sh touchscreen/developer-tools/preview.sh --case idle
 sh touchscreen/developer-tools/preview.sh --case multi-cfs
+sh touchscreen/developer-tools/preview.sh --case mesh
 sh touchscreen/developer-tools/preview.sh --list
 ```
 
@@ -38,6 +39,10 @@ Copy a JSON file in `cases/` and edit these fields:
 | `actions` | Optional native fixture actions, performed after opening the page |
 | `model` | Optional display-only demo printer identity |
 | `cfs` | Set to `false` for the no-CFS capability case |
+
+`mesh.json` contains a measured surface and three profiles; `mesh-unloaded.json`
+keeps the profiles but clears the active mesh, and `mesh-empty.json` has neither.
+`meshing.json` replaces the surface with progress.
 
 For example, `mapping.json` opens the selected file and runs `review_mapping`.
 `wifi-password.json` selects a synthetic secured network to open its keyboard.

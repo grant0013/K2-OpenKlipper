@@ -1,0 +1,7 @@
+{
+  "description": "Motors enabled: crossed motor icon offers Motors off.",
+  "scenario": "idle",
+  "page": "move",
+  "printer_image": "assets/demo-printer-combo.png",
+  "actions": []
+}

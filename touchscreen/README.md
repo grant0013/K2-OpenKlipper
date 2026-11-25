@@ -10,6 +10,17 @@ Printer identity, heater and travel limits, homing state and available features
 come from the printer configuration. The interface is currently in English.
 The screenshots below are rendered by the native application with example data.
 
+## Installation
+
+Install a K2 OpenKlipper version that includes this interface, following that
+version's installation instructions. The current testing branch is
+[`touchscreen-next`](https://github.com/carmanspb/K2-OpenKlipper/tree/touchscreen-next).
+
+The K2 OpenKlipper installer copies the matching precompiled touchscreen,
+backend and startup scripts into place. No separate touchscreen installation
+or compilation on the printer is required. Updating only the touchscreen
+restarts its two processes; it does not require restarting Klipper.
+
 ## Home
 
 - Idle Home shows the printer illustration, automatically with or without CFS.
@@ -115,6 +126,17 @@ returns to the previous page automatically.
 | Movement | Unlock motors |
 | --- | --- |
 | ![Movement](screenshots/move.png) | ![Unlock motors](screenshots/unlock-motors.png) |
+
+### Bed mesh
+
+- Open the viewer from Move. Drag the shaded surface to rotate it; the X/Y/Z direction markers follow the same view. Reset the view with one tap.
+- Review the current profile, probe grid, height range and saved profiles.
+- Probe again or save a named mesh. Each saved-profile row shows its Z range with inline Load and Delete controls; the active row has Rename instead of Load. Saving configuration remains available in Calibrate.
+- During printing, viewing remains available and changes are disabled. Meshing displays progress in place of the previous surface.
+
+| Bed mesh | Delete confirmation |
+| --- | --- |
+| ![Bed mesh](screenshots/mesh.png) | ![Delete confirmation](screenshots/mesh-delete.png) |
 
 ### Thermals and fans
 
@@ -329,6 +351,32 @@ backend work. A single unit's environmental readings are not copied to other uni
 | Restart Klipper | Restart controller firmware |
 | --- | --- |
 | ![Restart Klipper](screenshots/restart-klipper.png) | ![Restart controller firmware](screenshots/restart-firmware.png) |
+
+## Uninstall and return to HarkScreen
+
+The removal script reinstalls upstream K2 OpenKlipper with its regular
+HarkScreen interface. It does not return the printer to Creality firmware.
+Finish the print and any printer operations, then run this over SSH on the printer:
+
+```sh
+sh /mnt/UDISK/openklipper-screen/uninstall.sh --check
+sh /mnt/UDISK/openklipper-screen/uninstall.sh
+```
+
+- Downloads and checks upstream `v0.4.25-alpha.1`, a verified HarkScreen release.
+- Stops the native screen and backend, then performs a full upstream reinstall.
+- Verifies HarkScreen startup before deleting the native runtime and its display settings.
+- Retains printer configuration, G-code files and the existing installer backups.
+
+Why the helper is needed: the upstream installer restores HarkScreen and its
+boot path, but does not know about our native renderer and backend processes.
+Reinstalling without stopping them can leave two interfaces drawing on the same
+display. The helper checks the selected upstream version first, stops those two
+processes, reinstalls K2 OpenKlipper, and removes the native files only after
+HarkScreen stays running. If replacement
+fails, the native files are retained. To choose another upstream version that
+includes HarkScreen, pass `--ref <tag>`; the script checks its startup implementation.
+The full reinstall can restart printer control, so do not run it during a print.
 
 ## For developers
 

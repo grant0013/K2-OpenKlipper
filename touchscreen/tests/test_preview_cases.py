@@ -44,6 +44,37 @@ class PreviewCaseTests(unittest.TestCase):
         self.assertEqual(single["cfs_units"], 0)
         self.assertEqual(single["slots"], [])
 
+    def test_mesh_cases_include_realistic_flat_empty_and_busy_states(self):
+        data = demo.preview_case("mesh")
+        mesh = data["status"]["bed_mesh"]
+        self.assertEqual(data["preview"]["page"], "mesh")
+        self.assertEqual(len(mesh["probed_matrix"]), 9)
+        self.assertTrue(all(len(row) == 9 for row in mesh["probed_matrix"]))
+        values = [value for row in mesh["probed_matrix"] for value in row]
+        self.assertLess(min(values), 0)
+        self.assertGreater(max(values), 0)
+        self.assertEqual(
+            demo.preview_case("mesh-empty")["status"]["bed_mesh"]["probed_matrix"], []
+        )
+        unloaded = demo.preview_case("mesh-unloaded")["status"]["bed_mesh"]
+        self.assertEqual(unloaded["probed_matrix"], [])
+        self.assertEqual(unloaded["profile_name"], "")
+        self.assertEqual(len(unloaded["profiles"]), 3)
+        flat = demo.preview_case("mesh-flat")["status"]["bed_mesh"]["probed_matrix"]
+        self.assertEqual(len({value for row in flat for value in row}), 1)
+        busy = demo.preview_case("meshing")
+        self.assertEqual(busy["operations"][0]["kind"], "mesh")
+        self.assertFalse(
+            demo.preview_case("mesh-printing")["availability"]["calibrate"]["enabled"]
+        )
+
+    def test_motor_cases_distinguish_enabled_and_unhomed_disabled_axes(self):
+        on = demo.preview_case("motors-on")["status"]
+        off = demo.preview_case("motors-off")["status"]
+        self.assertTrue(all(on["stepper_enable"]["steppers"].values()))
+        self.assertFalse(any(off["stepper_enable"]["steppers"].values()))
+        self.assertEqual(off["toolhead"]["homed_axes"], "")
+
     def test_unknown_case_is_rejected(self):
         with self.assertRaises(ValueError):
             demo.preview_case("../not-a-case")

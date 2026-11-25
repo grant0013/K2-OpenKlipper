@@ -55,6 +55,7 @@ OBJECTS = (
     "toolhead",
     "gcode_move",
     "exclude_object",
+    "bed_mesh",
     "k2_cfs",
     "hark_cfs_slots",
     "gcode_macro START_PRINT",
@@ -246,6 +247,8 @@ class Service:
         self.cfs_event_id = None
         self.file_read = {"busy": False, "path": ""}
         self.files_preloaded = False
+        self.files_refreshed_at = None
+        self.files_preload_retry_at = 0.0
         self.files_ready = False
         self.results = deque(maxlen=32)
         self.result = None
@@ -263,6 +266,7 @@ class Service:
         self.stream_connected = False
         self.status_times = {}
         self.status_epoch = 0
+        self.printer_generation = 0
         self.settings_refresh_needed = True
         self.last_status_at = 0.0
         self.last_poll_warning = 0.0
@@ -364,6 +368,12 @@ class Service:
             # Coalesce repeated navigation/refresh taps while the read is active.
             with self.lock:
                 if self.files_refreshing:
+                    return
+                if (
+                    request.get("automatic") is True
+                    and self.files_refreshed_at is not None
+                    and time.monotonic() - self.files_refreshed_at < 15
+                ):
                     return
                 self.files_refreshing = True
                 self.files_error = ""
@@ -484,14 +494,18 @@ class Service:
             self.connected
             and self.status.get("webhooks", {}).get("state") == "ready"
             and not self.files_preloaded
+            and not self.files_refreshing
+            and time.monotonic() >= self.files_preload_retry_at
         ):
-            self.files_preloaded = True
-            self.submit({"action": "files", "source": "gcodes"})
+            self.files_preload_retry_at = time.monotonic() + 30
+            self.submit({"action": "files", "source": "gcodes", "automatic": True})
 
     def refresh_files(self):
         try:
             self.execute({"action": "files", "source": "gcodes"})
-            self.files_ready = True
+            with self.lock:
+                self.files_ready = self.files_preloaded = True
+                self.files_refreshed_at = time.monotonic()
         except Exception as error:
             with self.lock:
                 self.files_error = str(error)
@@ -662,6 +676,7 @@ class Service:
                 )
             return {
                 "session": self.session,
+                "printer_generation": self.printer_generation,
                 "sequence": self.sequence,
                 "connected": self.connected,
                 "print_stage": self.print_stage,
@@ -914,6 +929,55 @@ class Service:
             self.gcode("CFS_SLOT_CLEAR SLOT=%s" % slot)
         elif action == "slot_save":
             self.save_slot(r, status, settings)
+        elif action == "mesh_profile":
+            if r.get("confirm") is not True or "bed_mesh" not in settings:
+                raise ValueError("Mesh profile change unavailable or not confirmed")
+            operation = r.get("operation")
+            name, new_name = r.get("name", ""), r.get("new_name", "")
+            profiles = status.get("bed_mesh", {}).get("profiles", {})
+
+            def valid_name(value):
+                return (
+                    isinstance(value, str)
+                    and bool(re.fullmatch(r"[A-Za-z0-9_. -]{1,64}", value))
+                    and value.strip() == value
+                )
+
+            if not valid_name(name) or (
+                operation == "rename" and not valid_name(new_name)
+            ):
+                raise ValueError(
+                    "Use 1–64 letters, numbers, spaces, dots, hyphens or underscores"
+                )
+            if operation not in ("load", "save", "rename", "delete"):
+                raise ValueError("Unknown mesh profile operation")
+            if operation != "save" and name not in profiles:
+                raise ValueError("Mesh profile no longer exists")
+            if operation == "load":
+                command = "BED_MESH_PROFILE LOAD=" + json.dumps(name)
+            elif operation == "delete":
+                command = "BED_MESH_PROFILE REMOVE=" + json.dumps(name)
+            else:
+                target = new_name if operation == "rename" else name
+                if target == "default":
+                    raise ValueError(
+                        "Choose a name other than the reserved default profile"
+                    )
+                if target in profiles:
+                    raise ValueError("A mesh profile with that name already exists")
+                if (
+                    operation == "rename"
+                    and status.get("bed_mesh", {}).get("profile_name") != name
+                ):
+                    raise ValueError("Load this profile before renaming it")
+                points = status.get("bed_mesh", {}).get("probed_matrix", [])
+                if not points:
+                    raise ValueError("Measure or load a mesh before saving it")
+                command = "BED_MESH_PROFILE SAVE=" + json.dumps(target)
+                if operation == "rename":
+                    command += "\nBED_MESH_PROFILE LOAD=" + json.dumps(target)
+                    command += "\nBED_MESH_PROFILE REMOVE=" + json.dumps(name)
+            self.gcode(command)
         elif action == "calibrate":
             commands = {
                 "home": ("G28", None),
@@ -1494,6 +1558,8 @@ class Service:
         ):
             # A subscription from the previous Klipper instance must not stop
             # HTTP polling or retain the old instance's partial CFS schema.
+            if method == "notify_klippy_ready":
+                self.printer_generation += 1
             self.stream_connected = False
             self.connected = False
             self.sequence += 1

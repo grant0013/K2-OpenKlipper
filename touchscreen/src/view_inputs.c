@@ -13,6 +13,7 @@ static const ViewSpec views[] = {
     {"move",
      {"settings", "status.toolhead.homed_axes", "status.stepper_enable",
       "status.extruder.can_extrude"}},
+    {"mesh", {"status.bed_mesh", "operations"}},
     {"heat", {"settings"}},
     {"fans",
      {"settings", "status.fan", "status.fan_generic auxiliary_fan",
