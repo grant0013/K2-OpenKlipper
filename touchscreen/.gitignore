@@ -9,3 +9,7 @@
 /assets/generated/
 /package-arm/
 /developer-tools/node_modules/
+
+# Python caches in any component folder
+__pycache__/
+*.py[cod]
