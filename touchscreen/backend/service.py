@@ -993,7 +993,7 @@ class Service:
             commands = {
                 "home": ("G28", None),
                 "tilt": ("Z_TILT_ADJUST", "z_tilt"),
-                "mesh": ("G28\nBED_MESH_CALIBRATE", "bed_mesh"),
+                "mesh": ("BED_MESH_CALIBRATE", "bed_mesh"),
                 "shaper": ("SHAPER_CALIBRATE", "resonance_tester"),
                 "belt": ("BELT_TENSION CONFIRM=1", "k2_belt_tension"),
                 "cutter": (
@@ -1009,7 +1009,7 @@ class Service:
                 capability and capability not in settings
             ):
                 raise ValueError("Calibration unavailable or not confirmed")
-            if r["kind"] in {"tilt", "shaper"} and not set("xyz") <= set(
+            if r["kind"] in {"tilt", "mesh", "shaper"} and not set("xyz") <= set(
                 status.get("toolhead", {}).get("homed_axes", "")
             ):
                 command = "G28\n" + command
