@@ -110,6 +110,18 @@ class BackendReview(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.run_action("calibrate", kind="tilt", confirm=True)
 
+    def test_input_shaper_homes_missing_axes_before_calibration(self):
+        self.config["resonance_tester"] = {}
+        for axes in ("", "xy", "z", "xyz"):
+            with self.subTest(homed_axes=axes):
+                self.state["toolhead"]["homed_axes"] = axes
+                self.run_action("calibrate", kind="shaper", confirm=True)
+                prefix = "" if axes == "xyz" else "G28\n"
+                self.mr.run_gcode.assert_called_with(prefix + "SHAPER_CALIBRATE")
+        self.config.pop("resonance_tester")
+        with self.assertRaises(ValueError):
+            self.run_action("calibrate", kind="shaper", confirm=True)
+
     def test_lowercase_macro_settings_advertise_print_calibration(self):
         self.s.settings["gcode_macro start_print"] = self.s.settings.pop(
             "gcode_macro START_PRINT"

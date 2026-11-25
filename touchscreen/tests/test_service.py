@@ -196,6 +196,14 @@ class ServiceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.run_action("home", axis="E")
 
+    def test_z_homing_requests_full_sequence_when_xy_is_unknown(self):
+        for axes in ("", "x", "y", "z", "xz", "yz", "xy", "xyz"):
+            with self.subTest(homed_axes=axes):
+                self.state["toolhead"]["homed_axes"] = axes
+                self.run_action("home", axis="Z")
+                expected = "G28 Z" if set("xy") <= set(axes) else "G28"
+                self.mr.run_gcode.assert_called_with(expected)
+
     def test_manual_extrusion_preserves_gcode_state_and_configured_speed(self):
         self.state["extruder"] = {"temperature": 220, "can_extrude": True}
         self.config["extruder"].update(

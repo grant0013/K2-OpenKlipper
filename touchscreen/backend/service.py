@@ -773,7 +773,13 @@ class Service:
             axis = r.get("axis", "")
             if axis not in ("", "X", "Y", "Z", "XY"):
                 raise ValueError("Unknown axis")
-            self.gcode("G28 " + " ".join(axis))
+            if axis == "Z" and not set("xy") <= set(
+                status.get("toolhead", {}).get("homed_axes", "")
+            ):
+                # Full homing lets the printer apply its Z-clearance/XY sequence.
+                self.gcode("G28")
+            else:
+                self.gcode("G28 " + " ".join(axis))
         elif action in ("jog", "position"):
             axis = str(r["axis"]).lower()
             if (
@@ -1003,7 +1009,7 @@ class Service:
                 capability and capability not in settings
             ):
                 raise ValueError("Calibration unavailable or not confirmed")
-            if r["kind"] == "tilt" and not set("xyz") <= set(
+            if r["kind"] in {"tilt", "shaper"} and not set("xyz") <= set(
                 status.get("toolhead", {}).get("homed_axes", "")
             ):
                 command = "G28\n" + command
