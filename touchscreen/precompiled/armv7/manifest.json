@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "built_from_commit": "6fcb362477ee0cdf380dca70389ae5a3e58fc6c4",
+  "built_from_commit": "e203961e66c80ad3782bc5d9894172e5caea1006",
   "source_inputs": {
     "VERSION": "a12a1be3f3ee06a3159f695083ad52c3f3dc2ae1f071b7aece71cfe4c1f1e133",
     "install.sh": "a18c37fe50db5b2a33c5659cccf2a7e5c5d9029bb4c28d47bbc45979eaea59ee",
@@ -37,9 +37,9 @@
     "touchscreen/installation/install.sh": "108fbc71a615cd500e72f9289f1caffce1b0ccdf90575d1bdf27a489f8e07300",
     "touchscreen/installation/migrate.py": "46b260c4b2032349e6c6a7e91779c95dbeebf7795c05ea2c54a4b1cca1af7e30",
     "touchscreen/installation/validate_package.py": "f37227744dfbf583a4d3c9b28f24116274e57916ea2643802364d261ba91afb0",
-    "touchscreen/runtime/launch.py": "9e8e84bd7a8c4de5fa179ac70bf44b8a1e45634c333ae82e6b9dad31558eb4a4",
+    "touchscreen/runtime/launch.py": "7d482ccee3d425fafd56cd53e10cdfd78815602038875d4cc2d9fb09434e53ed",
     "touchscreen/runtime/native-screen.cfg.example": "a1c40229dc3577391ac08405f238af44049f60fe2b83ce0702657a615c6fde56",
-    "touchscreen/runtime/start.sh": "92582b3c69004b0db391f83b866762f5e7b3223bcad48be696ebb91049077293",
+    "touchscreen/runtime/start.sh": "ec5236d965d3167cccb024f8fc289b437933f48a71d1d9ca626766c2d6191445",
     "touchscreen/src/json.c": "78986758cd5e2c91ff366341f3a35144163e8d646cce878abd2bae1105d22195",
     "touchscreen/src/main.c": "2066b9899d5bd1a919ff6acf031055e55a7fcba56f0e82b490150283fdd0672a",
     "touchscreen/src/platform.c": "2e879e3d9a9e679d5438836ff50eb0fb56a4cb1e9495d497f1d898b9853a469f",
@@ -48,10 +48,10 @@
     "touchscreen/src/view_inputs.c": "3a2f2c9b9edef18c73da43113c78f157ead539f703d8f7ba7857c60ac3fa98cb",
     "touchscreen/src/views.c": "7b7a94caee21c84c3cb259145594c6b3ebf69590ec9c2ae437d55133eaf346f6"
   },
-  "source_fingerprint": "f07c98024300460f07e39ad7dcfc1769fcdb9eec6e42558cedbebccddd609584",
+  "source_fingerprint": "7e58123f27f07ad0e81d6aaed09cc423d03ae222e543e38ac530869b7fc9237a",
   "target": "armv7-linux-gnueabihf",
   "files": {
-    "VERSION": "fdb169805441a6487122feb396eb1a82ffb87bde6a23c9be06ca6444218e07b9",
+    "VERSION": "b6b3424ed5e938692a9b1d16ab0db0ab8c1fc346cf2b343b91fb98eca6326279",
     "assets/activity-24.png": "b9857c2b1ee2168f3ddfb33dac4055b155bfb623f83612eaa0a075433918e2f2",
     "assets/arrow-big-up-28.png": "f97a4e776ca752161c2b5dd9c909e203a604be957254b20e72e36db3e542281c",
     "assets/arrow-down-36.png": "6f83551810c2023b4af59b869636c24f408501ffd9b944cafc04a01731dc3f09",
