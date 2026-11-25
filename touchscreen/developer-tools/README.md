@@ -348,8 +348,10 @@ button. Device removal errors trigger bounded reopen attempts.
 
 When diagnosing a running printer, start with read-only `/proc` CPU, RSS,
 affinity and interrupt samples. Compare RSS over time before claiming a leak.
-Check for a busy core or interrupt load before changing process priority or CPU
-affinity; do not alter the printing stack as a diagnostic shortcut.
+The UI and backend are not pinned to a CPU; Linux can schedule them on any CPU
+allowed by their parent process. Their low nice priorities are retained. Check for
+a busy core or interrupt load before changing priorities; do not alter the
+printing stack as a diagnostic shortcut.
 
 ## CFS inventory event integration
 

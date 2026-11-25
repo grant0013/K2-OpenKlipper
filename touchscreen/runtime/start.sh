@@ -12,7 +12,7 @@ for name in openklipper-screen openklipper-screen-service; do
 done
 killall boot-play display-server 2>/dev/null || true
 [ ! -x /usr/bin/screen.sh ] || /usr/bin/screen.sh on >/dev/null 2>&1 || true
-taskset 0x1 nice -n 15 "$PYTHON" "$ROOT/backend/service.py" --config "$CONF" >/tmp/openklipper-screen-service.log 2>&1 &
+nice -n 15 "$PYTHON" "$ROOT/backend/service.py" --config "$CONF" >/tmp/openklipper-screen-service.log 2>&1 &
 echo $! >/tmp/openklipper-screen-service.pid
 # Parse only the display settings; no printer limits or model constants live here.
 "$PYTHON" "$ROOT/launch.py" --config "$CONF" --root "$ROOT" </dev/null >>/tmp/openklipper-screen.log 2>&1 &
