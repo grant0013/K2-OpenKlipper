@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "built_from_commit": "8635a0e8b594bb0d7159678bcfc8ec23418b742c",
+  "built_from_commit": "c856bcb5552bd6ec34470c1104e5931b156993b0",
   "source_inputs": {
     "VERSION": "a12a1be3f3ee06a3159f695083ad52c3f3dc2ae1f071b7aece71cfe4c1f1e133",
     "install.sh": "a18c37fe50db5b2a33c5659cccf2a7e5c5d9029bb4c28d47bbc45979eaea59ee",
@@ -50,14 +50,14 @@
     "touchscreen/src/mesh.c": "3b0123c40493decb938d9e01b04fb2786f9a7c90b840681c713d3cf9fb0442c0",
     "touchscreen/src/platform.c": "02e240f00c318e41a3ce16551903ab193c996b570a61022ebe3cf5e1a67d90f0",
     "touchscreen/src/screen.h": "cb59478e91b3f740e2d8f1a8240db2cd14229ab813e10925d440fb7ddd1db267",
-    "touchscreen/src/ui.c": "1ec50de3a7e60eb6122eba06616164792f717ab1744779878bc0b14836ce87d2",
+    "touchscreen/src/ui.c": "8a6cb1dcd27aaee3321a8bb42d364b55e8b0bae04c048280c197dcf7c3c2283e",
     "touchscreen/src/view_inputs.c": "7996bdf3a95e8ba5e52a4047b28861cfd535225f1d06e39b53010a478011df4e",
     "touchscreen/src/views.c": "3eea7334c90293685d86f947df3f9f89a9990cd16ed122d1875419369324d2e2"
   },
-  "source_fingerprint": "ffbc21d2b2a0947df09d2d70374934d18eeefe3e885139355a2b6f8fdc924213",
+  "source_fingerprint": "155366d6c1dda3b960c7a865ebc6d60999dd77e5c6aacbdd9d7417d43f6569dc",
   "target": "armv7-linux-gnueabihf",
   "files": {
-    "VERSION": "be386d2e757c18f4fe3b99850f4bba7c655030423ca8275364aeb1db4fe1beb4",
+    "VERSION": "fa9ec8c51cf50bb8d90f2376b4254eebbaf91bba7f1ab1308473cbd1f145fe55",
     "assets/activity-24.png": "9d0040919c37b7592ea3ca004f464b8ea9280ac9913c8d5e61ffcdf65caa8c22",
     "assets/arrow-big-up-28.png": "ba160bf471039cad4e702630eda547c05c26a465762931fea9dac94ddaef20ba",
     "assets/arrow-down-36.png": "c215f324f01fe17e22a598a5a15505d7581ff4009eb08753d133853eb7e0628c",
@@ -131,6 +131,6 @@
     "licenses/Lucide-LICENSE": "1e7290b35280a048667bbf0ebabac1c7fd52a75300e8b2946ac165715997f2bc",
     "licenses/Noto-LICENSE": "075f91382875da1c4b491f1facf2586f55448705133264d98ce15cab6211b125",
     "licenses/cJSON-LICENSE": "a36dda207c36db5818729c54e7ad4e8b0c6fba847491ba64f372c1a2037b6d5c",
-    "openklipper-screen": "bf28f8b5016caa114b86eb8360befe90763b0273cae5b6e31b3c78166063be2b"
+    "openklipper-screen": "373d2fcd8662b1caae3756760026db55e650c301c76ebaff13c8230363f8bd4b"
   }
 }
