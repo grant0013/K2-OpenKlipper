@@ -887,6 +887,7 @@ void ui_data(cJSON *data) {
     char *previous_policy = cJSON_PrintUnformatted(J("availability"));
     char *previous_operations = cJSON_PrintUnformatted(J("operations"));
     char *previous_operation = cJSON_PrintUnformatted(J("operation"));
+    char *previous_filament = cJSON_PrintUnformatted(J("filament_activity"));
     bool session_changed = strcmp(S("session"), jstr(data, "session", "")) != 0;
     char previous_home[1024];
     home_state(previous_home, sizeof(previous_home));
@@ -954,6 +955,7 @@ void ui_data(cJSON *data) {
     char *new_policy = cJSON_PrintUnformatted(J("availability"));
     char *new_operations = cJSON_PrintUnformatted(J("operations"));
     char *new_operation = cJSON_PrintUnformatted(J("operation"));
+    char *new_filament = cJSON_PrintUnformatted(J("filament_activity"));
     bool policy_changed =
         strcmp(previous_policy ? previous_policy : "", new_policy ? new_policy : "") != 0;
     if (policy_changed) {
@@ -964,7 +966,8 @@ void ui_data(cJSON *data) {
     if (policy_changed ||
         strcmp(previous_operations ? previous_operations : "",
                new_operations ? new_operations : "") ||
-        strcmp(previous_operation ? previous_operation : "", new_operation ? new_operation : ""))
+        strcmp(previous_operation ? previous_operation : "", new_operation ? new_operation : "") ||
+        strcmp(previous_filament ? previous_filament : "", new_filament ? new_filament : ""))
         app.nav_dirty = true;
     if (policy_changed && !strcmp(app.route, "home"))
         app.dirty = true;
@@ -976,6 +979,8 @@ void ui_data(cJSON *data) {
     free(new_policy);
     free(new_operations);
     free(new_operation);
+    free(previous_filament);
+    free(new_filament);
     char current_home[1024];
     home_state(current_home, sizeof(current_home));
     char current_move[256];
@@ -1121,6 +1126,9 @@ static const ActivitySpec *activity_spec(const char *action) {
     bool network = (!strcmp(app.route, "wifi") && !strcmp(action, "wifi_join")) ||
                    (!strcmp(app.route, "networks") && !strcmp(action, "wifi_scan"));
     bool print_home = !strcmp(app.route, "home") && (app.printing || app.paused);
+    if (!strcmp(app.route, "home") && (!strcmp(action, "load") || !strcmp(action, "unload")) &&
+        !strcmp(action, S("filament_activity.action")))
+        return NULL;
     if (!strcmp(app.route, "history") || network ||
         (print_home &&
          (!strcmp(action, "start") || !strcmp(action, "pause") || !strcmp(action, "resume") ||
@@ -1167,6 +1175,9 @@ static const ActivitySpec *sidebar_activity(void) {
         if (spec && (!selected || activity_priority(spec) > activity_priority(selected)))
             selected = spec;
     }
+    const ActivitySpec *filament = activity_spec(S("filament_activity.action"));
+    if (filament && (!selected || activity_priority(filament) >= activity_priority(selected)))
+        selected = filament;
     return selected;
 }
 

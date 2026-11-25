@@ -9,7 +9,9 @@ typedef struct {
     const char *inputs[12];
 } ViewSpec;
 static const ViewSpec views[] = {
-    {"home", {"settings", "slots", "platform.print_preview_busy", "platform.starting_file"}},
+    {"home",
+     {"settings", "slots", "platform.print_preview_busy", "platform.starting_file",
+      "filament_activity"}},
     {"move",
      {"settings", "status.toolhead.homed_axes", "status.stepper_enable",
       "status.extruder.can_extrude"}},
@@ -19,8 +21,10 @@ static const ViewSpec views[] = {
      {"settings", "status.fan", "status.fan_generic auxiliary_fan",
       "status.fan_generic exhaust_fan"}},
     {"filament|edit|materials|colors|mapping|mapping_pick",
-     {"slots", "materials", "metadata", "cfs_units", "status.k2_cfs",
-      "status.filament_switch_sensor filament_sensor", "platform.file_thumbnail"}},
+     {"slots", "materials", "metadata", "cfs_units", "status.k2_cfs.online", "status.k2_cfs.fitted",
+      "status.k2_cfs.active_slot", "status.k2_cfs.temperature", "status.k2_cfs.humidity",
+      "status.filament_switch_sensor filament_sensor", "platform.file_thumbnail",
+      "filament_activity"}},
     {"files|file",
      {"files", "files_refresh", "metadata", "file", "file_read", "platform.file_thumbnail",
       "platform.file_thumbnails", "slots", "settings"}},

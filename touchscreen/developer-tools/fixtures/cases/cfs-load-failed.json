@@ -1,0 +1,7 @@
+{
+  "description": "Cfs load failed with shared filament activity state.",
+  "scenario": "cfs-load-failed",
+  "page": "filament",
+  "printer_image": "assets/demo-printer-combo.png",
+  "actions": []
+}

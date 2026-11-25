@@ -227,6 +227,50 @@ class NativeUI(unittest.TestCase):
   _,commands=self.render('move',['motor_toggle','confirmed','confirmed'])
   self.assertEqual(len([c for c in commands if c['action']=='motors']),1)
 
+ def test_cfs_activity_blocks_mutations_but_keeps_unit_and_page_navigation(self):
+  import sys
+  sys.path.insert(0,str(ROOT/'developer-tools'))
+  import demo_snapshot
+  busy=demo_snapshot.preview_case('multi-cfs-loading')
+  items,commands=self.render('filament',['unit:3'],busy)
+  self.assertTrue(any(i['action']=='slot:3A' and i['enabled'] for i in items))
+  for action in ('edit_slot','load','unload'):
+   self.assertFalse(next(i['enabled'] for i in items if i['action']==action))
+  self.assertEqual(commands,[])
+  ready=demo_snapshot.preview_scenario('multi-cfs')
+  items,commands=self.render('filament',[{'snapshot':ready}],busy)
+  self.assertTrue(next(i['enabled'] for i in items if i['action']=='edit_slot'))
+  self.assertEqual(commands,[])
+
+ def test_cfs_telemetry_does_not_restart_the_busy_animation(self):
+  import sys
+  sys.path.insert(0,str(ROOT/'developer-tools'))
+  import demo_snapshot
+  busy=demo_snapshot.preview_case('cfs-loading')
+  self.render('filament',[{'snapshot':busy}],busy)
+  original=(self.path/'screen.ppm').read_bytes()
+  wheel=copy.deepcopy(busy);wheel['status']['k2_cfs']['wheel_mm']=123.4
+  self.render('filament',[{'snapshot':wheel}],busy)
+  self.assertEqual((self.path/'screen.ppm').read_bytes(),original)
+
+ def test_home_cfs_loading_uses_ring_without_extra_caption_or_sidebar_badge(self):
+  import sys
+  sys.path.insert(0,str(ROOT/'developer-tools'))
+  import demo_snapshot
+  from PIL import Image
+  idle=demo_snapshot.preview_scenario('idle')
+  items,_=self.render('home',data=idle)
+  tile=next(i['rect'] for i in items if i['action']=='home_filament_strip')
+  x,y,w,h=tile
+  with Image.open(self.path/'screen.ppm') as picture:
+   header=picture.crop((x+50,y+2,x+w-3,y+23)).tobytes()
+   sidebar=picture.crop((0,370,84,480)).tobytes()
+  busy=demo_snapshot.preview_case('cfs-loading-home')
+  self.render('home',data=busy)
+  with Image.open(self.path/'screen.ppm') as picture:
+   self.assertEqual(picture.crop((x+50,y+2,x+w-3,y+23)).tobytes(),header)
+   self.assertEqual(picture.crop((0,370,84,480)).tobytes(),sidebar)
+
  def test_mesh_profile_flow_uses_confirmed_backend_action_and_printing_is_read_only(self):
   import sys
   sys.path.insert(0,str(ROOT/'developer-tools'))

@@ -233,6 +233,16 @@ backend work. A single unit's environmental readings are not copied to other uni
 | --- | --- |
 | ![Save configuration](screenshots/save.png) | ![Calibration unavailable during printing](screenshots/calibrate-printing.png) |
 
+### Filament activity
+
+- Loading and unloading follow the affected spool across CFS units, including print tool changes.
+- Home shows an animated ring around its colour. Spool tiles show a spinner and Loading/Unloading text.
+- Keep browsing units and pages while conflicting filament actions are disabled. Indicators clear when the operation ends; failures show the normal error dialog.
+
+| Loading a spool | Unloading a spool |
+| --- | --- |
+| ![Loading a spool](screenshots/cfs-loading.png) | ![Unloading a spool](screenshots/cfs-unloading.png) |
+
 ## Files and starting a print
 
 1. Browse sliced files with thumbnails or a fallback icon. Refresh keeps the list

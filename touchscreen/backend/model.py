@@ -217,3 +217,24 @@ def macro_options(settings, name):
         ),
         {},
     )
+
+
+def filament_activity(status, operations=()):
+    """One presentation state for all filament controls; no guessed progress."""
+    cfs = status.get("k2_cfs") or {}
+    known = set(slots(status)) | {"E"}
+    driver = cfs.get("filament_activity")
+    sources = ([driver] if isinstance(driver, dict) else []) + list(operations)
+    for operation in sources:
+        action = operation.get("action")
+        if action not in ("load", "unload"):
+            continue
+        slot = operation.get("slot", "")
+        if action == "unload" and not slot:
+            slot = cfs.get("active_slot") or "E"
+        return {
+            "action": action,
+            "slot": slot if isinstance(slot, str) and slot in known else "",
+        }
+    # Hardware operating modes and change_pending are not transaction lifetimes.
+    return None

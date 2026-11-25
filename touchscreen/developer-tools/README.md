@@ -107,6 +107,9 @@ sh touchscreen/developer-tools/preview.sh --list
 | `printing` | Progress, holding temperatures and three print objects |
 | `heating` | Current-to-target temperature arrows |
 | `multi-cfs` | Four units and sixteen spools |
+| `cfs-loading`, `cfs-unloading`, `cfs-loading-home` | Shared spool activity and ring-only Home indication |
+| `cfs-print-loading`, `cfs-print-unloading` | Driver-reported tool-change phases during printing |
+| `multi-cfs-loading`, `cfs-load-failed` | Busy unit navigation and a failed load with no stale spinner |
 | `mesh`, `mesh-flat`, `mesh-empty`, `mesh-unloaded` | Rotatable sample mesh, flat surface, no data, and saved profiles with no active mesh |
 | `mesh-delete` | Inline saved-profile delete confirmation |
 | `mesh-printing`, `meshing` | Read-only viewing during a print and measurement progress |
@@ -254,6 +257,24 @@ The preview supports four units; it does not establish multi-unit driver support
 
 Read heater limits and printer identity from the backend configuration. Material
 compatibility must be checked both in the selector and before starting a print.
+
+### Filament activity
+
+The shared `filament_activity` snapshot field is either null or an object with
+`action` (`load`/`unload`) and `slot`. The driver publishes balanced phases around
+load, retries, purge and cut/unload; `finally` restores an outer phase or clears
+it on success/failure. This also covers commands from the slicer or console.
+The backend captures the unload source before selection is cleared, and falls
+back to its own Load/Unload requests on older drivers. Hardware operating modes
+and failed `change_pending` transactions never invent a busy state.
+
+A touchscreen-only update on an older driver can track its own requests;
+tracking slicer/console phases requires the updated `k2_cfs.py` in this version.
+Home, spool tiles, unit selectors, mapping controls and contextual sidebar status
+consume the same field. Home uses only the animated ring. Other pages retain a
+short status label. Resource policy blocks conflicting edits while navigation
+stays available. View signatures ignore unrelated CFS telemetry so spinners do
+not restart on each wheel or status update.
 
 ### File-list refresh lifecycle
 

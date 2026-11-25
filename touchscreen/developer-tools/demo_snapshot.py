@@ -13,6 +13,7 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 CASES = FIXTURES / "cases"
 sys.path.insert(0, str(ROOT / "backend"))
 import action_policy
+import model
 from service import Service
 
 
@@ -150,6 +151,10 @@ SCENARIOS = (
     "multi-cfs",
     "heating",
     "empty-extruder",
+    "multi-cfs-loading",
+    "cfs-load-failed",
+    "cfs-print-loading",
+    "cfs-print-unloading",
     "printing",
     "error",
     "loading",
@@ -284,6 +289,38 @@ def preview_scenario(name="idle", printing=False):
         "load": ("load", "Loading selected filament from CFS…"),
         "unload": ("unload", "Returning filament to CFS…"),
     }
+    if name in ("multi-cfs-loading", "cfs-load-failed"):
+        data = preview_scenario("multi-cfs" if name == "multi-cfs-loading" else "idle")
+        target = "2B" if name == "multi-cfs-loading" else "B"
+        if name == "multi-cfs-loading":
+            data["operation"] = {
+                "id": 1,
+                "action": "load",
+                "slot": target,
+                "label": "Loading filament",
+                "detail": "Loading selected filament from CFS…",
+            }
+        else:
+            data["notices"] = [
+                {
+                    "id": 1,
+                    "title": "Loading filament failed",
+                    "detail": "Demo CFS load failed. Check the filament path and retry.",
+                    "fault": True,
+                }
+            ]
+    if name in ("cfs-print-loading", "cfs-print-unloading"):
+        data = preview_scenario("printing")
+        action = "load" if name == "cfs-print-loading" else "unload"
+        data["status"]["k2_cfs"]["filament_activity"] = {
+            "action": action,
+            "slot": "B" if action == "load" else "A",
+        }
+        data["status"]["k2_cfs"]["active_slot"] = None if action == "load" else "A"
+        data["status"]["filament_switch_sensor filament_sensor"] = {
+            "filament_detected": action == "unload"
+        }
+        data["print_stage"] = "Changing filament"
     if name == "empty-extruder":
         data["status"]["k2_cfs"]["active_slot"] = None
         data["status"]["filament_switch_sensor filament_sensor"] = {
@@ -476,6 +513,10 @@ def preview_scenario(name="idle", printing=False):
     elif name == "disconnected":
         data["connected"] = False
     data["wifi"].update(data["platform"]["wifi"])
+    if name in ("load", "unload"):
+        data["operation"]["slot"] = (
+            "B" if name == "load" else data["status"]["k2_cfs"].get("active_slot", "A")
+        )
     if name == "meshing":
         data["operation"]["kind"] = "mesh"
     if data.get("operation"):
@@ -488,6 +529,12 @@ def preview_scenario(name="idle", printing=False):
         data["availability"] = action_policy.availability(
             data["status"], data["connected"], data["operations"]
         )
+    data["availability"] = action_policy.availability(
+        data["status"], data["connected"], data.get("operations", [])
+    )
+    data["filament_activity"] = model.filament_activity(
+        data["status"], data.get("operations", [])
+    )
     return data
 
 

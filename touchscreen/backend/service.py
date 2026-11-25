@@ -443,7 +443,9 @@ class Service:
             self.operations[token] = {
                 "id": token,
                 "action": action,
-                "slot": request.get("slot", ""),
+                "slot": (self.status.get("k2_cfs", {}).get("active_slot") or "E")
+                if action == "unload"
+                else request.get("slot", ""),
                 "heater": request.get("heater", ""),
                 "fan": request.get("fan", ""),
                 "kind": request.get("kind", ""),
@@ -692,6 +694,9 @@ class Service:
                 "notices": self.notices,
                 "operation": dict(self.operation) if self.operation else None,
                 "operations": [dict(op) for op in self.operations.values()],
+                "filament_activity": model.filament_activity(
+                    status, self.operations.values()
+                ),
                 "results": list(self.results),
                 "availability": action_policy.availability(
                     status, self.connected, self.operations.values()
