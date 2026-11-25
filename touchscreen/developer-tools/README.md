@@ -328,6 +328,29 @@ This installs the screen/service without reinstalling Klipper. Runtime diagnosti
 | Display configuration | `native-screen.cfg` in the selected configuration directory |
 | Preferences | `native-screen-settings.json` beside the display configuration |
 
+### Slow responses and connection recovery
+
+The backend logs slow snapshots (over 0.5 seconds), at most once per 30 seconds
+per client. Each entry includes wall time, CPU time, lock wait, snapshot creation,
+encoding, sending and payload size. High wall time with little CPU time suggests
+scheduling, lock or socket waits; high CPU time suggests expensive computation.
+Stream reconnects and background refresh failures are logged separately.
+
+Routine snapshots are sent at up to five updates per second; incoming commands
+wake the socket loop immediately. A failed peripheral refresh does not invalidate
+a healthy printer stream. Same-host reconnects retain cached settings while
+refreshing them; a remote clock reset still invalidates the old configuration.
+The backend validates current settings again before printer actions.
+
+Touch state is cancelled on connection transitions and input-event loss. A press
+with no new input events for five seconds is cancelled without activating its
+button. Device removal errors trigger bounded reopen attempts.
+
+When diagnosing a running printer, start with read-only `/proc` CPU, RSS,
+affinity and interrupt samples. Compare RSS over time before claiming a leak.
+Check for a busy core or interrupt load before changing process priority or CPU
+affinity; do not alter the printing stack as a diagnostic shortcut.
+
 ## CFS inventory event integration
 
 The full installer must include the matching `k2_cfs.py` and `hark_cfs_slots.py`.

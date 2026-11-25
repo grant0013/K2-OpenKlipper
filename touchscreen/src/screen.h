@@ -75,6 +75,7 @@ void platform_init(bool framebuffer, const char *input, int rotation, bool windo
 void platform_pump(void);
 bool platform_closed(void);
 bool platform_pressed(void);
+void platform_cancel_touch(void);
 void platform_snapshot(const char *);
 bool platform_send(const char *);
 char *platform_receive(void);

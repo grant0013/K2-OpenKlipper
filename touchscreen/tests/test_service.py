@@ -10,7 +10,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
-from service import Service
+from service import Service, WebSocket
 import platform_services
 
 
@@ -323,6 +323,48 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(len(self.s.platform["file_thumbnails"]), 17)
         self.s.file_thumbnails(files)
         self.assertEqual(self.mr.metadata.call_count, 17)
+
+    def test_closed_websocket_handshake_exits_and_closes_socket(self):
+        sock = mock.Mock()
+        sock.recv.side_effect = [b"", AssertionError("must not spin on EOF")]
+        with mock.patch("service.socket.create_connection", return_value=sock):
+            with self.assertRaises(EOFError):
+                WebSocket("http://127.0.0.1:7126")
+        sock.close.assert_called_once_with()
+
+    def test_reconnect_keeps_settings_until_refreshed_on_same_host_boot(self):
+        self.s.merge_status(self.state, 100, full=True)
+        self.s.stream_message({"result": {"eventtime": 101, "status": self.state}})
+        snap = self.s.snapshot()
+        self.assertTrue(snap["connected"])
+        self.assertTrue(snap["heaters"])
+        self.assertEqual(snap["settings"]["extruder"]["max_temp"], 350)
+        self.assertTrue(self.s.settings_refresh_needed)
+
+    def test_background_refresh_failure_does_not_disconnect_live_printer(self):
+        self.s.merge_status(self.state, 10)
+        self.s.stream_connected = True
+        self.s.ready = True
+        self.s.update_screen_idle = mock.Mock()
+        self.s.preload_files = mock.Mock()
+        self.s.refresh_platform = mock.Mock(side_effect=OSError("USB query failed"))
+        with mock.patch("service.time.sleep", side_effect=StopIteration):
+            with self.assertRaises(StopIteration):
+                self.s.poll()
+        self.assertTrue(self.s.connected)
+        self.assertEqual(self.s.platform["background_error"], "USB query failed")
+        self.assertNotIn("connection_error", self.s.platform)
+
+    def test_http_failure_uses_live_stream_but_detects_real_disconnect(self):
+        for live in (True, False):
+            with self.subTest(live=live):
+                self.s.merge_status(self.state, 10)
+                self.s.stream_connected = live
+                self.mr.status_snapshot.side_effect = OSError("HTTP unavailable")
+                with mock.patch("service.time.sleep", side_effect=StopIteration):
+                    with self.assertRaises(StopIteration):
+                        self.s.poll()
+                self.assertEqual(self.s.connected, live)
 
     def test_timezone_setting_updates_uci_and_runtime_zonefile(self):
         zone_root = Path(self.tmp.name) / "zoneinfo"

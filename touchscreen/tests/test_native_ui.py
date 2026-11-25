@@ -143,6 +143,18 @@ class NativeUI(unittest.TestCase):
    items,_=self.render('move',[{'snapshot':self.data}],data)
    self.assertTrue(any(i['action'].startswith('jog:') for i in items))
 
+ def test_connection_recovery_cancels_touch_with_missing_release(self):
+  lost=copy.deepcopy(self.data);lost['connected']=False
+  items,commands=self.render(data=lost,actions=[{'queue_touch':[200,380,True]},{'snapshot':self.data},{'queue_touch':[200,380,False]}])
+  self.assertTrue(any(i['action']=='open_files' for i in items))
+  self.assertFalse(any(c['action'] in ('restart','firmware_restart') for c in commands))
+
+ def test_settings_refresh_is_not_offered_as_printer_restart(self):
+  data=copy.deepcopy(self.data);data['settings']={};data['heaters']=[]
+  items,commands=self.render(data=data)
+  self.assertFalse(any(i['action'].startswith('restart:') for i in items))
+  self.assertEqual(commands,[])
+
  def test_notice_after_startup_opens_over_complete_home_page(self):
   starting=copy.deepcopy(self.data);starting['connected']=False
   ready=copy.deepcopy(self.data)

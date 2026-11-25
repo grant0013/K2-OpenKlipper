@@ -118,6 +118,7 @@ ConnectionMode ui_connection_mode(void) {
 void ui_transport_lost(void) {
     if (!app.connected && !app.service_link)
         return;
+    platform_cancel_touch();
     app.connected = false;
     app.service_link = false;
     app.rendered = false;
@@ -873,6 +874,7 @@ void ui_data(cJSON *data) {
     if (connection == CONNECTION_READY)
         app.ever_ready = true;
     if (connection != previous_connection || !previous_link) {
+        platform_cancel_touch();
         /* The backend retains unacknowledged notices across reconnects. */
         app.last_notice = 0;
         app.rendered = false;
@@ -1153,6 +1155,8 @@ static void connection_center(lv_obj_t *label) {
 static void connection_screen(ConnectionMode mode) {
     bool starting = mode == CONNECTION_STARTING;
     bool service_lost = mode == CONNECTION_SERVICE_LOST;
+    bool syncing =
+        !starting && !service_lost && app.connected && !strcmp(S("status.webhooks.state"), "ready");
     lv_obj_t *group = box(app.content, 0, 0, 720, 1, false);
     lv_obj_clear_flag(group, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_style_bg_opa(group, 0, 0);
@@ -1171,6 +1175,7 @@ static void connection_screen(ConnectionMode mode) {
     connection_center(text(group,
                            starting       ? "Printer is starting up"
                            : service_lost ? "Cannot connect to touchscreen service"
+                           : syncing      ? "Updating printer settings"
                                           : "Printer connection lost",
                            0, 0, 720, &font_ui_30, false));
     const char *state = S("status.webhooks.state");
@@ -1178,6 +1183,7 @@ static void connection_screen(ConnectionMode mode) {
     const char *detail =
         service_lost ? "Waiting for the local touchscreen service to reconnect…"
         : starting   ? "Waiting for printer control to become ready…"
+        : syncing    ? "Printer is connected. Loading its settings…"
         : fatal && *S("status.webhooks.state_message") ? S("status.webhooks.state_message")
         : !app.connected ? "Waiting for the connection to printer control to return."
         : *S("error")    ? S("error")
@@ -1191,8 +1197,8 @@ static void connection_screen(ConnectionMode mode) {
     lv_obj_set_style_max_height(message, 100, 0);
     lv_label_set_long_mode(message, LV_LABEL_LONG_DOT);
     lv_obj_update_layout(group);
-    lv_obj_align(group, LV_ALIGN_CENTER, 0, starting || service_lost ? 0 : -45);
-    if (starting || service_lost)
+    lv_obj_align(group, LV_ALIGN_CENTER, 0, starting || service_lost || syncing ? 0 : -45);
+    if (starting || service_lost || syncing)
         return;
     button_fixed(app.content, "Restart Klipper", 74, 352, 312, 70, "restart:klipper", false);
     button_fixed(app.content, "Firmware restart", 414, 352, 312, 70, "restart:firmware", false);

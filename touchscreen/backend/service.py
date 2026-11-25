@@ -131,29 +131,36 @@ class WebSocket:
             )
         host, port = parsed.hostname, parsed.port or 80
         self.sock = socket.create_connection((host, port), timeout=5)
-        self.sock.settimeout(3)
-        key = base64.b64encode(os.urandom(16)).decode()
-        path = parsed.path.rstrip("/") + "/websocket"
-        self.sock.sendall(
-            (
-                "GET %s HTTP/1.1\r\nHost: %s:%d\r\nUpgrade: websocket\r\n"
-                "Connection: Upgrade\r\nSec-WebSocket-Key: %s\r\n"
-                "Sec-WebSocket-Version: 13\r\n\r\n" % (path, host, port, key)
-            ).encode()
-        )
-        self.buffer = b""
-        while b"\r\n\r\n" not in self.buffer:
-            self.buffer += self.sock.recv(4096)
-            if len(self.buffer) > 16384:
-                raise RuntimeError("Invalid WebSocket handshake")
-        header, self.buffer = self.buffer.split(b"\r\n\r\n", 1)
-        accept = base64.b64encode(
-            hashlib.sha1(
-                (key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()
-            ).digest()
-        )
-        if not header.startswith(b"HTTP/1.1 101") or accept not in header:
-            raise RuntimeError("Moonraker rejected WebSocket upgrade")
+        try:
+            self.sock.settimeout(3)
+            key = base64.b64encode(os.urandom(16)).decode()
+            path = parsed.path.rstrip("/") + "/websocket"
+            self.sock.sendall(
+                (
+                    "GET %s HTTP/1.1\r\nHost: %s:%d\r\nUpgrade: websocket\r\n"
+                    "Connection: Upgrade\r\nSec-WebSocket-Key: %s\r\n"
+                    "Sec-WebSocket-Version: 13\r\n\r\n" % (path, host, port, key)
+                ).encode()
+            )
+            self.buffer = b""
+            while b"\r\n\r\n" not in self.buffer:
+                chunk = self.sock.recv(4096)
+                if not chunk:
+                    raise EOFError("Moonraker closed the WebSocket handshake")
+                self.buffer += chunk
+                if len(self.buffer) > 16384:
+                    raise RuntimeError("Invalid WebSocket handshake")
+            header, self.buffer = self.buffer.split(b"\r\n\r\n", 1)
+            accept = base64.b64encode(
+                hashlib.sha1(
+                    (key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()
+                ).digest()
+            )
+            if not header.startswith(b"HTTP/1.1 101") or accept not in header:
+                raise RuntimeError("Moonraker rejected WebSocket upgrade")
+        except Exception:
+            self.sock.close()
+            raise
 
     def send(self, value, opcode=1):
         payload = json.dumps(value).encode() if opcode == 1 else value
@@ -256,6 +263,9 @@ class Service:
         self.stream_connected = False
         self.status_times = {}
         self.status_epoch = 0
+        self.settings_refresh_needed = True
+        self.last_status_at = 0.0
+        self.last_poll_warning = 0.0
         self.read_policy = storage.FilamentReadPolicy()
         self.filaments = []
         self.ready = False
@@ -333,6 +343,7 @@ class Service:
                 for key, value in self.status.items()
             }
             self.settings = settings
+            self.settings_refresh_needed = False
         if model.stopped(status):
             raise RuntimeError("Printer stopped. Resolve its error first.")
         if idle and model.active(status):
@@ -1378,11 +1389,18 @@ class Service:
                 and clock_baseline is not None
                 and eventtime < clock_baseline
             )
+            remote_reboot = (
+                new_epoch
+                and eventtime is not None
+                and eventtime < max(self.status_times.values(), default=float("-inf"))
+            )
             if new_epoch or reset_clock:
                 self.status_epoch += 1
                 self.status_times.clear()
                 self.status.clear()
-                self.settings.clear()
+                if remote_reboot or reset_clock:
+                    self.settings.clear()
+                self.settings_refresh_needed = True
                 self.requested_values.clear()
                 self.pending_temperatures.clear()
                 self.pending_fans.clear()
@@ -1400,6 +1418,8 @@ class Service:
                 else:
                     self.status[name] = values
             self.connected = True
+            self.last_status_at = time.monotonic()
+            self.platform.pop("connection_error", None)
             if self.status.get("webhooks", {}).get("state") != "ready":
                 self.requested_values.clear()
                 self.pending_temperatures.clear()
@@ -1481,6 +1501,7 @@ class Service:
             raise EOFError("Klipper state changed; renew the subscription")
 
     def stream(self):
+        last_warning = 0.0
         while True:
             ws = None
             try:
@@ -1495,8 +1516,11 @@ class Service:
                 )
                 while True:
                     self.stream_message(ws.receive())
-            except Exception:
+            except Exception as error:
                 self.stream_connected = False
+                if time.monotonic() - last_warning >= 30:
+                    print("screen status stream: %s" % error, flush=True)
+                    last_warning = time.monotonic()
                 time.sleep(2)
             finally:
                 if ws:
@@ -1811,6 +1835,7 @@ class Service:
     def poll(self):
         config_at = platform_at = alerts_at = full_at = 0
         while True:
+            querying_status = False
             try:
                 now = time.monotonic()
                 if not self.stream_connected or not self.status or now - full_at >= 5:
@@ -1821,6 +1846,7 @@ class Service:
                         baseline = max(
                             self.status_times.values(), default=float("-inf")
                         )
+                    querying_status = True
                     snapshot = self.mr.status_snapshot()
                     self.merge_status(
                         snapshot["status"],
@@ -1829,9 +1855,20 @@ class Service:
                         epoch=epoch,
                         clock_baseline=baseline,
                     )
+                    querying_status = False
                     full_at = now
-                if now - config_at > 30 or not self.settings:
-                    self.settings = self.mr.settings()
+                if (
+                    now - config_at > 30
+                    or not self.settings
+                    or self.settings_refresh_needed
+                ):
+                    with self.lock:
+                        epoch = self.status_epoch
+                    refreshed = self.mr.settings()
+                    with self.lock:
+                        if epoch == self.status_epoch:
+                            self.settings = refreshed
+                            self.settings_refresh_needed = False
                     data = self.status.get("hark_cfs_slots", {})
                     # Library fields need an explicit full object query on
                     # adapters which advertise a reduced subscription shape.
@@ -1891,9 +1928,25 @@ class Service:
                     except Exception as error:
                         self.event("Filament information refresh failed", str(error))
             except Exception as error:
-                self.connected = False
-                self.sequence += 1
-                self.platform["connection_error"] = str(error)
+                with self.lock:
+                    live_stream = (
+                        self.stream_connected
+                        and time.monotonic() - self.last_status_at < 15
+                    )
+                    if querying_status and not live_stream:
+                        self.connected = False
+                        self.platform["connection_error"] = str(error)
+                    else:
+                        self.platform["background_error"] = str(error)
+                    self.sequence += 1
+                now = time.monotonic()
+                if now - self.last_poll_warning >= 30:
+                    print(
+                        "screen refresh (%s): %s"
+                        % ("status" if querying_status else "background", error),
+                        flush=True,
+                    )
+                    self.last_poll_warning = now
             time.sleep(3 if self.stream_connected else 1)
 
     def serve(self, path):
@@ -1929,9 +1982,10 @@ class Service:
         connection.settimeout(2)
         buffer = b""
         previous = ""
+        last_warning = 0.0
         try:
             while True:
-                readable, _, _ = select.select([connection], [], [], 0.1)
+                readable, _, _ = select.select([connection], [], [], 0.2)
                 if readable:
                     chunk = connection.recv(65536)
                     if not chunk:
@@ -1950,13 +2004,34 @@ class Service:
                                 self.sequence += 1
                         except Exception as error:
                             self.event("Request failed", str(error), fault=True)
-                value = self.snapshot()
-                # Stream large immutable configuration only when it changes;
-                # do not send an empty operation with stale stage information.
+                started, cpu_started = time.monotonic(), time.thread_time()
+                with self.lock:
+                    lock_wait = time.monotonic() - started
+                    value = self.snapshot()
+                snapshot_at = time.monotonic()
+                # Suppress identical snapshots. The 200 ms idle wait bounds
+                # routine traffic; incoming commands still wake select immediately.
                 encoded = json.dumps(value, separators=(",", ":"), ensure_ascii=False)
+                encoded_at = time.monotonic()
                 if encoded != previous:
                     connection.sendall(encoded.encode() + b"\n")
                     previous = encoded
+                elapsed = time.monotonic() - started
+                if elapsed > 0.5 and time.monotonic() - last_warning >= 30:
+                    print(
+                        "screen snapshot slow: wall=%.3fs cpu=%.3fs lock=%.3fs snapshot=%.3fs encode=%.3fs send=%.3fs payload=%d"
+                        % (
+                            elapsed,
+                            time.thread_time() - cpu_started,
+                            lock_wait,
+                            snapshot_at - started,
+                            encoded_at - snapshot_at,
+                            time.monotonic() - encoded_at,
+                            len(encoded),
+                        ),
+                        flush=True,
+                    )
+                    last_warning = time.monotonic()
         except (OSError, ValueError):
             pass
         finally:
