@@ -253,7 +253,20 @@ class NativeUI(unittest.TestCase):
   self.render('filament',[{'snapshot':wheel}],busy)
   self.assertEqual((self.path/'screen.ppm').read_bytes(),original)
 
- def test_home_cfs_loading_uses_ring_without_extra_caption_or_sidebar_badge(self):
+ def test_filament_activity_sidebar_is_hidden_only_on_filament_page(self):
+  import sys
+  sys.path.insert(0,str(ROOT/'developer-tools'))
+  import demo_snapshot
+  for scenario in ('load','unload'):
+   data=demo_snapshot.preview_scenario(scenario)
+   for page in ('filament','home','files'):
+    with self.subTest(scenario=scenario,page=page):
+     items,commands=self.render(page,data=data)
+     badge=any(i['action']=='route:history' and i['rect'][0]<10 for i in items)
+     self.assertEqual(badge,page!='filament')
+     self.assertEqual(commands,[])
+
+ def test_home_cfs_loading_uses_ring_without_extra_caption_and_keeps_sidebar_status(self):
   import sys
   sys.path.insert(0,str(ROOT/'developer-tools'))
   import demo_snapshot
@@ -269,7 +282,7 @@ class NativeUI(unittest.TestCase):
   self.render('home',data=busy)
   with Image.open(self.path/'screen.ppm') as picture:
    self.assertEqual(picture.crop((x+50,y+2,x+w-3,y+23)).tobytes(),header)
-   self.assertEqual(picture.crop((0,370,84,480)).tobytes(),sidebar)
+   self.assertNotEqual(picture.crop((0,370,84,480)).tobytes(),sidebar)
 
  def test_mesh_profile_flow_uses_confirmed_backend_action_and_printing_is_read_only(self):
   import sys

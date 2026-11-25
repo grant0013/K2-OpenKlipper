@@ -236,7 +236,7 @@ backend work. A single unit's environmental readings are not copied to other uni
 ### Filament activity
 
 - Loading and unloading follow the affected spool across CFS units, including print tool changes.
-- Home shows an animated ring around its colour. Spool tiles show a spinner and Loading/Unloading text.
+- Home shows an animated ring around its colour and the operation in the left sidebar. The Filament page shows Loading/Unloading on the spool tile without repeating it in the sidebar.
 - Keep browsing units and pages while conflicting filament actions are disabled. Indicators clear when the operation ends; failures show the normal error dialog.
 
 | Loading a spool | Unloading a spool |

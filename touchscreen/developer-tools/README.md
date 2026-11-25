@@ -107,7 +107,7 @@ sh touchscreen/developer-tools/preview.sh --list
 | `printing` | Progress, holding temperatures and three print objects |
 | `heating` | Current-to-target temperature arrows |
 | `multi-cfs` | Four units and sixteen spools |
-| `cfs-loading`, `cfs-unloading`, `cfs-loading-home` | Shared spool activity and ring-only Home indication |
+| `cfs-loading`, `cfs-unloading`, `cfs-loading-home` | Shared spool activity and the Home colour-ring indicator |
 | `cfs-print-loading`, `cfs-print-unloading` | Driver-reported tool-change phases during printing |
 | `multi-cfs-loading`, `cfs-load-failed` | Busy unit navigation and a failed load with no stale spinner |
 | `mesh`, `mesh-flat`, `mesh-empty`, `mesh-unloaded` | Rotatable sample mesh, flat surface, no data, and saved profiles with no active mesh |
@@ -271,8 +271,9 @@ and failed `change_pending` transactions never invent a busy state.
 A touchscreen-only update on an older driver can track its own requests;
 tracking slicer/console phases requires the updated `k2_cfs.py` in this version.
 Home, spool tiles, unit selectors, mapping controls and contextual sidebar status
-consume the same field. Home uses only the animated ring. Other pages retain a
-short status label. Resource policy blocks conflicting edits while navigation
+consume the same field. Home uses an animated colour ring and a short sidebar
+status. The Filament page shows text on the affected tile and suppresses the
+duplicate sidebar status. Other pages retain the sidebar status. Resource policy blocks conflicting edits while navigation
 stays available. View signatures ignore unrelated CFS telemetry so spinners do
 not restart on each wheel or status update.
 

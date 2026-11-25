@@ -1126,8 +1126,8 @@ static const ActivitySpec *activity_spec(const char *action) {
     bool network = (!strcmp(app.route, "wifi") && !strcmp(action, "wifi_join")) ||
                    (!strcmp(app.route, "networks") && !strcmp(action, "wifi_scan"));
     bool print_home = !strcmp(app.route, "home") && (app.printing || app.paused);
-    if (!strcmp(app.route, "home") && (!strcmp(action, "load") || !strcmp(action, "unload")) &&
-        !strcmp(action, S("filament_activity.action")))
+    if (!strcmp(app.route, "filament") && (!strcmp(action, "load") || !strcmp(action, "unload")) &&
+        !strcmp(action, S("filament_activity.action")) && *S("filament_activity.slot"))
         return NULL;
     if (!strcmp(app.route, "history") || network ||
         (print_home &&
