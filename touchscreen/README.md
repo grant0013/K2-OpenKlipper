@@ -10,6 +10,17 @@ Printer identity, heater and travel limits, homing state and available features
 come from the printer configuration. The interface is currently in English.
 The screenshots below are rendered by the native application with example data.
 
+## Installation
+
+Install a K2 OpenKlipper version that includes this interface, following that
+version's installation instructions. The current testing branch is
+[`touchscreen-next`](https://github.com/carmanspb/K2-OpenKlipper/tree/touchscreen-next).
+
+The K2 OpenKlipper installer copies the matching precompiled touchscreen,
+backend and startup scripts into place. No separate touchscreen installation
+or compilation on the printer is required. Updating only the touchscreen
+restarts its two processes; it does not require restarting Klipper.
+
 ## Home
 
 - Idle Home shows the printer illustration, automatically with or without CFS.
@@ -116,6 +127,26 @@ returns to the previous page automatically.
 | --- | --- |
 | ![Movement](screenshots/move.png) | ![Unlock motors](screenshots/unlock-motors.png) |
 
+### Bed mesh
+
+- Open the viewer from Move. Drag the shaded surface to rotate it; the X/Y/Z direction markers follow the same view. Reset the view with one tap.
+- Review the mesh name, probe grid, minimum/maximum height and total Z range. Saved profiles stay in a scrollable list.
+- Probe again or save a named mesh. Each saved-profile row shows its Z range with inline Load and Delete controls; the active row has Rename instead of Load. Saving configuration remains available in Calibrate.
+- During printing, viewing and rotation remain available while probing and profile changes are disabled. Probing shows progress in place of the previous surface.
+- If no mesh is loaded, saved profiles remain available to load. If none are saved, probe the bed to create the first mesh.
+
+| Bed mesh | Delete confirmation |
+| --- | --- |
+| ![Bed mesh](screenshots/mesh.png) | ![Delete confirmation](screenshots/mesh-delete.png) |
+
+| Saved profiles, no active mesh | No measured or saved mesh |
+| --- | --- |
+| ![Saved profiles without an active mesh](screenshots/mesh-unloaded.png) | ![No measured or saved mesh](screenshots/mesh-empty.png) |
+
+| Probing in progress | Viewing during printing |
+| --- | --- |
+| ![Probing in progress](screenshots/meshing.png) | ![Viewing during printing](screenshots/mesh-printing.png) |
+
 ### Thermals and fans
 
 - Thermals groups nozzle, bed and chamber targets in three columns.
@@ -210,6 +241,20 @@ backend work. A single unit's environmental readings are not copied to other uni
 | Save configuration | Calibration unavailable during printing |
 | --- | --- |
 | ![Save configuration](screenshots/save.png) | ![Calibration unavailable during printing](screenshots/calibrate-printing.png) |
+
+### Filament activity
+
+- Loading and unloading follow the affected spool across CFS units, including print tool changes.
+- Home shows an animated ring around its colour and the operation in the left sidebar. The Filament page shows Loading/Unloading on the spool tile without repeating it in the sidebar.
+- Keep browsing units and pages while conflicting filament actions are disabled. Indicators clear when the operation ends; failures show the normal error dialog.
+
+| Loading a spool | Unloading a spool |
+| --- | --- |
+| ![Loading a spool](screenshots/cfs-loading.png) | ![Unloading a spool](screenshots/cfs-unloading.png) |
+
+| Home sidebar and colour ring | Activity across CFS units |
+| --- | --- |
+| ![Home filament activity](screenshots/cfs-loading-home.png) | ![Multiple CFS units](screenshots/multi-cfs-loading.png) |
 
 ## Files and starting a print
 
@@ -329,6 +374,32 @@ backend work. A single unit's environmental readings are not copied to other uni
 | Restart Klipper | Restart controller firmware |
 | --- | --- |
 | ![Restart Klipper](screenshots/restart-klipper.png) | ![Restart controller firmware](screenshots/restart-firmware.png) |
+
+## Uninstall and return to HarkScreen
+
+The removal script reinstalls upstream K2 OpenKlipper with its regular
+HarkScreen interface. It does not return the printer to Creality firmware.
+Finish the print and any printer operations, then run this over SSH on the printer:
+
+```sh
+sh /mnt/UDISK/openklipper-screen/uninstall.sh --check
+sh /mnt/UDISK/openklipper-screen/uninstall.sh
+```
+
+- Selects and checks the latest public upstream release, including prereleases, using the upstream installer’s release-selection order.
+- Stops the native screen and backend, then performs a full upstream reinstall.
+- Verifies HarkScreen startup before deleting the native runtime and its display settings.
+- Retains printer configuration, G-code files and the existing installer backups.
+
+Why the helper is needed: the upstream installer restores HarkScreen and its
+boot path, but does not know about our native renderer and backend processes.
+Reinstalling without stopping them can leave two interfaces drawing on the same
+display. The helper resolves the latest release once, checks that it contains HarkScreen,
+and uses that same version for preflight and reinstall. Only after HarkScreen
+stays running are the native files removed. If release lookup or replacement
+fails, the native files are retained. With no published releases it checks
+upstream `main`. To choose a version explicitly, pass `--ref <tag>`.
+The full reinstall can restart printer control, so do not run it during a print.
 
 ## For developers
 

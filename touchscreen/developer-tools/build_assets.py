@@ -59,6 +59,10 @@ for family, sizes, source in (
 # Only sizes used by the current layouts are shipped. Keep this inventory in
 # sync with icon(), tab, keyboard and button calls when changing the UI.
 icons = {
+    "bed-mesh": (36,),
+    "circle-arrow-up": (28,),
+    "motor-on": (36,),
+    "motor-off": (36,),
     "droplets": (24,),
     "house": (36,),
     "folder-open": (20, 24, 96),
@@ -89,8 +93,6 @@ icons = {
     "eye-off": (28,),
     "delete": (28,),
     "trash-2": (28,),
-    "lock-keyhole": (24,),
-    "lock-keyhole-open": (24,),
     "wifi": (24,),
     "monitor": (24,),
     "video": (24,),

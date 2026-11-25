@@ -110,6 +110,37 @@ class BackendReview(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.run_action("calibrate", kind="tilt", confirm=True)
 
+    def test_input_shaper_homes_missing_axes_before_calibration(self):
+        self.config["resonance_tester"] = {}
+        for axes in ("", "xy", "z", "xyz"):
+            with self.subTest(homed_axes=axes):
+                self.state["toolhead"]["homed_axes"] = axes
+                self.run_action("calibrate", kind="shaper", confirm=True)
+                prefix = "" if axes == "xyz" else "G28\n"
+                self.mr.run_gcode.assert_called_with(prefix + "SHAPER_CALIBRATE")
+        self.config.pop("resonance_tester")
+        with self.assertRaises(ValueError):
+            self.run_action("calibrate", kind="shaper", confirm=True)
+
+    def test_calibrations_only_home_when_required_axes_are_unknown(self):
+        cases = {
+            "mesh": ("bed_mesh", "BED_MESH_CALIBRATE"),
+            "tilt": ("z_tilt", "Z_TILT_ADJUST"),
+            "shaper": ("resonance_tester", "SHAPER_CALIBRATE"),
+        }
+        for kind, (capability, command) in cases.items():
+            self.config[capability] = {}
+            for axes in ("", "x", "y", "z", "xy", "xz", "yz", "xyz"):
+                with self.subTest(kind=kind, homed_axes=axes):
+                    self.state["toolhead"]["homed_axes"] = axes
+                    self.run_action("calibrate", kind=kind, confirm=True)
+                    prefix = "" if axes == "xyz" else "G28\n"
+                    self.mr.run_gcode.assert_called_with(prefix + command)
+        # An explicit Home request must still re-home known axes.
+        self.state["toolhead"]["homed_axes"] = "xyz"
+        self.run_action("calibrate", kind="home", confirm=True)
+        self.mr.run_gcode.assert_called_with("G28")
+
     def test_lowercase_macro_settings_advertise_print_calibration(self):
         self.s.settings["gcode_macro start_print"] = self.s.settings.pop(
             "gcode_macro START_PRINT"
@@ -124,7 +155,9 @@ class BackendReview(unittest.TestCase):
             self.s.connected = True
             self.s.preload_files()
             self.s.preload_files()
-            submit.assert_called_once_with({"action": "files", "source": "gcodes"})
+            submit.assert_called_once_with(
+                {"action": "files", "source": "gcodes", "automatic": True}
+            )
 
     def test_ejection_immediately_marks_physically_present_drive_unmounted(self):
         with (

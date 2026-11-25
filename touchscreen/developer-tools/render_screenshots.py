@@ -39,7 +39,20 @@ def main():
             ("home", "home", "printing", []),
             ("print-starting", "home", "idle", []),
             ("move", "move", "heated", []),
+            ("mesh", "mesh", "mesh", []),
+            ("mesh-delete", "mesh", "mesh", ["mesh:delete:1"]),
+            ("meshing", "mesh", "meshing", []),
+            ("mesh-flat", "mesh", "mesh-flat", []),
+            ("mesh-empty", "mesh", "mesh-empty", []),
+            ("mesh-unloaded", "mesh", "mesh-unloaded", []),
+            ("mesh-printing", "mesh", "mesh-printing", []),
+            ("motors-off", "move", "motors-off", []),
             ("filament", "filament", "idle", []),
+            ("cfs-loading", "filament", "load", []),
+            ("cfs-unloading", "filament", "unload", []),
+            ("cfs-loading-home", "home", "load", []),
+            ("multi-cfs-loading", "filament", "multi-cfs-loading", []),
+            ("cfs-load-failed", "filament", "cfs-load-failed", []),
             ("mapping", "file", "idle", ["review_mapping", "mapping_pick:0"]),
             ("files", "files", "idle", []),
             ("file", "file", "idle", []),
@@ -151,7 +164,10 @@ def main():
                 else preview_scenario(scenario)
             )
             data["status"]["stepper_enable"] = {
-                "steppers": {"stepper_x": True, "stepper_y": True, "stepper_z": True}
+                "steppers": {
+                    axis: name != "motors-off"
+                    for axis in ("stepper_x", "stepper_y", "stepper_z")
+                }
             }
             if name == "print-starting":
                 data["platform"].update(

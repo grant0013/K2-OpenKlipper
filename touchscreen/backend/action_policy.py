@@ -53,6 +53,7 @@ ACTIONS = {
         idle=True,
         report=True,
     ),
+    "mesh_profile": rule("Updating mesh profile", MACHINE, idle=True, report=True),
     "save_config": rule("Saving configuration", {"*"}, idle=True, report=True),
     "slot_clear": rule("Resetting filament", {"filament"}, idle=True),
     "slot_save": rule("Saving filament", {"filament"}, idle=True),
@@ -148,6 +149,9 @@ def reason(request, status, connected, operations):
             )
         )
     if request.get("action") == "home_files":
+        phase = (status.get("k2_cfs", {}).get("filament_activity") or {}).get("action")
+        if phase in ("load", "unload"):
+            return ACTIONS[phase].label + " in progress"
         for op in operations:
             if (
                 op.get("action") in ("calibrate", "calibration_result", "save_config")
@@ -192,7 +196,11 @@ def reason(request, status, connected, operations):
         if status.get("print_stats", {}).get("state") in ("printing", "paused"):
             return "Unavailable during printing"
     if (
-        status.get("k2_cfs", {}).get("change_pending")
+        (
+            status.get("k2_cfs", {}).get("change_pending")
+            or (status.get("k2_cfs", {}).get("filament_activity") or {}).get("action")
+            in ("load", "unload")
+        )
         and spec.resources & MACHINE
         and not spec.interrupt
     ):

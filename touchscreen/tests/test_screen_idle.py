@@ -82,8 +82,10 @@ class ScreenIdleTests(unittest.TestCase):
                 ],
             )
 
-    def test_legacy_never_is_presented_as_actual_24_hours(self):
+    def test_saved_never_does_not_override_actual_printer_timeout(self):
         self.s.prefs["idle"] = 0
+        self.assertEqual(self.s.current_preferences()["idle"], 1800)
+        self.s.status["idle_timeout"] = {"idle_timeout": 86400}
         self.assertEqual(self.s.current_preferences()["idle"], 86400)
         with mock.patch.object(self.s, "gcode") as gcode:
             self.s.preference(

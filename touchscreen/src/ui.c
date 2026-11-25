@@ -102,7 +102,7 @@ void icon(lv_obj_t *parent, const char *name, int x, int y, int size, lv_color_t
     lv_obj_clear_flag(o, LV_OBJ_FLAG_CLICKABLE);
 }
 /* Connection handling owns the whole screen, independently of page layout. */
-ConnectionMode ui_connection_mode(void) {
+static ConnectionMode connection_state(void) {
     if (!app.service_link && app.ever_service)
         return CONNECTION_SERVICE_LOST;
     const char *state = S("status.webhooks.state");
@@ -115,9 +115,35 @@ ConnectionMode ui_connection_mode(void) {
                ? CONNECTION_LOST
                : CONNECTION_STARTING;
 }
+ConnectionMode ui_connection_mode(void) {
+    ConnectionMode mode = connection_state();
+    if ((app.restart_waiting || (mode == CONNECTION_STARTING && app.restart_expired)) &&
+        mode != CONNECTION_SERVICE_LOST)
+        return CONNECTION_LOST;
+    return mode;
+}
+static void restart_begin(const char *action) {
+    app.restart_waiting = true;
+    app.restart_seen_disconnect = connection_state() != CONNECTION_READY;
+    app.restart_expired = false;
+    app.restart_started = lv_tick_get();
+    app.restart_generation = (uint64_t)N("printer_generation");
+    app.restart_result_after = (uint64_t)N("result.id");
+    snprintf(app.restart_action, sizeof(app.restart_action), "%s", action);
+    platform_cancel_touch();
+    app.dirty = true;
+}
+static void restart_sent(const char *command) {
+    cJSON *r = cJSON_Parse(command);
+    const char *a = jstr(r, "action", "");
+    if (!strcmp(a, "restart") || !strcmp(a, "firmware_restart"))
+        restart_begin(a);
+    cJSON_Delete(r);
+}
 void ui_transport_lost(void) {
     if (!app.connected && !app.service_link)
         return;
+    platform_cancel_touch();
     app.connected = false;
     app.service_link = false;
     app.rendered = false;
@@ -444,6 +470,10 @@ void ui_confirm(const char *message, const char *command) {
     const char *title =
         !strcmp(kind, "slot_clear")
             ? (!strcmp(jstr(parsed, "slot", ""), "E") ? "Reset spool holder?" : "Reset CFS slot?")
+        : !strcmp(kind, "mesh_profile")
+            ? (!strcmp(jstr(parsed, "operation", ""), "delete")   ? "Delete mesh profile?"
+               : !strcmp(jstr(parsed, "operation", ""), "rename") ? "Rename mesh profile?"
+                                                                  : "Save mesh profile?")
         : !strcmp(kind, "motors")  ? "Unlock motors?"
         : !strcmp(kind, "restart") ? "Restart printer control?"
         : (!strcmp(kind, "delete_file") || !strcmp(kind, "delete_recording")) ? "Delete file?"
@@ -458,6 +488,10 @@ void ui_confirm(const char *message, const char *command) {
         label = "Discard changes";
     else if (!strcmp(kind, "slot_clear"))
         label = "Reset";
+    else if (!strcmp(kind, "mesh_profile"))
+        label = !strcmp(jstr(parsed, "operation", ""), "delete")   ? "Delete"
+                : !strcmp(jstr(parsed, "operation", ""), "rename") ? "Rename"
+                                                                   : "Save";
     else if (!strcmp(kind, "motors"))
         label = "Unlock motors";
     else if (!strcmp(kind, "cancel"))
@@ -486,6 +520,11 @@ void ui_send(cJSON *value) {
 static void fixture_action(const char *command) {
     cJSON *request = cJSON_Parse(command);
     const char *action = jstr(request, "action", "");
+    if (!strcmp(action, "mesh_profile")) {
+        mesh_fixture(request);
+        cJSON_Delete(request);
+        return;
+    }
     bool recording = !strcmp(action, "delete_recording");
     if ((recording || !strcmp(action, "delete_file")) && jbool(request, "confirm", false)) {
         cJSON *rows = J(recording ? "platform.recordings" : "files");
@@ -517,6 +556,8 @@ static void fixture_action(const char *command) {
     cJSON_Delete(request);
 }
 void ui_command(const char *command) {
+    if (app.restart_waiting && !app.restart_expired && recovery_action(command))
+        return;
     if (ui_connection_mode() != CONNECTION_READY &&
         (ui_connection_mode() != CONNECTION_LOST || command[0] != '{' ||
          !recovery_action(command) || !app.service_link))
@@ -532,10 +573,13 @@ void ui_command(const char *command) {
             }
         }
         fixture_action(command);
+        restart_sent(command);
         return;
     }
     if (!platform_send(command))
         ui_transport_lost();
+    else
+        restart_sent(command);
 }
 static void number_draw(void) {
     modal_frame(app.number_title, 150, 22, 500, 436, false);
@@ -696,11 +740,14 @@ void ui_route(const char *route, bool back) {
         const char *current = *S("prefs.timezone") ? S("prefs.timezone") : S("platform.timezone");
         snprintf(app.timezone_draft, sizeof(app.timezone_draft), "%s", current);
     }
+    bool enter_files = !back && !strcmp(route, "files") && strcmp(app.route, "files") &&
+                       strcmp(app.route, "file") && strncmp(app.route, "mapping", 7);
     snprintf(app.route, sizeof(app.route), "%s", route);
-    if (!strcmp(route, "files")) {
+    if (enter_files) {
         cJSON *r = cJSON_CreateObject();
         cJSON_AddStringToObject(r, "action", "files");
         cJSON_AddStringToObject(r, "source", "gcodes");
+        cJSON_AddBoolToObject(r, "automatic", true);
         ui_send(r);
     }
     const char *controls[] = {"move", "heat", "fans", "filament", "tune", "calibration"};
@@ -747,6 +794,8 @@ void ui_action(const char *action) {
         return;
     }
     if (!strcmp(action, "confirmed")) {
+        if (!app.overlay || !*app.confirm)
+            return;
         char command[sizeof(app.confirm)];
         snprintf(command, sizeof(command), "%s", app.confirm);
         close_modal();
@@ -769,6 +818,7 @@ void ui_action(const char *action) {
 }
 void ui_init(const char *assets, const char *socket) {
     memset(&app, 0, sizeof(app));
+    app.restart_started = lv_tick_get();
     snprintf(app.assets, sizeof(app.assets), "%s", assets);
     snprintf(app.socket, sizeof(app.socket), "%s", socket);
     snprintf(app.route, sizeof(app.route), "home");
@@ -837,6 +887,7 @@ void ui_data(cJSON *data) {
     char *previous_policy = cJSON_PrintUnformatted(J("availability"));
     char *previous_operations = cJSON_PrintUnformatted(J("operations"));
     char *previous_operation = cJSON_PrintUnformatted(J("operation"));
+    char *previous_filament = cJSON_PrintUnformatted(J("filament_activity"));
     bool session_changed = strcmp(S("session"), jstr(data, "session", "")) != 0;
     char previous_home[1024];
     home_state(previous_home, sizeof(previous_home));
@@ -869,10 +920,27 @@ void ui_data(cJSON *data) {
     app.connected = B("connected");
     app.service_link = true;
     app.ever_service = true;
+    ConnectionMode actual = connection_state();
+    const char *printer_state = S("status.webhooks.state");
+    if (!app.restart_waiting && app.ever_ready &&
+        (!strcmp(printer_state, "startup") || (!*printer_state && !app.connected)))
+        restart_begin("");
+    if (app.restart_waiting) {
+        if (actual != CONNECTION_READY)
+            app.restart_seen_disconnect = true;
+        else if (app.restart_seen_disconnect ||
+                 (uint64_t)N("printer_generation") != app.restart_generation) {
+            app.restart_waiting = false;
+            app.restart_action[0] = 0;
+            app.restart_expired = false;
+            app.dirty = true;
+        }
+    }
     ConnectionMode connection = ui_connection_mode();
     if (connection == CONNECTION_READY)
         app.ever_ready = true;
     if (connection != previous_connection || !previous_link) {
+        platform_cancel_touch();
         /* The backend retains unacknowledged notices across reconnects. */
         app.last_notice = 0;
         app.rendered = false;
@@ -887,6 +955,7 @@ void ui_data(cJSON *data) {
     char *new_policy = cJSON_PrintUnformatted(J("availability"));
     char *new_operations = cJSON_PrintUnformatted(J("operations"));
     char *new_operation = cJSON_PrintUnformatted(J("operation"));
+    char *new_filament = cJSON_PrintUnformatted(J("filament_activity"));
     bool policy_changed =
         strcmp(previous_policy ? previous_policy : "", new_policy ? new_policy : "") != 0;
     if (policy_changed) {
@@ -897,7 +966,8 @@ void ui_data(cJSON *data) {
     if (policy_changed ||
         strcmp(previous_operations ? previous_operations : "",
                new_operations ? new_operations : "") ||
-        strcmp(previous_operation ? previous_operation : "", new_operation ? new_operation : ""))
+        strcmp(previous_operation ? previous_operation : "", new_operation ? new_operation : "") ||
+        strcmp(previous_filament ? previous_filament : "", new_filament ? new_filament : ""))
         app.nav_dirty = true;
     if (policy_changed && !strcmp(app.route, "home"))
         app.dirty = true;
@@ -909,6 +979,8 @@ void ui_data(cJSON *data) {
     free(new_policy);
     free(new_operations);
     free(new_operation);
+    free(previous_filament);
+    free(new_filament);
     char current_home[1024];
     home_state(current_home, sizeof(current_home));
     char current_move[256];
@@ -973,6 +1045,14 @@ void ui_data(cJSON *data) {
         const char *result_action = jstr(result, "action", "");
         if (ui_connection_mode() != CONNECTION_READY)
             app.dirty = true;
+        if (app.restart_waiting && id > app.restart_result_after &&
+            (!strcmp(result_action, "restart") || !strcmp(result_action, "firmware_restart")) &&
+            !jbool(result, "success", false)) {
+            app.restart_waiting = false;
+            app.restart_expired = true;
+            app.restart_action[0] = 0;
+            app.dirty = true;
+        }
         if (!strcmp(result_action, "file") && !strcmp(jstr(result, "path", ""), app.file)) {
             app.file_waiting = false;
             app.dirty = true;
@@ -1046,6 +1126,9 @@ static const ActivitySpec *activity_spec(const char *action) {
     bool network = (!strcmp(app.route, "wifi") && !strcmp(action, "wifi_join")) ||
                    (!strcmp(app.route, "networks") && !strcmp(action, "wifi_scan"));
     bool print_home = !strcmp(app.route, "home") && (app.printing || app.paused);
+    if (!strcmp(app.route, "filament") && (!strcmp(action, "load") || !strcmp(action, "unload")) &&
+        !strcmp(action, S("filament_activity.action")) && *S("filament_activity.slot"))
+        return NULL;
     if (!strcmp(app.route, "history") || network ||
         (print_home &&
          (!strcmp(action, "start") || !strcmp(action, "pause") || !strcmp(action, "resume") ||
@@ -1092,6 +1175,9 @@ static const ActivitySpec *sidebar_activity(void) {
         if (spec && (!selected || activity_priority(spec) > activity_priority(selected)))
             selected = spec;
     }
+    const ActivitySpec *filament = activity_spec(S("filament_activity.action"));
+    if (filament && (!selected || activity_priority(filament) >= activity_priority(selected)))
+        selected = filament;
     return selected;
 }
 
@@ -1113,7 +1199,8 @@ static void navigation(void) {
                      !strncmp(app.route, "mapping", 7))
                       ? 2
                   : (!strcmp(app.route, app.control_tab) || !strcmp(app.route, "edit") ||
-                     !strcmp(app.route, "materials") || !strcmp(app.route, "colors"))
+                     !strcmp(app.route, "materials") || !strcmp(app.route, "colors") ||
+                     !strcmp(app.route, "mesh"))
                       ? 1
                       : 3;
     for (int i = 0; i < 4; i++) {
@@ -1151,8 +1238,12 @@ static void connection_center(lv_obj_t *label) {
     lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
 }
 static void connection_screen(ConnectionMode mode) {
-    bool starting = mode == CONNECTION_STARTING;
+    bool starting = connection_state() == CONNECTION_STARTING;
+    bool waiting = !app.restart_expired && (app.restart_waiting || starting);
+    bool timeout = app.restart_expired && (app.restart_waiting || starting);
     bool service_lost = mode == CONNECTION_SERVICE_LOST;
+    bool syncing =
+        !starting && !service_lost && app.connected && !strcmp(S("status.webhooks.state"), "ready");
     lv_obj_t *group = box(app.content, 0, 0, 720, 1, false);
     lv_obj_clear_flag(group, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_style_bg_opa(group, 0, 0);
@@ -1168,16 +1259,25 @@ static void connection_screen(ConnectionMode mode) {
     lv_obj_set_style_arc_color(spinner, edge, LV_PART_MAIN);
     lv_obj_set_style_arc_color(spinner, app.accent, LV_PART_INDICATOR);
     lv_obj_clear_flag(spinner, LV_OBJ_FLAG_CLICKABLE);
-    connection_center(text(group,
-                           starting       ? "Printer is starting up"
-                           : service_lost ? "Cannot connect to touchscreen service"
-                                          : "Printer connection lost",
-                           0, 0, 720, &font_ui_30, false));
+    connection_center(
+        text(group,
+             waiting && *app.restart_action
+                 ? (!strcmp(app.restart_action, "firmware_restart") ? "Restarting firmware…"
+                                                                    : "Restarting Klipper…")
+             : timeout      ? "Printer control hasn’t reconnected yet"
+             : starting     ? "Printer is starting up"
+             : service_lost ? "Cannot connect to touchscreen service"
+             : syncing      ? "Updating printer settings"
+                            : "Printer connection lost",
+             0, 0, 720, &font_ui_30, false));
     const char *state = S("status.webhooks.state");
     bool fatal = !strcmp(state, "error") || !strcmp(state, "shutdown");
     const char *detail =
-        service_lost ? "Waiting for the local touchscreen service to reconnect…"
-        : starting   ? "Waiting for printer control to become ready…"
+        waiting && app.restart_waiting ? "Waiting for printer control to reconnect…"
+        : timeout      ? "You can retry a restart. Reconnection checks are continuing."
+        : service_lost ? "Waiting for the local touchscreen service to reconnect…"
+        : starting     ? "Waiting for printer control to become ready…"
+        : syncing      ? "Printer is connected. Loading its settings…"
         : fatal && *S("status.webhooks.state_message") ? S("status.webhooks.state_message")
         : !app.connected ? "Waiting for the connection to printer control to return."
         : *S("error")    ? S("error")
@@ -1191,8 +1291,9 @@ static void connection_screen(ConnectionMode mode) {
     lv_obj_set_style_max_height(message, 100, 0);
     lv_label_set_long_mode(message, LV_LABEL_LONG_DOT);
     lv_obj_update_layout(group);
-    lv_obj_align(group, LV_ALIGN_CENTER, 0, starting || service_lost ? 0 : -45);
-    if (starting || service_lost)
+    lv_obj_align(group, LV_ALIGN_CENTER, 0,
+                 waiting || service_lost || (syncing && !timeout) ? 0 : -45);
+    if (waiting || service_lost || (syncing && !timeout))
         return;
     button_fixed(app.content, "Restart Klipper", 74, 352, 312, 70, "restart:klipper", false);
     button_fixed(app.content, "Firmware restart", 414, 352, 312, 70, "restart:firmware", false);
@@ -1242,6 +1343,12 @@ void ui_update(void) {
         views_refresh();
 }
 void ui_tick(void) {
+    if (!app.restart_expired &&
+        (app.restart_waiting || connection_state() == CONNECTION_STARTING) &&
+        (uint32_t)(lv_tick_get() - app.restart_started) >= 60000) {
+        app.restart_expired = true;
+        app.dirty = true;
+    }
     bool pressing = platform_pressed();
     if (app.nav_dirty && !pressing && !app.overlay && ui_connection_mode() == CONNECTION_READY) {
         navigation();

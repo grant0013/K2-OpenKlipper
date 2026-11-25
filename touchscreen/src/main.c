@@ -127,6 +127,8 @@ int main(int argc, char **argv) {
                 ui_action(step->valuestring);
             else if (cJSON_IsObject(step) && cJSON_GetObjectItemCaseSensitive(step, "snapshot"))
                 ui_data(cJSON_Duplicate(cJSON_GetObjectItemCaseSensitive(step, "snapshot"), true));
+            else if (cJSON_IsObject(step) && jnum(step, "advance_ms", 0) > 0)
+                lv_tick_inc((uint32_t)jnum(step, "advance_ms", 0));
             else if (cJSON_IsObject(step) && jbool(step, "transport_lost", false))
                 ui_transport_lost();
             ui_tick();

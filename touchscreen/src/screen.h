@@ -46,6 +46,10 @@ typedef struct {
     bool number_replace, number_open, keyboard_visible, password_visible, dirty, edit_dirty,
         connected, rendered, printer_fault_open, ever_ready, service_link, ever_service;
     uint64_t last_notice, filament_notice_id;
+    uint64_t restart_generation, restart_result_after;
+    uint32_t restart_started;
+    bool restart_waiting, restart_seen_disconnect, restart_expired;
+    char restart_action[24];
     char last_fault[4096], last_static_stamp[80];
     cJSON *object_selection;
     lv_color_t accent;
@@ -69,12 +73,17 @@ const char *S(const char *);
 double N(const char *);
 bool B(const char *);
 char *request_json(const char *action, const char *key, const char *value);
+void mesh_view(void);
+void mesh_fixture(const cJSON *);
+bool mesh_action(const char *);
+bool mesh_control_key(const char *, char *, size_t);
 void platform_test_touch(int, int, bool);
 void platform_touch_config(int, int, bool, bool, bool);
 void platform_init(bool framebuffer, const char *input, int rotation, bool window);
 void platform_pump(void);
 bool platform_closed(void);
 bool platform_pressed(void);
+void platform_cancel_touch(void);
 void platform_snapshot(const char *);
 bool platform_send(const char *);
 char *platform_receive(void);

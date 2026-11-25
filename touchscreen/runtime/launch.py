@@ -13,8 +13,6 @@ a = p.parse_args()
 c = configparser.ConfigParser()
 c.read(a.config)
 args = [
-    "taskset",
-    "0x1",
     "nice",
     "-n",
     "10",

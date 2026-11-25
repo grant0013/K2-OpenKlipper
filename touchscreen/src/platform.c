@@ -36,7 +36,11 @@ static struct {
     bool pressed;
 } samples[256];
 static unsigned sample_read, sample_write;
+static uint64_t last_touch_event, input_retry_at;
+static char input_device[1024];
 static void queue_sample(void) {
+    /* Mouse, panel and simulator events share the stuck-touch watchdog clock. */
+    last_touch_event = platform_millis();
     unsigned next = (sample_write + 1) % 256;
     if (next == sample_read)
         sample_read = (sample_read + 1) % 256;
@@ -44,6 +48,11 @@ static void queue_sample(void) {
     samples[sample_write].y = ty;
     samples[sample_write].pressed = pressed;
     sample_write = next;
+}
+void platform_cancel_touch(void) {
+    pressed = delivered_pressed = raw_delivered_pressed = wake_touch = false;
+    sample_read = sample_write = 0;
+    lv_indev_reset(NULL, NULL);
 }
 void platform_test_touch(int x, int y, bool down) {
     tx = x;
@@ -166,6 +175,7 @@ void platform_init(bool framebuffer, const char *device, int angle, bool use_win
         }
     }
     if (device) {
+        snprintf(input_device, sizeof(input_device), "%s", device);
         input = open(device, O_RDONLY | O_NONBLOCK);
         if (input < 0) {
             perror("touch input");
@@ -208,9 +218,21 @@ void platform_init(bool framebuffer, const char *device, int angle, bool use_win
     lv_indev_drv_register(&input_driver);
 }
 void platform_pump(void) {
+    if (input < 0 && *input_device && platform_millis() >= input_retry_at) {
+        input_retry_at = platform_millis() + 1000;
+        input = open(input_device, O_RDONLY | O_NONBLOCK);
+    }
     if (input >= 0) {
         struct input_event event;
-        while (read(input, &event, sizeof(event)) == (ssize_t)sizeof(event)) {
+        int events = 0;
+        ssize_t got = 0;
+        while (events++ < 128 &&
+               (got = read(input, &event, sizeof(event))) == (ssize_t)sizeof(event)) {
+            last_touch_event = platform_millis();
+            if (event.type == EV_SYN && event.code == SYN_DROPPED) {
+                platform_cancel_touch();
+                continue;
+            }
             if (event.type == EV_ABS) {
                 if (event.code == ABS_X || event.code == ABS_MT_POSITION_X)
                     raw_x = event.value;
@@ -246,6 +268,12 @@ void platform_pump(void) {
                 queue_sample();
             }
         }
+        if (events <= 128 && got < 0 && (errno == EIO || errno == ENODEV)) {
+            platform_cancel_touch();
+            close(input);
+            input = -1;
+            input_retry_at = platform_millis() + 1000;
+        }
     }
 #ifdef SCREEN_X11
     while (xd && XPending(xd)) {
@@ -253,7 +281,8 @@ void platform_pump(void) {
         XNextEvent(xd, &e);
         if (e.type == Expose) {
             XPutImage(xd, window, gc, xi, 0, 0, 0, 0, WIDTH, HEIGHT);
-        } else if (e.type == ButtonPress || e.type == ButtonRelease) {
+        } else if ((e.type == ButtonPress || e.type == ButtonRelease) &&
+                   e.xbutton.button == Button1) {
             tx = e.xbutton.x;
             ty = e.xbutton.y;
             pressed = e.type == ButtonPress;
@@ -271,6 +300,8 @@ bool platform_closed(void) {
     return closed;
 }
 bool platform_pressed(void) {
+    if (pressed && platform_millis() - last_touch_event > 5000)
+        platform_cancel_touch();
     /* Do not delete a pressed widget before LVGL consumes its queued release. */
     return pressed || delivered_pressed || sample_read != sample_write;
 }

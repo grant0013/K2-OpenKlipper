@@ -10,7 +10,8 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
-from service import Service
+from service import Service, WebSocket
+import platform_services
 
 
 def status():
@@ -195,6 +196,14 @@ class ServiceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.run_action("home", axis="E")
 
+    def test_z_homing_requests_full_sequence_when_xy_is_unknown(self):
+        for axes in ("", "x", "y", "z", "xz", "yz", "xy", "xyz"):
+            with self.subTest(homed_axes=axes):
+                self.state["toolhead"]["homed_axes"] = axes
+                self.run_action("home", axis="Z")
+                expected = "G28 Z" if set("xy") <= set(axes) else "G28"
+                self.mr.run_gcode.assert_called_with(expected)
+
     def test_manual_extrusion_preserves_gcode_state_and_configured_speed(self):
         self.state["extruder"] = {"temperature": 220, "can_extrude": True}
         self.config["extruder"].update(
@@ -267,6 +276,104 @@ class ServiceTests(unittest.TestCase):
         self.run_action("unload")
         self.mr.run_gcode.assert_called_with("UNLOAD_FILAMENT")
 
+    def prepare_mesh(self):
+        self.config["bed_mesh"] = {}
+        self.state["bed_mesh"] = {
+            "profile_name": "PLA 60C",
+            "probed_matrix": [[0, 0.1], [0.2, 0.3]],
+            "profiles": {
+                "PLA 60C": {"points": [[0, 0.1], [0.2, 0.3]]},
+                "PETG 80C": {"points": [[0.1, 0.2], [0.2, 0.4]]},
+            },
+        }
+
+    def test_mesh_profile_commands_require_confirmation_and_do_not_restart(self):
+        self.prepare_mesh()
+        with self.assertRaises(ValueError):
+            self.run_action("mesh_profile", operation="load", name="PETG 80C")
+        self.run_action("mesh_profile", operation="load", name="PETG 80C", confirm=True)
+        self.mr.run_gcode.assert_called_once_with('BED_MESH_PROFILE LOAD="PETG 80C"')
+        self.mr.run_gcode.reset_mock()
+        self.run_action(
+            "mesh_profile",
+            operation="rename",
+            name="PLA 60C",
+            new_name="PLA warm",
+            confirm=True,
+        )
+        self.mr.run_gcode.assert_called_once_with(
+            'BED_MESH_PROFILE SAVE="PLA warm"\nBED_MESH_PROFILE LOAD="PLA warm"\nBED_MESH_PROFILE REMOVE="PLA 60C"'
+        )
+        self.assertNotIn("SAVE_CONFIG", self.mr.run_gcode.call_args.args[0])
+
+    def test_mesh_profile_changes_reject_printing_stale_names_and_command_injection(
+        self,
+    ):
+        self.prepare_mesh()
+        for operation, name, new_name in (
+            ("load", "missing", ""),
+            ("save", "bad\nM112", ""),
+            ("save", "default", ""),
+            ("save", "PLA 60C", ""),
+            ("rename", "PLA 60C", 'name";M112'),
+            ("rename", "PETG 80C", "new"),
+        ):
+            with self.subTest(operation=operation, name=name):
+                with self.assertRaises((ValueError, RuntimeError)):
+                    self.run_action(
+                        "mesh_profile",
+                        operation=operation,
+                        name=name,
+                        new_name=new_name,
+                        confirm=True,
+                    )
+        self.state["print_stats"]["state"] = "printing"
+        with self.assertRaises(RuntimeError):
+            self.run_action(
+                "mesh_profile", operation="delete", name="PLA 60C", confirm=True
+            )
+        self.mr.run_gcode.assert_not_called()
+
+    def test_automatic_file_refresh_uses_recent_cache_manual_refresh_does_not(self):
+        self.s.files_refreshed_at = 100
+        with (
+            mock.patch("service.time.monotonic", return_value=110),
+            mock.patch("service.threading.Thread") as thread,
+        ):
+            self.s.submit({"action": "files", "automatic": True})
+            thread.assert_not_called()
+            self.s.submit({"action": "files"})
+            thread.assert_called_once()
+        self.s.files_refreshing = False
+        with (
+            mock.patch("service.time.monotonic", return_value=116),
+            mock.patch("service.threading.Thread") as thread,
+        ):
+            self.s.submit({"action": "files", "automatic": True})
+            thread.assert_called_once()
+
+    def test_startup_file_preload_retries_failed_reads_without_looping(self):
+        self.s.files_error = "Unavailable"
+        with (
+            mock.patch("service.time.monotonic", return_value=100),
+            mock.patch.object(self.s, "submit") as submit,
+        ):
+            self.s.preload_files()
+            self.s.preload_files()
+            submit.assert_called_once_with(
+                {"action": "files", "source": "gcodes", "automatic": True}
+            )
+        with (
+            mock.patch("service.time.monotonic", return_value=131),
+            mock.patch.object(self.s, "submit") as submit,
+        ):
+            self.s.preload_files()
+            submit.assert_called_once()
+        self.s.files_preloaded = True
+        with mock.patch.object(self.s, "submit") as submit:
+            self.s.preload_files()
+            submit.assert_not_called()
+
     def test_files_always_use_configured_printer_root(self):
         self.mr.files.return_value = [
             {"path": "folder/old.gcode", "modified": 1},
@@ -322,6 +429,106 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(len(self.s.platform["file_thumbnails"]), 17)
         self.s.file_thumbnails(files)
         self.assertEqual(self.mr.metadata.call_count, 17)
+
+    def test_closed_websocket_handshake_exits_and_closes_socket(self):
+        sock = mock.Mock()
+        sock.recv.side_effect = [b"", AssertionError("must not spin on EOF")]
+        with mock.patch("service.socket.create_connection", return_value=sock):
+            with self.assertRaises(EOFError):
+                WebSocket("http://127.0.0.1:7126")
+        sock.close.assert_called_once_with()
+
+    def test_reconnect_keeps_settings_until_refreshed_on_same_host_boot(self):
+        self.s.merge_status(self.state, 100, full=True)
+        self.s.stream_message({"result": {"eventtime": 101, "status": self.state}})
+        snap = self.s.snapshot()
+        self.assertTrue(snap["connected"])
+        self.assertTrue(snap["heaters"])
+        self.assertEqual(snap["settings"]["extruder"]["max_temp"], 350)
+        self.assertTrue(self.s.settings_refresh_needed)
+
+    def test_screen_restart_never_replays_printer_preferences(self):
+        for state in ("standby", "printing", "paused"):
+            with self.subTest(state=state):
+                self.state["print_stats"]["state"] = state
+                self.s.stream_connected = True
+                self.s.prefs.update(idle=1800, light_off=300, cfs_auto_refill=True)
+                self.s.preference = mock.Mock()
+                self.s.update_screen_idle = mock.Mock()
+                self.s.preload_files = mock.Mock()
+                self.s.refresh_platform = mock.Mock()
+                self.s.read_policy.update = mock.Mock()
+                with mock.patch("service.time.sleep", side_effect=StopIteration):
+                    with self.assertRaises(StopIteration):
+                        self.s.poll()
+                self.s.preference.assert_not_called()
+                self.mr.run_gcode.assert_not_called()
+
+    def test_live_printer_preferences_override_saved_screen_values(self):
+        self.s.prefs.update(idle=900, light_off=300, cfs_auto_refill=True)
+        self.s.status.update(
+            {
+                "idle_timeout": {"idle_timeout": 3600},
+                "gcode_macro _LIGHT_IDLE": {"off_after": 0},
+                "gcode_macro _RUNOUT_REFILL": {"enabled": 0},
+            }
+        )
+        prefs = self.s.current_preferences()
+        self.assertEqual(prefs["idle"], 3600)
+        self.assertEqual(prefs["light_off"], 0)
+        self.assertFalse(prefs["cfs_auto_refill"])
+        self.s.status["gcode_macro _RUNOUT_REFILL"]["enabled"] = 1
+        self.assertTrue(self.s.current_preferences()["cfs_auto_refill"])
+        self.s.status.pop("gcode_macro _RUNOUT_REFILL")
+        self.s.settings["gcode_macro _RUNOUT_REFILL"]["variable_enabled"] = 0
+        self.assertFalse(self.s.current_preferences()["cfs_auto_refill"])
+
+    def test_background_refresh_failure_does_not_disconnect_live_printer(self):
+        self.s.merge_status(self.state, 10)
+        self.s.stream_connected = True
+        self.s.update_screen_idle = mock.Mock()
+        self.s.preload_files = mock.Mock()
+        self.s.refresh_platform = mock.Mock(side_effect=OSError("USB query failed"))
+        with mock.patch("service.time.sleep", side_effect=StopIteration):
+            with self.assertRaises(StopIteration):
+                self.s.poll()
+        self.assertTrue(self.s.connected)
+        self.assertEqual(self.s.platform["background_error"], "USB query failed")
+        self.assertNotIn("connection_error", self.s.platform)
+
+    def test_http_failure_uses_live_stream_but_detects_real_disconnect(self):
+        for live in (True, False):
+            with self.subTest(live=live):
+                self.s.merge_status(self.state, 10)
+                self.s.stream_connected = live
+                self.mr.status_snapshot.side_effect = OSError("HTTP unavailable")
+                with mock.patch("service.time.sleep", side_effect=StopIteration):
+                    with self.assertRaises(StopIteration):
+                        self.s.poll()
+                self.assertEqual(self.s.connected, live)
+
+    def test_timezone_setting_updates_uci_and_runtime_zonefile(self):
+        zone_root = Path(self.tmp.name) / "zoneinfo"
+        zone = zone_root / "America" / "Detroit"
+        zone.parent.mkdir(parents=True)
+        zone.write_bytes(b"TZif")
+        with (
+            mock.patch.object(platform_services, "ZONEINFO", str(zone_root)),
+            mock.patch("platform_services.subprocess.call") as command,
+            mock.patch("platform_services.os.symlink") as link,
+            mock.patch("platform_services.os.replace") as replace,
+            mock.patch("platform_services.os.path.lexists", return_value=False),
+            mock.patch("platform_services.time.tzset") as refresh,
+        ):
+            platform_services.set_system_zone("America/Detroit")
+        self.assertEqual(
+            command.call_args_list[0].args[0],
+            ["uci", "set", "system.@system[0].zonename=America/Detroit"],
+        )
+        self.assertEqual(command.call_args_list[1].args[0], ["uci", "commit", "system"])
+        link.assert_called_once_with(str(zone), "/tmp/localtime.new")
+        replace.assert_called_once_with("/tmp/localtime.new", "/tmp/localtime")
+        refresh.assert_called_once_with()
 
     def test_timezone_presets_read_retained_firmware_mapping(self):
         import storage
@@ -397,6 +604,13 @@ class ServiceTests(unittest.TestCase):
         )
         self.assertEqual(self.s.status["extruder"]["temperature"], 25)
         self.assertNotIn("toolhead", self.s.status)
+
+    def test_ready_notification_advances_printer_generation(self):
+        self.assertEqual(self.s.snapshot()["printer_generation"], 0)
+        with self.assertRaises(EOFError):
+            self.s.stream_message({"method": "notify_klippy_ready"})
+        self.assertEqual(self.s.snapshot()["printer_generation"], 1)
+        self.assertFalse(self.s.connected)
 
     def test_restart_invalidates_subscription_and_accepts_fresh_status(self):
         self.s.stream_connected = True

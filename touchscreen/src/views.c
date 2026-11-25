@@ -115,9 +115,29 @@ static void spool_widget(lv_obj_t *parent, int x, int y, int size, const char *h
     lv_obj_set_style_border_width(inner, 2, 0);
     lv_obj_set_style_border_color(inner, ring, 0);
 }
+/* All CFS representations consume the same backend-owned transition state. */
+static const char *filament_activity_label(void) {
+    const char *action = S("filament_activity.action");
+    return !strcmp(action, "load") ? "Loading…" : !strcmp(action, "unload") ? "Unloading…" : "";
+}
+static bool filament_slot_busy(const char *slot) {
+    return *slot && *filament_activity_label() && !strcmp(slot, S("filament_activity.slot"));
+}
+static void filament_spinner(lv_obj_t *parent, int x, int y, int size) {
+    lv_obj_t *spinner = lv_spinner_create(parent, 1000, 60);
+    lv_obj_set_pos(spinner, x, y);
+    lv_obj_set_size(spinner, size, size);
+    lv_obj_set_style_arc_width(spinner, 2, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(spinner, 2, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(spinner, colour("343e4b"), LV_PART_MAIN);
+    lv_obj_set_style_arc_color(spinner, app.accent, LV_PART_INDICATOR);
+    lv_obj_clear_flag(spinner, LV_OBJ_FLAG_CLICKABLE);
+}
 /* The extruder sensor confirms the path; spool presence is a separate state.
  * An old active_slot after unloading must never imply filament in the nozzle. */
 static bool feeding_slot(const char *slot) {
+    if (filament_slot_busy(slot))
+        return false;
     if (!B("status.filament_switch_sensor filament_sensor.filament_detected"))
         return false;
     const char *active = S("status.k2_cfs.active_slot");
@@ -158,7 +178,11 @@ static void home_cfs(int top, int height) {
     char unit[16] = "", groups[16][16] = {{0}};
     int units = 0;
     const char *active = S("status.k2_cfs.active_slot");
-    if (*active && feeding_slot(active))
+    const char *busy_slot = S("filament_activity.slot");
+    bool busy = *filament_activity_label() && strcmp(busy_slot, "E");
+    if (busy && *busy_slot)
+        slot_unit(busy_slot, unit, sizeof(unit));
+    else if (*active && feeding_slot(active))
         slot_unit(active, unit, sizeof(unit));
     cJSON *record;
     cJSON_ArrayForEach(record, J("slots")) {
@@ -201,7 +225,9 @@ static void home_cfs(int top, int height) {
         lv_obj_set_style_bg_opa(dot, present ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
         lv_obj_set_style_border_color(dot, colour(feeding_slot(slot) ? "f0f3f7" : "596371"), 0);
         lv_obj_set_style_border_width(dot, feeding_slot(slot) ? 3 : 1, 0);
-        if (feeding_slot(slot))
+        if (filament_slot_busy(slot))
+            filament_spinner(tile, x - 3, y - 3, 28);
+        else if (feeding_slot(slot))
             icon(tile, "nozzle", x + 3, y + 24, 16, colour("f0f3f7"));
     }
     if (!total)
@@ -215,6 +241,8 @@ static void home_spool(int top, int height) {
     spool_widget(tile, 13, (height - 36) / 2, 36,
                  known ? jstr(record, "color", "828b98") : "596371");
     text(tile, "Spool holder", 62, height / 2 - 23, 118, &font_ui_16, false);
+    if (filament_slot_busy("E"))
+        filament_spinner(tile, 9, (height - 44) / 2, 44);
     lv_obj_t *details = text(tile, known ? jstr(record, "type", "") : "Set details", 62,
                              height / 2 + 3, 118, &font_ui_16, true);
     lv_label_set_long_mode(details, LV_LABEL_LONG_DOT);
@@ -452,8 +480,11 @@ static bool axis_homed(char axis) {
 }
 static void move_view(void) {
     ui_tabs(false, "move");
-    if (ui_unavailable("Movement", "moving the axes"))
+    if (ui_unavailable("Movement", "moving the axes")) {
+        if (has("settings.bed_mesh"))
+            button_fixed(app.content, "Bed mesh", 212, 410, 250, 60, "route:mesh", false);
         return;
+    }
     const char *icons[] = {"arrow-up", "arrow-left", "house", "arrow-right", "arrow-down"};
     int xs[] = {80, 0, 80, 160, 80}, ys[] = {108, 192, 192, 192, 276};
     const char *actions[] = {"jog:Y:1", "jog:X:-1", "{\"action\":\"home\",\"axis\":\"XY\"}",
@@ -508,10 +539,11 @@ static void move_view(void) {
         icon(field, "pencil", 194, 30, 16, colour("a4aebb"));
     }
     bool enabled = motors_locked();
-    lv_obj_t *motor = button_fixed(app.content, "", 452, 398, 222, 64, "motor_toggle", false);
-    icon(motor, enabled ? "lock-keyhole" : "lock-keyhole-open", 18, 20, 24, colour("f0f3f7"));
-    centered(
-        text(motor, enabled ? "Unlock motors" : "Lock motors", 50, 21, 162, &font_ui_18, false));
+    lv_obj_t *mesh = button(app.content, "", 452, 398, 105, 64,
+                            has("settings.bed_mesh") ? "route:mesh" : NULL, false);
+    icon(mesh, "bed-mesh", 34, 14, 36, colour("f0f3f7"));
+    lv_obj_t *motor = button_fixed(app.content, "", 569, 398, 105, 64, "motor_toggle", false);
+    icon(motor, enabled ? "motor-off" : "motor-on", 34, 14, 36, colour("f0f3f7"));
 }
 static void heat_view(void) {
     ui_tabs(false, "heat");
@@ -664,7 +696,10 @@ static void filament_view(void) {
         text(tile, name, start + 90, 93, metrics.x + 2, &font_ui_24, false);
         centered(text(tile, "Spool holder", start + 90, 135, metrics.x + 2, &font_ui_14, true));
         icon(tile, "pencil", 673 - 24 - 20, 247 - 24 - 20, 24, colour("a4aebb"));
-        if (feeding_slot("E"))
+        if (filament_slot_busy("E")) {
+            filament_spinner(tile, (673 - 28) / 2, 181, 28);
+            centered(text(tile, filament_activity_label(), 0, 218, 673, &font_ui_16, false));
+        } else if (feeding_slot("E"))
             icon(tile, "nozzle", (673 - 24) / 2, 200, 24, colour("f0f3f7"));
         return;
     }
@@ -690,16 +725,21 @@ static void filament_view(void) {
     }
     const int top = boxes > 1 ? 162 : 88;
     if (app.select_feeding_cfs) {
-        cJSON_ArrayForEach(r, J("slots")) {
-            const char *slot = jstr(r, "slot", "");
-            if (strcmp(slot, "E") && feeding_slot(slot)) {
-                size_t n = strlen(slot);
-                snprintf(app.cfs_unit, sizeof(app.cfs_unit), "%.*s", n > 1 ? (int)n - 1 : 1,
-                         n > 1 ? slot : "1");
-                snprintf(app.selected_slot, sizeof(app.selected_slot), "%s", slot);
-                break;
+        const char *busy = S("filament_activity.slot");
+        if (*filament_activity_label() && *busy && strcmp(busy, "E")) {
+            slot_unit(busy, app.cfs_unit, sizeof(app.cfs_unit));
+            snprintf(app.selected_slot, sizeof(app.selected_slot), "%s", busy);
+        } else
+            cJSON_ArrayForEach(r, J("slots")) {
+                const char *slot = jstr(r, "slot", "");
+                if (strcmp(slot, "E") && feeding_slot(slot)) {
+                    size_t n = strlen(slot);
+                    snprintf(app.cfs_unit, sizeof(app.cfs_unit), "%.*s", n > 1 ? (int)n - 1 : 1,
+                             n > 1 ? slot : "1");
+                    snprintf(app.selected_slot, sizeof(app.selected_slot), "%s", slot);
+                    break;
+                }
             }
-        }
         app.select_feeding_cfs = false;
     }
     bool selected_unit = false;
@@ -718,6 +758,11 @@ static void filament_view(void) {
             lv_obj_t *tab = button(app.content, "", i * (tab_width + 8), 88, tab_width, 56, action,
                                    !strcmp(app.cfs_unit, groups[i]));
             centered(text(tab, label, 2, 5, tab_width - 4, &font_ui_16, false));
+            char busy_unit[16];
+            slot_unit(S("filament_activity.slot"), busy_unit, sizeof(busy_unit));
+            if (*filament_activity_label() && *S("filament_activity.slot") &&
+                strcmp(S("filament_activity.slot"), "E") && !strcmp(groups[i], busy_unit))
+                filament_spinner(tab, tab_width - 22, 10, 14);
             int dot_index = 0;
             cJSON *record;
             cJSON_ArrayForEach(record, J("slots")) {
@@ -803,7 +848,11 @@ static void filament_view(void) {
                       : present            ? "Unknown"
                                            : "Empty",
                       4, content_y + 109, tile_width - 8, &font_ui_16, false));
-        if (feeding_slot(slot))
+        if (filament_slot_busy(slot)) {
+            filament_spinner(tile, (tile_width - 30) / 2, content_y + 59, 30);
+            centered(text(tile, filament_activity_label(), 2, content_y + 140, tile_width - 4,
+                          &font_ui_14, false));
+        } else if (feeding_slot(slot))
             icon(tile, "nozzle", (tile_width - 24) / 2, content_y + 134, 24, colour("f0f3f7"));
     }
 
@@ -1237,7 +1286,10 @@ static void mapping_view(void) {
             colour_swatch(pick, 16, 42, "343e4b", 32);
             text(pick, "Select filament", 60, 44, 208, &font_ui_20, true);
         }
-        icon(pick, "chevron-down", 284, 48, 20, colour("a4aebb"));
+        if (filament_slot_busy(target))
+            filament_spinner(pick, 282, 46, 24);
+        else
+            icon(pick, "chevron-down", 284, 48, 20, colour("a4aebb"));
         y += 120;
     }
     if (!y)
@@ -1265,12 +1317,17 @@ static void mapping_pick(void) {
         lv_obj_t *item = button_fixed(list, "", 0, y, 673, 88, action, selected);
         colour_swatch(item, 16, 24, jstr(record, "color", "828b98"), 40);
         text(item, jstr(record, "type", "Unknown material"), 76, 17, 450, &font_ui_20, false);
+        if (filament_slot_busy(slot)) {
+            size_t length = strlen(source);
+            snprintf(source + length, sizeof(source) - length, " · %s", filament_activity_label());
+            filament_spinner(item, 622, 28, 28);
+        }
         text(item, source, 76, 54, 450, &font_ui_14, true);
         if (!compatible) {
             lv_obj_add_state(item, LV_STATE_DISABLED);
             lv_obj_set_style_opa(item, 160, 0);
         }
-        if (selected)
+        if (selected && !filament_slot_busy(slot))
             icon(item, "check", 624, 29, 28, app.accent);
         y += 96;
     }
@@ -1849,6 +1906,8 @@ void views_render(void) {
     if (!strcmp(p, "move") || !strcmp(p, "heat") || !strcmp(p, "fans") || !strcmp(p, "filament") ||
         !strcmp(p, "tune") || !strcmp(p, "calibration"))
         title = "Printer controls";
+    else if (!strcmp(p, "mesh"))
+        title = "Bed mesh";
     else if (!strcmp(p, "files"))
         title = "Files";
     else if (!strcmp(p, "file"))
@@ -1915,6 +1974,8 @@ void views_render(void) {
         ui_header(title);
     if (!strcmp(p, "move"))
         move_view();
+    else if (!strcmp(p, "mesh"))
+        mesh_view();
     else if (!strcmp(p, "heat"))
         heat_view();
     else if (!strcmp(p, "fans"))
@@ -2133,8 +2194,10 @@ static void keyboard_draw(void) {
                  56, false);
     keyboard_key("icon:delete", "key_back", 668, 344, 116, 56, false);
     keyboard_key("Cancel", "close", 16, 412, 378, 56, false);
-    keyboard_key(!strcmp(app.keyboard_kind, "wifi") ? "Connect" : "Set colour", "key_done", 406,
-                 412, 378, 56, true);
+    keyboard_key(!strcmp(app.keyboard_kind, "wifi")        ? "Connect"
+                 : !strncmp(app.keyboard_kind, "mesh_", 5) ? "Save"
+                                                           : "Set colour",
+                 "key_done", 406, 412, 378, 56, true);
 }
 void ui_keyboard(const char *title, const char *kind, const char *value) {
     snprintf(app.keyboard_title, sizeof(app.keyboard_title), "%s", title);
@@ -2147,6 +2210,8 @@ void ui_keyboard(const char *title, const char *kind, const char *value) {
 }
 bool views_control_key(const char *action, char *key, size_t size) {
     const char *a = !strcmp(action, "confirmed") ? app.confirm : action;
+    if (mesh_control_key(a, key, size))
+        return true;
     if (!strncmp(a, "file_open:", 10))
         a += 10;
     else if (!strncmp(a, "file_delete:", 12)) {
@@ -2266,6 +2331,8 @@ bool views_control_key(const char *action, char *key, size_t size) {
     return false;
 }
 void views_action(const char *a) {
+    if (mesh_action(a))
+        return;
     if (!strncmp(a, "timezone_pick:", 14)) {
         cJSON *zone;
         cJSON_ArrayForEach(zone, J("timezone_presets")) {
