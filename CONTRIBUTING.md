@@ -10,3 +10,9 @@ and branch changes are restricted to the owner.
   [K2 OpenKlipper Touchscreen](https://github.com/carmanspb/K2-OpenKlipper-Touchscreen/blob/main/CONTRIBUTING.md).
 
 The repository remains public for inspection and use under its existing license.
+
+## Code review
+
+All changes to `main` go through pull requests, including maintainer changes.
+Codex review provides additional feedback; review its findings before merging.
+Automated review does not replace the repository owner’s merge decision.
