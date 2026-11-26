@@ -200,6 +200,21 @@ class NativeUI(unittest.TestCase):
    items,_=self.render(actions=steps+[{'snapshot':ready}])
    self.assertTrue(any(i['action']=='open_files' for i in items))
 
+ def test_restart_does_not_recover_before_motor_initialization(self):
+  for action in ('klipper','firmware'):
+   steps=['restart:'+action,'confirmed']
+   lost=copy.deepcopy(self.data);lost['connected']=False
+   initializing=copy.deepcopy(self.data)
+   initializing['printer_generation']=1
+   initializing['status']['k2_motor_bus']={'motors_ready':False}
+   items,_=self.render(actions=steps+[{'snapshot':lost},{'snapshot':initializing}])
+   self.assertEqual(items,[])
+   initialized=copy.deepcopy(initializing)
+   initialized['status']['k2_motor_bus']['motors_ready']=True
+   items,_=self.render(actions=steps+[{'snapshot':lost},{'snapshot':initializing},
+                                    {'snapshot':initialized}])
+   self.assertTrue(any(i['action']=='open_files' for i in items))
+
  def test_restart_timeout_offers_retry_and_still_recovers(self):
   steps=['restart:klipper','confirmed',{'advance_ms':60001}]
   items,_=self.render(actions=steps)
