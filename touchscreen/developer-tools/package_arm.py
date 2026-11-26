@@ -50,6 +50,7 @@ def main():
         shutil.copy2(source, package / "assets" / source.name)
     for source in (ROOT / "assets").glob("printer-*.png"):
         shutil.copy2(source, package / "assets" / source.name)
+    shutil.copy2(ROOT / "LICENSE", package / "licenses/Touchscreen-LICENSE")
     for source in (ROOT / "assets").glob("*-LICENSE"):
         shutil.copy2(source, package / "licenses" / source.name)
     for source in (args.build / "licenses").glob("*"):

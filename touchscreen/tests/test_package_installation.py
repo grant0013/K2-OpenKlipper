@@ -27,6 +27,7 @@ class PackageChecks(unittest.TestCase):
         self.source = self.project / "touchscreen"
         self.package = self.source / "precompiled/armv7"
         for path in (
+            "LICENSE",
             "src/main.c",
             "runtime/start.sh",
             "developer-tools/build.sh",
@@ -44,6 +45,7 @@ class PackageChecks(unittest.TestCase):
             "openklipper-screen",
             "VERSION",
             "assets/nav-house-56.png",
+            "licenses/Touchscreen-LICENSE",
             "licenses/LVGL-LICENSE",
             "licenses/cJSON-LICENSE",
             "licenses/Liberation-LICENSE",
