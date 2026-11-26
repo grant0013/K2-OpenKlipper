@@ -51,7 +51,7 @@ OBJECTS = {
     "fan": ["speed", "rpm"],
     "heater_fan hotend_fan": ["speed", "rpm"],
     "hark_fans": ["part", "hotend", "min_duty"],
-    "hark_flow_cal": ["auto", "last"],
+    "hark_flow_cal": ["auto", "pa_auto", "last"],
     "gcode_macro _FLOW_AUTO": ["on_print_start"],
     "fan_generic auxiliary_fan": ["speed"],
     "fan_generic exhaust_fan": ["speed"],
@@ -75,8 +75,9 @@ OBJECTS = {
     "pa_pressure_log": ["last"],
     "hark_calib": ["pending"],
     "gcode_macro _PA_STATIC_SAVE": ["last"],
-    "gcode_macro _PA_AUTO": ["on_load", "on_print_start"],
-    "hark_print_cal": ["pa_on_load", "pa_on_print_start", "mesh"],
+    "gcode_macro _PA_AUTO": ["on_load", "on_print_start", "method"],
+    "hark_print_cal": ["pa_on_load", "pa_on_print_start", "mesh",
+                       "pa_method", "pa_next"],
     "gcode_macro _STAGE": ["text"],
     "hark_update": ["installed", "latest", "update_available", "updating",
                     "notes"],
@@ -1669,7 +1670,10 @@ class Screen:
         if stamp and stamp != self.pa_static_ack:
             return {"static": True, "slot": static.get("slot"),
                     "saved": bool(static.get("saved")),
-                    "reliable": bool(static.get("saved")),
+                    # a sweep run without SAVE=1 still has a good value
+                    "reliable": bool(static.get("saved")) or
+                    static.get("reason") == "not_saved",
+                    "how": static.get("how"), "r2": static.get("r2"),
                     "fitted": static.get("pa"),
                     "measured": static.get("measured"),
                     "scale": static.get("scale"),
@@ -2101,7 +2105,19 @@ class Screen:
         else:
             head = "Not saved: result not reliable"
         self.text(d, (W // 2, 168), head, "s", col, anchor="mm")
-        if res.get("static"):
+        if res.get("static") and res.get("how") == "sweep":
+            if fitted is not None and (saved or good):
+                notes = ["Moving sweep over the chute, fit R\u00b2 %.2f"
+                         % (res.get("r2") or 0)]
+                if not saved:
+                    notes.append("Not saved: the slot keeps its value")
+            elif res.get("reason") == "implausible":
+                notes = ["%.3f is outside the expected range" % (
+                    res.get("fitted") or 0), "the slot keeps its value"]
+            else:
+                notes = ["No clear result from the sweep",
+                         "the slot keeps its value"]
+        elif res.get("static"):
             if saved and res.get("scale") and res.get("scale") != 1:
                 notes = ["Measured %.4f x %.2f for %s" % (
                     res.get("measured") or 0, res.get("scale"),
@@ -2178,6 +2194,12 @@ class Screen:
                                 "Calibrate PA for this spool?\n"
                                 "About 3 min, heats to %d°" % temp,
                                 "PA_CAL_STATIC SLOT=E SAVE=1"), "accent"))
+                actions.append(("PA sweep", ("confirm",
+                                "Run the PA sweep for this spool and save"
+                                " it?\nAbout 4 min, heats to %d°. Load &"
+                                " purge first if it was only pushed in."
+                                % temp, "PA_SWEEP_CAL SLOT=E SAVE=1"),
+                                "accent"))
             else:
                 actions.append(("Load", ("confirm",
                                 "Push the filament in at the back until it"
@@ -2195,6 +2217,11 @@ class Screen:
                             "About 3 min, heats to %d°" % (slot, temp),
                             "PA_CAL_STATIC SLOT=%s SAVE=1" % slot),
                             "accent"))
+            actions.append(("PA sweep", ("confirm",
+                            "Run the PA sweep for slot %s and save it?\n"
+                            "About 4 min, heats to %d°" % (slot, temp),
+                            "PA_SWEEP_CAL SLOT=%s SAVE=1" % slot),
+                            "accent"))
         elif rec.get("loaded"):
             q = ("Load slot %s and purge out %s?\nHeats to %d°"
                  % (slot, active, temp)) if active else \
@@ -2210,6 +2237,11 @@ class Screen:
                             ("CFS_LOAD_SLOT SLOT=%s" % slot) if auto else
                             "CFS_LOAD_SLOT SLOT=%s COOL=0\nPA_CAL_STATIC SLOT=%s"
                             " SAVE=1" % (slot, slot)), "accent"))
+            actions.append(("PA sweep", ("confirm",
+                            "Load slot %s, then run the PA sweep and save"
+                            " it?\nAbout 6 min, heats to %d°" % (slot, temp),
+                            "CFS_LOAD_SLOT SLOT=%s COOL=0\nPA_SWEEP_CAL "
+                            "SLOT=%s SAVE=1" % (slot, slot)), "accent"))
         if rec.get("loaded"):
             # Printed tests: the printer prints them and asks for the best
             what = "the external spool" if slot == "E" else "slot %s" % slot
@@ -3087,6 +3119,8 @@ class Screen:
             default = all(slot == default_slot(t, targets) for t, slot in
                           (mapping or {}).items())
             try:
+                if (fs or {}).get("pa_first"):
+                    mr.run_gcode("PRINT_CAL PA_NEXT=1")
                 try:
                     mr.run_gcode(tool_map_script(path, mapping or {}))
                     mapped = True
@@ -3336,9 +3370,31 @@ class Screen:
                         ("gcode", "LOAD_FILAMENT SLOT=E"), "accent", idle,
                         "s")
         else:
-            bw = (x1 - x0 - pad * 3) // 2
-            boxes = [(x0 + pad, by, x0 + pad + bw, by + 48), None,
-                     (x0 + 2 * pad + bw, by, x1 - pad, by + 48)]
+            pc = st.get("hark_print_cal") or {}
+            if "pa_next" in pc:
+                # Measure PA before this print (PRINT_CAL PA_NEXT=1 just
+                # before it starts); shown on when every print measures
+                bw = (x1 - x0 - pad * 4) // 3
+                boxes = [(x0 + pad + i * (bw + pad), by,
+                          x0 + pad + i * (bw + pad) + bw, by + 48)
+                         for i in range(3)]
+                boxes[2] = (boxes[2][0], by, x1 - pad, by + 48)
+                every = (st.get("hark_flow_cal") or {}).get("pa_auto")
+                if every is None:
+                    every = pc.get("pa_on_print_start")
+                if every:
+                    self.button(d, boxes[1], "PA: every print", None,
+                                "accent", False, "s")
+                else:
+                    fs["pa_next_live"] = bool(pc.get("pa_next"))
+                    on = bool(fs.get("pa_first") or fs["pa_next_live"])
+                    self.button(d, boxes[1], "Measure PA first",
+                                ("files_pa_first",),
+                                "accent" if on else "muted", idle, "s")
+            else:
+                bw = (x1 - x0 - pad * 3) // 2
+                boxes = [(x0 + pad, by, x0 + pad + bw, by + 48), None,
+                         (x0 + 2 * pad + bw, by, x1 - pad, by + 48)]
         self.button(d, boxes[0], "Back", ("files_back",), "muted", True, "s")
         self.button(d, boxes[2],
                     "Starting…" if fs.get("starting") else "Print",
@@ -3831,7 +3887,8 @@ class Screen:
         print. Saved on the printer (PRINT_CAL, FLOW_CAL_AUTO), so the
         choice survives a restart."""
         x0, y0, x1, y1 = body
-        pad, label_w, rh, gap = 14, 190, 48, 12
+        # five rows of 40 + 8 clear the Back button in the 416 px body
+        pad, label_w, rh, gap = 14, 190, 40, 8
         pc = st.get("hark_print_cal")
         pa = st.get("gcode_macro _PA_AUTO") or {}
         if pc:
@@ -3849,17 +3906,45 @@ class Screen:
                   "Runs on its own before printing. Saved on the printer.",
                   "xs", "muted",
                   width=x1 - x0 - 2 * pad)
+        # What START_PRINT obeys at every print start: PA_CAL_AUTO
+        # (hark_flow_cal pa_auto) where the firmware has it, else the
+        # _PA_AUTO variable. Next print = PRINT_CAL PA_NEXT=1, run once
+        # (the rear spool too) and cleared by START_PRINT.
+        fc = st.get("hark_flow_cal") or {}
+        every = fc.get("pa_auto")
+        if every is None:
+            every = pa_start
+            set_every = lambda v: set_pa("PA_START", v)
+        else:
+            set_every = lambda v: "PA_CAL_AUTO ENABLE=%d%s" % (
+                v, "\nPRINT_CAL PA_START=%d" % v if pc else "")
+        nxt = pc.get("pa_next") if pc else None
+        method = pc.get("pa_method") if pc else None
+        before = [("Off", set_every(0) + (
+                      "\nPRINT_CAL PA_NEXT=0" if nxt is not None else ""),
+                   not every and not nxt),
+                  ("Every print", set_every(1) + (
+                      "\nPRINT_CAL PA_NEXT=0" if nxt is not None else ""),
+                   bool(every))]
+        if nxt is not None:
+            before.append(("Next print", set_every(0) +
+                           "\nPRINT_CAL PA_NEXT=1", bool(nxt) and not every))
         rows = [
             ("PA when loading", [(n, ("gcode", set_pa("PA_LOAD", v)),
                                   int(bool(pa_load)) == v)
                                  for v, n in ((0, "Off"), (1, "Measure + save"))]),
-            ("PA at print start", [(n, ("gcode", set_pa("PA_START", v)),
-                                    int(bool(pa_start)) == v)
-                                   for v, n in ((0, "Off"), (1, "Measure + save"))]),
-            ("Flow cal", [(n, ("gcode", "FLOW_CAL_AUTO ENABLE=%d" % v),
-                           self.flow_auto(st) == v)
-                          for v, n in ((0, "Off"), (1, "Every print start"))]),
+            ("PA before print", [(n, ("gcode", g), on)
+                                 for n, g, on in before]),
         ]
+        if method:
+            rows.append(("PA method", [
+                (n, ("gcode", "PRINT_CAL PA_METHOD=%s" % m), method == m)
+                for m, n in (("step", "Step test"), ("sweep", "Sweep"),
+                             ("blend", "Blend"))]))
+        rows.append(("Flow cal", [(n, ("gcode", "FLOW_CAL_AUTO ENABLE=%d" % v),
+                                   self.flow_auto(st) == v)
+                                  for v, n in ((0, "Off"),
+                                               (1, "Every print start"))]))
         if mesh is not None:
             rows.append(("Bed levelling", [(n, ("gcode", "PRINT_CAL MESH=%d" % v),
                                             int(bool(mesh)) == v)
@@ -4422,6 +4507,17 @@ class Screen:
                 self.files = None
             elif kind == "files_print":
                 self.start_print(mr, action[1])
+            elif kind == "files_pa_first" and self.files:
+                fs = self.files
+                if fs.get("pa_first") or fs.get("pa_next_live"):
+                    # off again, including a "Next print" set on the
+                    # Print calibration page
+                    fs["pa_first"] = False
+                    if fs.get("pa_next_live"):
+                        mr.gcode("PRINT_CAL PA_NEXT=0")
+                        fs["pa_next_live"] = False
+                else:
+                    fs["pa_first"] = True
             elif kind == "files_map_open" and self.files:
                 self.files["map_pick"] = action[1]
             elif kind == "files_map" and self.files:
@@ -4600,7 +4696,8 @@ class Screen:
                 else:
                     if script in label:
                         self.running = (label[script], time.time())
-                    elif "PA_CAL_RUN" in script or "PA_CAL_STATIC" in script:
+                    elif ("PA_CAL_RUN" in script or "PA_CAL_STATIC" in script
+                          or "PA_SWEEP_CAL" in script):
                         self.running = ("Calibrating PA", time.time())
                     elif script.startswith("CFS_LOAD_SLOT"):
                         self.running = ("Loading slot " + script[-1],
@@ -4617,6 +4714,7 @@ class Screen:
                         self.running = ("Starting test print", time.time())
                     if script.startswith(("CFS_LOAD_SLOT", "CFS_UNLOAD",
                                           "PA_CAL_RUN", "PA_CAL_STATIC",
+                                          "PA_SWEEP_CAL",
                                           "LOAD_FILAMENT",
                                           "UNLOAD_FILAMENT", "CALIBRATE_")):
                         self.slot_menu = None
