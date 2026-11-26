@@ -57,13 +57,13 @@ static bool contains(const char *list, const char *route) {
     }
     return false;
 }
-char *ui_view_signature(void) {
-    cJSON *value = cJSON_CreateObject();
+bool ui_view_changed(const cJSON *previous, const cJSON *current) {
     const char *base[] = {
         "connected", "status.webhooks.state",         "status.print_stats.state",
         "error",     "status.webhooks.state_message", "platform.connection_error"};
     for (unsigned i = 0; i < sizeof(base) / sizeof(base[0]); i++)
-        cJSON_AddItemToObject(value, base[i], cJSON_Duplicate(J(base[i]), true));
+        if (!json_equal(jget(previous, base[i]), json_update_value(previous, current, base[i])))
+            return true;
     bool found = false;
     for (unsigned i = 0; i < sizeof(views) / sizeof(views[0]); i++) {
         if (!contains(views[i].routes, app.route))
@@ -71,15 +71,12 @@ char *ui_view_signature(void) {
         found = true;
         for (unsigned n = 0; n < 12 && views[i].inputs[n]; n++) {
             const char *key = views[i].inputs[n];
-            cJSON_AddItemToObject(value, key, cJSON_Duplicate(J(key), true));
+            if (!json_equal(jget(previous, key), json_update_value(previous, current, key)))
+                return true;
         }
         break;
     }
     /* A new, unregistered page remains correct; the registry is the efficient
      * contract, not a reason to silently stop refreshing an unfamiliar page. */
-    if (!found)
-        cJSON_AddItemToObject(value, "fallback", cJSON_Duplicate(app.data, true));
-    char *signature = cJSON_PrintUnformatted(value);
-    cJSON_Delete(value);
-    return signature;
+    return !found; /* An unregistered route conservatively refreshes. */
 }
