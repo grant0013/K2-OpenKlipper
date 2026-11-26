@@ -51,6 +51,8 @@ OBJECTS = {
     "fan": ["speed", "rpm"],
     "heater_fan hotend_fan": ["speed", "rpm"],
     "hark_fans": ["part", "hotend", "min_duty"],
+    "hark_flow_cal": ["auto", "last"],
+    "gcode_macro _FLOW_AUTO": ["on_print_start"],
     "fan_generic auxiliary_fan": ["speed"],
     "fan_generic exhaust_fan": ["speed"],
     "gcode_macro _CHAMBER_FAN": ["manual"],
@@ -61,7 +63,7 @@ OBJECTS = {
     "k2_cfs": ["fitted", "online", "active_slot", "feed_slot", "running_out",
                "runout_next",
                "temperature", "humidity", "slot_stats", "change_pending"],
-    "hark_cfs_slots": ["slots", "tool_map_set", "tool_map_file",
+    "hark_cfs_slots": ["slots", "reel_flow", "tool_map_set", "tool_map_file",
                        "map_tools", "map_targets"],
     "hark_plr": ["available", "filename", "z"],
     "filament_switch_sensor filament_sensor": ["filament_detected"],
@@ -73,7 +75,8 @@ OBJECTS = {
     "pa_pressure_log": ["last"],
     "hark_calib": ["pending"],
     "gcode_macro _PA_STATIC_SAVE": ["last"],
-    "gcode_macro _PA_AUTO": ["on_load"],
+    "gcode_macro _PA_AUTO": ["on_load", "on_print_start"],
+    "hark_print_cal": ["pa_on_load", "pa_on_print_start", "mesh"],
     "gcode_macro _STAGE": ["text"],
     "hark_update": ["installed", "latest", "update_available", "updating",
                     "notes"],
@@ -1227,6 +1230,8 @@ class Screen:
         self.z_adjust = 0.
         self.z_print = None
         self.zone_pick = False
+        # Settings > Print calibration sub-page
+        self.cal_page = False
         self.zone_name = None
         self.modal_on = False
         self.alert_ack = None
@@ -1722,7 +1727,7 @@ class Screen:
             round(((st.get("heater_fan hotend_fan") or {}).get("rpm") or 0)
                   / 50),
             (st.get("heater_fan hotend_fan") or {}).get("speed"),
-            st.get("hark_fans"), round(z, 2), rem,
+            st.get("hark_fans"), self.flow_auto(st), round(z, 2), rem,
             st.get("k2_cfs"), st.get("hark_cfs_slots"),
             st.get("filament_switch_sensor filament_sensor"),
             st.get("k2_motor_bus"), st.get("output_pin chamber_led"),
@@ -1734,7 +1739,7 @@ class Screen:
             self.track_stage(st), self.console[-2:],
             self.notice_key(st, err),
             bool(self.thumb and self.thumb[1] is not None),
-            self.prefs, self.zone_pick, self.zone_name, self.z_adjust,
+            self.prefs, self.zone_pick, self.cal_page, self.zone_name, self.z_adjust,
             self.temp_pick, self.temp_target, self.fans_open,
             self.usb, self.usb_job and self.usb_job.get("kind"),
             self.usb_job and self.usb_job.get("title"),
@@ -3457,6 +3462,8 @@ class Screen:
     def page_settings(self, d, body, st):
         if self.zone_pick:
             return self.draw_zone_pick(d, body)
+        if self.cal_page:
+            return self.draw_cal_page(d, body, st)
         x0, y0, x1, y1 = body
         pad = 14
         cur = self.current_prefs(st)
@@ -3473,9 +3480,20 @@ class Screen:
                             cur["light_off"] == v) for v, n in LIGHT_OFF]),
             ("Idle off", [(n, ("pref", "idle", v),
                            cur["idle"] == v) for v, n in IDLE_OFF]),
+            # Automatic PA, flow calibration and the bed mesh at print
+            # start live on their own page (draw_cal_page)
+            ("Print cal", [("Auto PA, flow cal, bed mesh  >",
+                            ("cal_page",), False)]),
+            # Which flow ratio prints (hark_cfs_slots REEL_FLOW): the one the
+            # file was sliced with, or each reel's saved (calibrated) one
+            ("Flow", [(n, ("gcode", "REEL_FLOW ENABLE=%d" % v),
+                       self.reel_flow(st) == v)
+                      for v, n in ((0, "Slicer's"),
+                                   (1, "Reel's calibrated"))]),
         ]
-        rh, gap = 42, 7
-        y = y0 + 8
+        # 34 + 5 fits ten rows (with time-lapse) in the 416 px body
+        rh, gap = 34, 5
+        y = y0 + 6
         for label, opts in rows:
             self.text(d, (x0 + pad, y + rh // 2), label, "s", "muted",
                       anchor="lm")
@@ -3747,6 +3765,21 @@ class Screen:
             return text + ", not turning", "error"
         return text, "muted"
 
+    @staticmethod
+    def reel_flow(st):
+        """1 when each reel's saved flow ratio prints (the default)."""
+        on = (st.get("hark_cfs_slots") or {}).get("reel_flow")
+        return 0 if on is False else 1
+
+    @staticmethod
+    def flow_auto(st):
+        """1 when the flow calibration runs at print start."""
+        auto = (st.get("hark_flow_cal") or {}).get("auto")
+        if auto is None:
+            auto = (st.get("gcode_macro _FLOW_AUTO") or {}).get(
+                "on_print_start", 0)
+        return 1 if auto else 0
+
     def draw_storage_row(self, d, body, y, rh, st):
         x0, y0, x1, y1 = body
         pad = 14
@@ -3792,6 +3825,59 @@ class Screen:
             fx = x1 - pad - (len(small) - i) * (fw + 8) + 8
             self.button(d, (fx, y, fx + fw, y + rh), text, action, colour,
                         enabled, "xs")
+
+    def draw_cal_page(self, d, body, st):
+        """Settings > Print calibration: what runs on its own before a
+        print. Saved on the printer (PRINT_CAL, FLOW_CAL_AUTO), so the
+        choice survives a restart."""
+        x0, y0, x1, y1 = body
+        pad, label_w, rh, gap = 14, 190, 48, 12
+        pc = st.get("hark_print_cal")
+        pa = st.get("gcode_macro _PA_AUTO") or {}
+        if pc:
+            pa_load, pa_start = pc.get("pa_on_load"), pc.get("pa_on_print_start")
+            mesh = pc.get("mesh", 1)
+            set_pa = lambda k, v: "PRINT_CAL %s=%d" % (k, v)
+        else:
+            # older firmware: the macro variables only (lost at a restart)
+            pa_load, pa_start, mesh = pa.get("on_load"), pa.get("on_print_start"), None
+            set_pa = lambda k, v: ("SET_GCODE_VARIABLE MACRO=_PA_AUTO VARIABLE=%s VALUE=%d"
+                                   % ({"PA_LOAD": "on_load", "PA_START": "on_print_start"}[k], v))
+        self.text(d, (x0 + pad, y0 + 10), "Print calibration", "m",
+                  width=x1 - x0 - 2 * pad)
+        self.text(d, (x0 + pad, y0 + 44),
+                  "Runs on its own before printing. Saved on the printer.",
+                  "xs", "muted",
+                  width=x1 - x0 - 2 * pad)
+        rows = [
+            ("PA when loading", [(n, ("gcode", set_pa("PA_LOAD", v)),
+                                  int(bool(pa_load)) == v)
+                                 for v, n in ((0, "Off"), (1, "Measure + save"))]),
+            ("PA at print start", [(n, ("gcode", set_pa("PA_START", v)),
+                                    int(bool(pa_start)) == v)
+                                   for v, n in ((0, "Off"), (1, "Measure + save"))]),
+            ("Flow cal", [(n, ("gcode", "FLOW_CAL_AUTO ENABLE=%d" % v),
+                           self.flow_auto(st) == v)
+                          for v, n in ((0, "Off"), (1, "Every print start"))]),
+        ]
+        if mesh is not None:
+            rows.append(("Bed levelling", [(n, ("gcode", "PRINT_CAL MESH=%d" % v),
+                                            int(bool(mesh)) == v)
+                                           for v, n in ((0, "Off (Z tap only)"),
+                                                        (1, "Mesh every print"))]))
+        y = y0 + 84
+        for label, opts in rows:
+            self.text(d, (x0 + pad, y + rh // 2), label, "s", "muted",
+                      anchor="lm")
+            bx = x0 + pad + label_w
+            bw = (x1 - pad - bx - (len(opts) - 1) * 10) // len(opts)
+            for i, (text, action, on) in enumerate(opts):
+                box = (bx + i * (bw + 10), y, bx + i * (bw + 10) + bw, y + rh)
+                self.button(d, box, text, action,
+                            "accent" if on else "muted", True, "s")
+            y += rh + gap
+        self.button(d, (x0 + pad, y1 - 58, x0 + pad + 200, y1 - 10), "Back",
+                    ("cal_back",), "muted", True, "s")
 
     def draw_zone_pick(self, d, body):
         x0, y0, x1, y1 = body
@@ -4303,6 +4389,7 @@ class Screen:
             self.dirty = True
             if kind == "page":
                 self.zone_pick = False
+                self.cal_page = False
                 if action[1] == "settings":
                     self.zone_name = None    # read again when shown
                 if action[1] != self.page or self.editor:
@@ -4393,6 +4480,10 @@ class Screen:
                 self.set_pref(action[1], action[2], mr, self.last_st)
             elif kind == "zone_pick":
                 self.zone_pick = True
+            elif kind == "cal_page":
+                self.cal_page = True
+            elif kind == "cal_back":
+                self.cal_page = False
             elif kind == "zone_back":
                 self.zone_pick = False
             elif kind == "zone_set":
