@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "built_from_commit": "99319f69ae0b516247120976ec5aad4920229884",
+  "built_from_commit": "ea232952651e5d7cafed7d2dd3c3266cbe09ace5",
   "source_inputs": {
     "VERSION": "a12a1be3f3ee06a3159f695083ad52c3f3dc2ae1f071b7aece71cfe4c1f1e133",
     "install.sh": "a18c37fe50db5b2a33c5659cccf2a7e5c5d9029bb4c28d47bbc45979eaea59ee",
@@ -54,12 +54,12 @@
     "touchscreen/src/screen.h": "aaf644dd1ad7712439007747e97ea6200992e9769f4f4add16a5b20d0bd81664",
     "touchscreen/src/ui.c": "bd9600c44a29b4a828c2c0673c212af4ed566761bf57fd4db2fc20f07fd93360",
     "touchscreen/src/view_inputs.c": "f08549d797844dcc4c032fc8cfaa78f4ad7c16d7272ee9effbeb12b39af9729b",
-    "touchscreen/src/views.c": "c3f2a1b1c24e9539cf6476172a536131a8accba6559f9bd3481bd0b4640ce614"
+    "touchscreen/src/views.c": "8507dc7308babb66d02c1f740fa2700491a61648d42d6e07c1b15bf2ba4aca74"
   },
-  "source_fingerprint": "abc5ce26700b5227d3e0238f29c7b8240035ee2a16fafc554c8c545a9a5151f3",
+  "source_fingerprint": "8586e906fcf01e924da83320db00c89115cd1586e57e12e892b45a4435cd9399",
   "target": "armv7-linux-gnueabihf",
   "files": {
-    "VERSION": "9556b883f54fc1fa8b8ecf37dd0ef09bf868c41c5a3272e6110e213b1d7c9eb6",
+    "VERSION": "95d4d60476c22db5fa1a0052b37349780c827458cf9a81e5f61a740a303949a7",
     "assets/activity-24.png": "9d0040919c37b7592ea3ca004f464b8ea9280ac9913c8d5e61ffcdf65caa8c22",
     "assets/arrow-big-up-28.png": "ba160bf471039cad4e702630eda547c05c26a465762931fea9dac94ddaef20ba",
     "assets/arrow-down-36.png": "c215f324f01fe17e22a598a5a15505d7581ff4009eb08753d133853eb7e0628c",
@@ -133,6 +133,6 @@
     "licenses/Lucide-LICENSE": "1e7290b35280a048667bbf0ebabac1c7fd52a75300e8b2946ac165715997f2bc",
     "licenses/Noto-LICENSE": "075f91382875da1c4b491f1facf2586f55448705133264d98ce15cab6211b125",
     "licenses/cJSON-LICENSE": "a36dda207c36db5818729c54e7ad4e8b0c6fba847491ba64f372c1a2037b6d5c",
-    "openklipper-screen": "ca8bea989faec2f1d64745a8841bc2eb1a5849fafc257013be49c465dfdfe6b3"
+    "openklipper-screen": "8c4deb972616009d79a482f1f70c1656536fc38f49e1b90b46b2a74bacac759b"
   }
 }
