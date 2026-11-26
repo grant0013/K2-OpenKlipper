@@ -32,7 +32,7 @@ def source_inputs(source):
             "package-lock.json",
         )
     ]
-    paths += [source.parent / "VERSION", source.parent / "install.sh"]
+    paths += [source / "LICENSE", source.parent / "VERSION", source.parent / "install.sh"]
     return {
         p.relative_to(source.parent).as_posix(): hashlib.sha256(
             p.read_bytes()
@@ -64,6 +64,7 @@ def validate(source, package):
         "openklipper-screen",
         "VERSION",
         "assets/nav-house-56.png",
+        "licenses/Touchscreen-LICENSE",
         "licenses/LVGL-LICENSE",
         "licenses/cJSON-LICENSE",
         "licenses/Liberation-LICENSE",

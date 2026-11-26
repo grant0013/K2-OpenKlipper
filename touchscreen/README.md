@@ -415,6 +415,12 @@ fails, the native files are retained. With no published releases it checks
 upstream `main`. To choose a version explicitly, pass `--ref <tag>`.
 The full reinstall can restart printer control, so do not run it during a print.
 
+## License
+
+This touchscreen component is licensed under the [GNU General Public License
+version 3](LICENSE). Third-party libraries, fonts and icons retain their own
+licenses and notices in `assets/` and `precompiled/armv7/licenses/`.
+
 ## For developers
 
 The [developer guide](developer-tools/README.md) covers architecture, builds,
