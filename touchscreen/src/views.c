@@ -129,7 +129,7 @@ static const char *filament_activity_label(void) {
 static bool filament_slot_busy(const char *slot) {
     return *slot && *filament_activity_label() && !strcmp(slot, S("filament_activity.slot"));
 }
-static void filament_spinner(lv_obj_t *parent, int x, int y, int size) {
+static lv_obj_t *filament_spinner(lv_obj_t *parent, int x, int y, int size) {
     lv_obj_t *spinner = lv_spinner_create(parent, 1000, 60);
     lv_obj_set_pos(spinner, x, y);
     lv_obj_set_size(spinner, size, size);
@@ -138,6 +138,7 @@ static void filament_spinner(lv_obj_t *parent, int x, int y, int size) {
     lv_obj_set_style_arc_color(spinner, colour("343e4b"), LV_PART_MAIN);
     lv_obj_set_style_arc_color(spinner, app.accent, LV_PART_INDICATOR);
     lv_obj_clear_flag(spinner, LV_OBJ_FLAG_CLICKABLE);
+    return spinner;
 }
 /* The extruder sensor confirms the path; spool presence is a separate state.
  * An old active_slot after unloading must never imply filament in the nozzle. */
@@ -855,7 +856,8 @@ static void filament_view(void) {
                                            : "Empty",
                       4, content_y + 109, tile_width - 8, &font_ui_16, false));
         if (filament_slot_busy(slot)) {
-            filament_spinner(tile, (tile_width - 30) / 2, content_y + 59, 30);
+            lv_obj_t *spinner = filament_spinner(tile, 0, 0, 30);
+            lv_obj_align_to(spinner, spool, LV_ALIGN_CENTER, 0, 0);
             centered(text(tile, filament_activity_label(), 2, content_y + 140, tile_width - 4,
                           &font_ui_14, false));
         } else if (feeding_slot(slot))
