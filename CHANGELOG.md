@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **Pressure advance sweep from the Creality Hi (`PA_SWEEP_CAL`).** Creality's
+  own strain-gauge test, as the Hi port runs it: over the chute, 31 rounds
+  of one PA each, a slow stroke, a fast stroke back and a slow stroke home,
+  extruding in the air while the head moves (Klipper only applies PA to
+  moves with X/Y in them). Where the gauge force peaks inside each fast
+  stroke gives the PA (`PA_SWEEP_COMPUTE`, the knee), read on the host; no
+  Creality program needed. The Hi moves its bed, the K2 moves its head, so
+  the K2 runs a scaled copy that fits between the bucket lever and the wiper
+  pad (14 mm with `purge_x: 110`): stroke, speed and accel all scaled alike,
+  so the extruder runs exactly the Hi's flow against time. The gauge is
+  logged with `HIGH_HOLD=1` so a flow step up does not freeze it.
+  `PA_SWEEP_CAL TEMP=250 MATERIAL=PETG` (or `CENTRE=0.05`, `SAVE=1` to keep it
+  in the slot). `_PA_AUTO variable_method: 'blend'` runs the Hi's automatic
+  blend (step test plus sweep); the default stays `'step'` until the sweep
+  is checked against printed chevrons on a K2.
 - **Loads, unloads, nozzle cleaning and print start no longer pause at
   temperature.** `M109` waits for the hotend PID to settle within 1 C after
   its ~5 C overshoot, which held the nozzle at temperature for 25-36 s before
