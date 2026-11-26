@@ -1,9 +1,10 @@
 {
   "format": 1,
-  "built_from_commit": "ea232952651e5d7cafed7d2dd3c3266cbe09ace5",
+  "built_from_commit": "5d3b389e501172ca6dd0c7284639a102570b9e00",
   "source_inputs": {
     "VERSION": "a12a1be3f3ee06a3159f695083ad52c3f3dc2ae1f071b7aece71cfe4c1f1e133",
     "install.sh": "a18c37fe50db5b2a33c5659cccf2a7e5c5d9029bb4c28d47bbc45979eaea59ee",
+    "touchscreen/LICENSE": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
     "touchscreen/assets/Liberation-LICENSE": "f32df582a2aab128c07b2f7e36e7b928dc5f6bd82657b905c04f91459f9e5cf9",
     "touchscreen/assets/LiberationSans-Regular.ttf": "075e71be4c58beda172ecb574a799308f04c3d054c6a5b7434954d3b0f1b28d8",
     "touchscreen/assets/Lucide-LICENSE": "1e7290b35280a048667bbf0ebabac1c7fd52a75300e8b2946ac165715997f2bc",
@@ -38,12 +39,12 @@
     "touchscreen/developer-tools/build_assets.py": "b915540d9de6f55962cf0ddfb6db38a119c73e7aa25bd0888bd9c41ad7373501",
     "touchscreen/developer-tools/package-lock.json": "4ca3a70fcccea581716e519516bdc58f853972a564c13d4987444906db4cdda3",
     "touchscreen/developer-tools/package.json": "d4f38d17f563400d5a3316ffd56cf17a11da743d4186b88d7d6206d9669b7496",
-    "touchscreen/developer-tools/package_arm.py": "372020ee87978ff6e70036c2a12b764d51a24c7a60afd427781e1ba63b009838",
+    "touchscreen/developer-tools/package_arm.py": "8140bb620b58c8db52a998223936b0afa843eb4670d4075088ea5bbc311a1e35",
     "touchscreen/installation/install.sh": "c471599048c5fdeb897266b493fc828dfe2b5f01248f37f37eab9e0f07d601c8",
     "touchscreen/installation/migrate.py": "46b260c4b2032349e6c6a7e91779c95dbeebf7795c05ea2c54a4b1cca1af7e30",
     "touchscreen/installation/uninstall.py": "6c7546cdab1a617642803f8112534efa7d42a52d8215f1ab52f5b813ababf9ae",
     "touchscreen/installation/uninstall.sh": "2137b9cdf2083617ea69cd9e8e2cc3db7ff72d8eba428c8051aee16f71ed0169",
-    "touchscreen/installation/validate_package.py": "f37227744dfbf583a4d3c9b28f24116274e57916ea2643802364d261ba91afb0",
+    "touchscreen/installation/validate_package.py": "55284563bf27ad917e45a1145dbb024113646036e41169cd901237b2cb0bb30c",
     "touchscreen/runtime/launch.py": "7d482ccee3d425fafd56cd53e10cdfd78815602038875d4cc2d9fb09434e53ed",
     "touchscreen/runtime/native-screen.cfg.example": "a1c40229dc3577391ac08405f238af44049f60fe2b83ce0702657a615c6fde56",
     "touchscreen/runtime/start.sh": "ec5236d965d3167cccb024f8fc289b437933f48a71d1d9ca626766c2d6191445",
@@ -56,10 +57,10 @@
     "touchscreen/src/view_inputs.c": "f08549d797844dcc4c032fc8cfaa78f4ad7c16d7272ee9effbeb12b39af9729b",
     "touchscreen/src/views.c": "8507dc7308babb66d02c1f740fa2700491a61648d42d6e07c1b15bf2ba4aca74"
   },
-  "source_fingerprint": "8586e906fcf01e924da83320db00c89115cd1586e57e12e892b45a4435cd9399",
+  "source_fingerprint": "2a047e1fa2824e6c74e953f74244842a7f690a12da9945ead23e1f9ea8a1b856",
   "target": "armv7-linux-gnueabihf",
   "files": {
-    "VERSION": "95d4d60476c22db5fa1a0052b37349780c827458cf9a81e5f61a740a303949a7",
+    "VERSION": "5925a30d4d934410b2da705ffba17ad9b795929d8a44e4001092954d46fca66e",
     "assets/activity-24.png": "9d0040919c37b7592ea3ca004f464b8ea9280ac9913c8d5e61ffcdf65caa8c22",
     "assets/arrow-big-up-28.png": "ba160bf471039cad4e702630eda547c05c26a465762931fea9dac94ddaef20ba",
     "assets/arrow-down-36.png": "c215f324f01fe17e22a598a5a15505d7581ff4009eb08753d133853eb7e0628c",
@@ -132,6 +133,7 @@
     "licenses/Liberation-LICENSE": "f32df582a2aab128c07b2f7e36e7b928dc5f6bd82657b905c04f91459f9e5cf9",
     "licenses/Lucide-LICENSE": "1e7290b35280a048667bbf0ebabac1c7fd52a75300e8b2946ac165715997f2bc",
     "licenses/Noto-LICENSE": "075f91382875da1c4b491f1facf2586f55448705133264d98ce15cab6211b125",
+    "licenses/Touchscreen-LICENSE": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
     "licenses/cJSON-LICENSE": "a36dda207c36db5818729c54e7ad4e8b0c6fba847491ba64f372c1a2037b6d5c",
     "openklipper-screen": "8c4deb972616009d79a482f1f70c1656536fc38f49e1b90b46b2a74bacac759b"
   }
