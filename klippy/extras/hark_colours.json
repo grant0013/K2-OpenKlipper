@@ -1,0 +1,375 @@
+{
+ "source": "Hark Tech filament stock (harktech.co.uk/api/filament-stock) 2026-11-26 + the 17 basic colours",
+ "colours": [
+  {
+   "group": "Solid",
+   "name": "Black",
+   "hex": "000000"
+  },
+  {
+   "group": "Solid",
+   "name": "White",
+   "hex": "FFFFFF"
+  },
+  {
+   "group": "Solid",
+   "name": "Grey",
+   "hex": "808080"
+  },
+  {
+   "group": "Solid",
+   "name": "Silver",
+   "hex": "C0C0C0"
+  },
+  {
+   "group": "Solid",
+   "name": "Red",
+   "hex": "E53935"
+  },
+  {
+   "group": "Solid",
+   "name": "Orange",
+   "hex": "FB8C00"
+  },
+  {
+   "group": "Solid",
+   "name": "Yellow",
+   "hex": "FDD835"
+  },
+  {
+   "group": "Solid",
+   "name": "Gold",
+   "hex": "FFC107"
+  },
+  {
+   "group": "Solid",
+   "name": "Green",
+   "hex": "43A047"
+  },
+  {
+   "group": "Solid",
+   "name": "Lime",
+   "hex": "C0CA33"
+  },
+  {
+   "group": "Solid",
+   "name": "Cyan",
+   "hex": "26EEEE"
+  },
+  {
+   "group": "Solid",
+   "name": "Blue",
+   "hex": "1E88E5"
+  },
+  {
+   "group": "Solid",
+   "name": "Navy",
+   "hex": "1A237E"
+  },
+  {
+   "group": "Solid",
+   "name": "Purple",
+   "hex": "8E24AA"
+  },
+  {
+   "group": "Solid",
+   "name": "Pink",
+   "hex": "EC407A"
+  },
+  {
+   "group": "Solid",
+   "name": "Brown",
+   "hex": "6D4C41"
+  },
+  {
+   "group": "Solid",
+   "name": "Beige",
+   "hex": "D7CCC8"
+  },
+  {
+   "group": "Solid",
+   "name": "Light Grey",
+   "hex": "B8BCC2"
+  },
+  {
+   "group": "Solid",
+   "name": "Dark Grey",
+   "hex": "4A4D56"
+  },
+  {
+   "group": "Solid",
+   "name": "Dark Green",
+   "hex": "145A32"
+  },
+  {
+   "group": "Solid",
+   "name": "Warm White",
+   "hex": "F3EAD9"
+  },
+  {
+   "group": "Solid",
+   "name": "Sky Blue",
+   "hex": "87CEEB"
+  },
+  {
+   "group": "Matte",
+   "name": "Matte Black",
+   "hex": "1A1A1A"
+  },
+  {
+   "group": "Matte",
+   "name": "Matte White",
+   "hex": "F2F2EF"
+  },
+  {
+   "group": "Matte",
+   "name": "Matte Slate Grey",
+   "hex": "6E747A"
+  },
+  {
+   "group": "Matte",
+   "name": "Matte Beige",
+   "hex": "D9C7A7"
+  },
+  {
+   "group": "Matte",
+   "name": "Matte Navy",
+   "hex": "1F2A44"
+  },
+  {
+   "group": "Matte",
+   "name": "Matte Olive",
+   "hex": "5B6236"
+  },
+  {
+   "group": "Matte",
+   "name": "Matte Terracotta",
+   "hex": "C2643F"
+  },
+  {
+   "group": "Matte",
+   "name": "Matte Mint",
+   "hex": "A8DCC4"
+  },
+  {
+   "group": "Matte",
+   "name": "Matte Peach Pink",
+   "hex": "F2B8A8"
+  },
+  {
+   "group": "Silk",
+   "name": "Silk Copper",
+   "hex": "D7902D"
+  },
+  {
+   "group": "Silk",
+   "name": "Silk Black",
+   "hex": "1A1A1A"
+  },
+  {
+   "group": "Silk",
+   "name": "Silk Red",
+   "hex": "C0392B"
+  },
+  {
+   "group": "Silk",
+   "name": "Silk Orange",
+   "hex": "E67E22"
+  },
+  {
+   "group": "Silk",
+   "name": "Silk Yellow",
+   "hex": "F1C40F"
+  },
+  {
+   "group": "Silk",
+   "name": "Silk Blue",
+   "hex": "2980B9"
+  },
+  {
+   "group": "Silk",
+   "name": "Silk Gold",
+   "hex": "D4A62A"
+  },
+  {
+   "group": "Silk",
+   "name": "Silk Silver",
+   "hex": "C3C7CC"
+  },
+  {
+   "group": "Silk",
+   "name": "Silk Pearl White",
+   "hex": "F1EDE4"
+  },
+  {
+   "group": "Silk",
+   "name": "Silk Rose Gold",
+   "hex": "C98F83"
+  },
+  {
+   "group": "Silk",
+   "name": "Silk Purple",
+   "hex": "6A4FC7"
+  },
+  {
+   "group": "Silk",
+   "name": "Silk Brass",
+   "hex": "B08D57"
+  },
+  {
+   "group": "Silk",
+   "name": "Silk Bronze",
+   "hex": "A97142"
+  },
+  {
+   "group": "Silk",
+   "name": "Silk Champagne",
+   "hex": "E4CFA3"
+  },
+  {
+   "group": "Silk",
+   "name": "Silk Jade",
+   "hex": "3FA37A"
+  },
+  {
+   "group": "Silk",
+   "name": "Silk Holly Green",
+   "hex": "1F7A4A"
+  },
+  {
+   "group": "Silk",
+   "name": "Silk Pink",
+   "hex": "F08BB4"
+  },
+  {
+   "group": "Silk",
+   "name": "Silk Sky Blue",
+   "hex": "6EC1EA"
+  },
+  {
+   "group": "Multi",
+   "name": "Rainbow",
+   "hex": "9B4DCA"
+  },
+  {
+   "group": "Multi",
+   "name": "Gold / Silver",
+   "hex": "CCB67B"
+  },
+  {
+   "group": "Multi",
+   "name": "Red / Gold",
+   "hex": "C6642C"
+  },
+  {
+   "group": "Multi",
+   "name": "Black / Purple",
+   "hex": "4B2D6F"
+  },
+  {
+   "group": "Multi",
+   "name": "Blue / Green",
+   "hex": "1F8096"
+  },
+  {
+   "group": "Multi",
+   "name": "Gold / Silver / Copper",
+   "hex": "C59D66"
+  },
+  {
+   "group": "Multi",
+   "name": "Red / Gold / Purple",
+   "hex": "AD585D"
+  },
+  {
+   "group": "Multi",
+   "name": "Black / Gold",
+   "hex": "786024"
+  },
+  {
+   "group": "Multi",
+   "name": "Pink / Gold",
+   "hex": "E2986F"
+  },
+  {
+   "group": "Multi",
+   "name": "Blue / Purple",
+   "hex": "4D4FC8"
+  },
+  {
+   "group": "Multi",
+   "name": "Black / Gold / Purple",
+   "hex": "795558"
+  },
+  {
+   "group": "Multi",
+   "name": "Red / Gold / Blue",
+   "hex": "8E6363"
+  },
+  {
+   "group": "Multi",
+   "name": "Blue / Green / Orange",
+   "hex": "627D72"
+  },
+  {
+   "group": "Multi",
+   "name": "Pastel Rainbow",
+   "hex": "CACBD1"
+  },
+  {
+   "group": "Multi",
+   "name": "Lilac to Violet",
+   "hex": "9062C7"
+  },
+  {
+   "group": "Multi",
+   "name": "Pink, Yellow, Blue, Green",
+   "hex": "98A791"
+  },
+  {
+   "group": "Multi",
+   "name": "Candy Rainbow",
+   "hex": "CBAEBE"
+  },
+  {
+   "group": "Multi",
+   "name": "Earth Tone",
+   "hex": "7C794A"
+  },
+  {
+   "group": "Multi",
+   "name": "Metallic Fusion",
+   "hex": "AE897E"
+  },
+  {
+   "group": "Carbon fibre",
+   "name": "CF Black",
+   "hex": "1A1A1A"
+  },
+  {
+   "group": "Carbon fibre",
+   "name": "CF Violet Purple",
+   "hex": "583061"
+  },
+  {
+   "group": "Carbon fibre",
+   "name": "CF Brick Red",
+   "hex": "9F332A"
+  },
+  {
+   "group": "Carbon fibre",
+   "name": "CF Indigo Blue",
+   "hex": "324585"
+  },
+  {
+   "group": "Carbon fibre",
+   "name": "CF Malachite Green",
+   "hex": "16B08E"
+  },
+  {
+   "group": "Carbon fibre",
+   "name": "CF Titan Gray",
+   "hex": "565656"
+  }
+ ]
+}

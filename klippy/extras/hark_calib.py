@@ -1,10 +1,19 @@
-# Printed filament calibrations started from the printer: flow ratio pads and
-# a retraction test, then pick the best result and save it to the slot.
+# Printed filament calibrations started from the printer: flow ratio pads, a
+# retraction test, a pressure advance pattern and a temperature tower, then
+# pick the best result and save it to the slot.
 #
 #   CALIBRATE_FLOW SLOT=x [BASE=0.95] [STEP=0.02]
 #   CALIBRATE_RETRACTION SLOT=x [START=0.2] [STEP=0.2]
-#   CALIB_SET KIND=flow|retraction SLOT=x VALUE=v    (the pick)
+#   CALIBRATE_PA SLOT=x [CENTRE=slot PA] [STEP=0.006] [COUNT=11]
+#   CALIBRATE_TEMP SLOT=x [START=hot end] [END=cool end] [STEP=5]
+#   CALIB_SET KIND=flow|retraction|pa|temp SLOT=x VALUE=v    (the pick)
 #   CALIB_SKIP                                       (keep the old value)
+#
+# The slot record is what every later print uses (hark_filament_override puts
+# it over the sliced file's values), and the pick is also remembered for that
+# filament profile and colour (hark_cfs_slots tuned). The test files opt out
+# of the override themselves (FILAMENT_OVERRIDE PRINT=0): they set their own
+# flow, retraction, PA and temperatures on purpose.
 #
 # Each command writes its test print into the G-code folder and starts it.
 # The file's last line, CALIB_PICK, asks which result is best: a Mainsail
@@ -35,7 +44,20 @@ DIGITS = {'0': 'abcdef', '1': 'bc', '2': 'abged', '3': 'abgcd', '4': 'fgbc',
           '5': 'afgcd', '6': 'afgedc', '7': 'abc', '8': 'abcdefg',
           '9': 'gfabcd'}
 KINDS = {'flow': ('FLOW', 'flow ratio', 'pad'),
-         'retraction': ('RETRACT', 'retraction', 'pillar pair')}
+         'retraction': ('RETRACT', 'retraction', 'pillar pair'),
+         'pa': ('PA', 'pressure advance', 'chevron'),
+         'temp': ('NOZZLE', 'nozzle temperature', 'tower block')}
+HINTS = {
+    'flow': "Look at the tops side-on: the lowest number where the lines "
+            "have closed up, before ridges.",
+    'retraction': "Look between each pair of pillars: the shortest "
+                  "retraction with no strings.",
+    'pa': "Look at the chevron tips (label = PA x1000): the sharpest, "
+          "even-width corner. Too little bulges, too much leaves a gap.",
+    'temp': "Blocks run bottom (hottest) to top. Pick the coolest block "
+            "with clean walls and a firm overhang, before strings, gloss "
+            "or sag get worse.",
+}
 
 
 def area(w, h):
@@ -99,26 +121,34 @@ class Path:
             x += w + gap
 
 
-def square(g, x0, y0, size, w, walls, e, wall_v, fill_v, along_x):
-    """Square with walls and a zig-zag solid fill."""
+def square(g, x0, y0, size, w, walls, e, wall_v, fill_v, along_x,
+           size_y=None):
+    """Square (or size x size_y rectangle) with walls and a zig-zag solid
+    fill."""
+    sx, sy = size, size if size_y is None else size_y
     s = spacing(w, H)
     for k in reversed(range(walls)):
         i = w / 2. + k * s
-        g.path([(x0 + i, y0 + i), (x0 + size - i, y0 + i),
-                (x0 + size - i, y0 + size - i), (x0 + i, y0 + size - i),
+        g.path([(x0 + i, y0 + i), (x0 + sx - i, y0 + i),
+                (x0 + sx - i, y0 + sy - i), (x0 + i, y0 + sy - i),
                 (x0 + i, y0 + i)], e, wall_v)
     lo = w / 2. + walls * s
-    hi = size - lo
-    if hi - lo < s / 2.:
+    hi_x, hi_y = sx - lo, sy - lo
+    if hi_x - lo < s / 2. or hi_y - lo < s / 2.:
         return
-    n = max(2, int((hi - lo) / s) + 1)
-    step = (hi - lo) / (n - 1)
+    # lines run along one axis and step across the other
+    across = hi_y if along_x else hi_x
+    n = max(2, int((across - lo) / s) + 1)
+    step = (across - lo) / (n - 1)
     pts = []
     for j in range(n):
         c = lo + j * step
-        a, b = (lo, hi) if j % 2 == 0 else (hi, lo)
-        pts += ([(x0 + a, y0 + c), (x0 + b, y0 + c)] if along_x
-                else [(x0 + c, y0 + a), (x0 + c, y0 + b)])
+        if along_x:
+            a, b = (lo, hi_x) if j % 2 == 0 else (hi_x, lo)
+            pts += [(x0 + a, y0 + c), (x0 + b, y0 + c)]
+        else:
+            a, b = (lo, hi_y) if j % 2 == 0 else (hi_y, lo)
+            pts += [(x0 + c, y0 + a), (x0 + c, y0 + b)]
     g.path(pts, e, fill_v)
 
 
@@ -136,7 +166,8 @@ def fan_value(rec, fan='full'):
 def start_lines(slot, temp, bed, header, objects, style='k2', material='',
                 layers=0):
     tool = 0 if slot == 'E' else SLOTS.index(slot)
-    lines = list(header)
+    # the slot's saved values must not replace the test's own
+    lines = list(header) + ["FILAMENT_OVERRIDE PRINT=0"]
     for name, (x0, y0, x1, y1) in objects:
         lines.append(
             "EXCLUDE_OBJECT_DEFINE NAME=%s CENTER=%.1f,%.1f "
@@ -269,6 +300,128 @@ def retraction_test(slot, rec, start, step, count=7, style='k2', fan='full',
     return g.out, lengths
 
 
+def pa_pattern(slot, rec, pas, centre, style='k2', fan='full',
+               name='K2 OpenKlipper'):
+    """Andrew Ellis style chevrons (OrcaSlicer's PA pattern), each at its
+    own pressure advance, labelled x1000 under the bottom leg."""
+    w, layers, walls, leg, pitch, cy = 0.45, 4, 3, 30., 10., CENTRE[1]
+    temp = int(rec.get('nozzle_temp') or 220)
+    bed = int(rec.get('bed_temp') or 55)
+    dx = leg * math.cos(math.radians(45))
+    dy = leg * math.sin(math.radians(45))
+    x0 = CENTRE[0] - (pitch * (len(pas) - 1) + dx) / 2.
+    xs = [x0 + i * pitch for i in range(len(pas))]
+    sp = spacing(w, H)
+    e = area(w, H) / FIL_AREA * (rec.get('flow_ratio') or 1.)
+    g = Path(rec.get('retract_length') or 1.0)
+    g.out = start_lines(
+        slot, temp, bed,
+        ["; %s pressure advance pattern: slot %s, %s (label = PA x1000)"
+         % (name, slot, ", ".join("%.3f" % p for p in pas))],
+        [('pa_pattern', (xs[0] - 2, cy - dy - 8, xs[-1] + dx + 4,
+                         cy + dy + 2))],
+        style, rec.get('type'), layers)
+    # the print start may hold a measured PA over the file's: release it,
+    # each chevron prints at its own value
+    g.emit("PA_HOLD_MEASURED")
+    g.emit("EXCLUDE_OBJECT_START NAME=pa_pattern")
+    for layer in range(layers):
+        g.z = H * (layer + 1)
+        g.emit(";LAYER:%d" % layer)
+        if layer == 1:
+            g.emit("M106 S%d" % fan_value(rec, fan))
+        speed = 30. if layer == 0 else 120.
+        g.emit("SET_VELOCITY_LIMIT ACCEL=%d" % (1000 if layer == 0 else 5000))
+        g.emit("G1 Z%.3f F600" % g.z)
+        for x, pa in zip(xs, pas):
+            g.emit("SET_PRESSURE_ADVANCE ADVANCE=%.4f" % pa)
+            for k in range(walls):
+                off = k * sp / math.sin(math.radians(45))
+                g.travel(x + off + dx, cy + dy)
+                g.line(x + off, cy, e, speed)
+                g.line(x + off + dx, cy - dy, e, speed)
+        if layer < 2:
+            g.emit("SET_PRESSURE_ADVANCE ADVANCE=%.4f" % centre)
+            for x, pa in zip(xs, pas):
+                text = "%d" % round(pa * 1000)
+                g.label(x + dx - len(text) * 2.0 + 2., cy - dy - 7., text,
+                        area(0.4, H) / FIL_AREA, w=2.4, h=4.2, gap=0.9)
+    g.emit("EXCLUDE_OBJECT_END NAME=pa_pattern")
+    g.emit("SET_PRESSURE_ADVANCE ADVANCE=%.4f" % centre)
+    g.emit("G1 E-%.2f F2400" % g.retract)
+    g.emit("G1 Z10 F600")
+    return g.out
+
+
+def temp_tower(slot, rec, temps, style='k2', fan='full',
+               name='K2 OpenKlipper', block_h=6.):
+    """One block per temperature, hottest at the bottom. Each block is two
+    10 mm pillars 15 mm apart (strings show in the gap; the travel retracts
+    by the slot's length) and the right pillar's outer side leans out at
+    45 degrees (overhang droop). A 0.6 mm step in at the foot of each block
+    marks where the next temperature starts."""
+    w, size, gap, walls = 0.42, 10., 15., 2
+    bed = int(rec.get('bed_temp') or 55)
+    flow = rec.get('flow_ratio') or 1.
+    e = area(w, H) / FIL_AREA * flow
+    per = int(round(block_h / H))
+    x_a = CENTRE[0] - (2 * size + gap + block_h) / 2.
+    x_b = x_a + size + gap
+    y0 = CENTRE[1] - size / 2.
+    height = per * len(temps) * H
+    g = Path(rec.get('retract_length') or 0.8,
+             float(rec.get('retract_speed') or 40.), hop=0)
+    g.out = start_lines(
+        slot, temps[0], bed,
+        ["; %s temperature tower: slot %s, bottom to top %s C, %.0f mm "
+         "blocks" % (name, slot, ", ".join("%d" % t for t in temps),
+                     block_h)],
+        [('temp_tower', (x_a - 1, y0 - 9, x_b + size + block_h + 1,
+                         y0 + size + 1))],
+        style, rec.get('type'), per * len(temps))
+    g.emit("EXCLUDE_OBJECT_START NAME=temp_tower")
+    for layer in range(per * len(temps)):
+        block, inner = divmod(layer, per)
+        temp = temps[block]
+        g.z = H * (layer + 1)
+        g.emit(";LAYER:%d" % layer)
+        if layer == 1:
+            g.emit("M106 S%d" % fan_value(rec, fan))
+        if inner == 0 and block > 0:
+            # off the part to change temperature, so the wait oozes there
+            g.emit("G1 E-%.2f F2400" % g.retract)
+            g.emit("G1 Z%.3f F600" % (g.z + 1.))
+            g.emit("G1 X%.3f Y%.3f F12000" % (x_b + size + block_h + 8.,
+                                               y0 - 8.))
+            g.emit("M117 Temperature tower %d C" % temp)
+            g.emit("M104 S%d" % temp)
+            g.emit("TEMPERATURE_WAIT SENSOR=extruder MINIMUM=%d MAXIMUM=%d"
+                   % (temp - 2, temp + 2))
+            g.emit("RESPOND MSG=\"Temperature tower: block %d of %d at %d C\""
+                   % (block + 1, len(temps), temp))
+            g.emit("G1 E%.2f F2400" % g.retract)
+            g.pos = None
+        g.emit("SET_VELOCITY_LIMIT ACCEL=%d" % (2000 if layer == 0 else 5000))
+        g.emit("G1 Z%.3f F600" % g.z)
+        v = 25 if layer == 0 else 80
+        notch = 0.6 if (block > 0 and inner < 3) else 0.
+        # 45 degrees: out one layer height per layer, after the notch
+        lean = max(0, inner - 2) * H
+        along = layer % 2 == 0
+        square(g, x_a + notch, y0 + notch, size - 2 * notch, w, walls, e,
+               v, v + 20, along)
+        # the travel across the gap retracts by the slot's length
+        square(g, x_b + notch, y0 + notch, size - 2 * notch + lean, w,
+               walls, e, v, v + 20, along, size_y=size - 2 * notch)
+        if layer == 0:
+            # bottom temperature under the left pillar
+            g.label(x_a, y0 - 8., "%d" % temps[0], e)
+    g.emit("EXCLUDE_OBJECT_END NAME=temp_tower")
+    g.emit("G1 E-%.2f F2400" % g.retract)
+    g.emit("G1 Z%.3f F600" % (height + 5))
+    return g.out
+
+
 class HarkCalib:
     def __init__(self, config):
         self.printer = config.get_printer()
@@ -284,6 +437,10 @@ class HarkCalib:
                                    "pick the best"),
                 ('CALIBRATE_RETRACTION', "Print a retraction test for SLOT=,"
                                          " then pick the best"),
+                ('CALIBRATE_PA', "Print a pressure advance pattern for "
+                                 "SLOT=, then pick the best"),
+                ('CALIBRATE_TEMP', "Print a temperature tower for SLOT=, "
+                                   "then pick the best"),
                 ('CALIB_PICK', "Ask which calibration result is best"),
                 ('CALIB_SET', "Save the picked calibration result"),
                 ('CALIB_SKIP', "Close the calibration pick, keep the old "
@@ -331,7 +488,21 @@ class HarkCalib:
 
     @staticmethod
     def _fmt(kind, value):
-        return "%.2f" % value if kind == 'flow' else "%.1f" % value
+        if kind == 'flow':
+            return "%.2f" % value
+        if kind == 'pa':
+            return "%.4f" % value
+        if kind == 'temp':
+            return "%d" % round(value)
+        return "%.1f" % value
+
+    @staticmethod
+    def _label(kind, value):
+        if kind == 'pa':
+            return "%d" % round(value * 1000)
+        if kind == 'temp':
+            return "%d C" % round(value)
+        return HarkCalib._fmt(kind, value)
 
     # --- commands ------------------------------------------------------
     def cmd_CALIBRATE_FLOW(self, gcmd):
@@ -360,25 +531,63 @@ class HarkCalib:
                   % (slot, ",".join("%.2f" % r for r in lengths))]
         self._start(gcmd, "calib_retraction_slot%s.gcode" % slot, lines)
 
+    def cmd_CALIBRATE_PA(self, gcmd):
+        self._require_idle(gcmd)
+        slot, rec = self._slot_record(gcmd)
+        centre = gcmd.get_float('CENTRE', rec.get('pressure_advance') or
+                                (0.06 if 'PETG' in str(rec.get('type', ''))
+                                 .upper() else 0.045),
+                                minval=0., maxval=1.)
+        step = gcmd.get_float('STEP', 0.006, minval=0.001, maxval=0.05)
+        count = gcmd.get_int('COUNT', 11, minval=3, maxval=15)
+        start = max(0., round(centre - step * (count // 2), 4))
+        pas = [round(start + i * step, 4) for i in range(count)]
+        lines = pa_pattern(slot, rec, pas, centre, self.style, self.fan,
+                           self.name)
+        lines += ["END_PRINT", "CALIB_PICK KIND=pa SLOT=%s VALUES=%s"
+                  % (slot, ",".join("%.4f" % p for p in pas))]
+        self._start(gcmd, "calib_pa_slot%s.gcode" % slot, lines)
+
+    def cmd_CALIBRATE_TEMP(self, gcmd):
+        self._require_idle(gcmd)
+        slot, rec = self._slot_record(gcmd)
+        nozzle = int(rec.get('nozzle_temp') or 220)
+        lo = int(rec.get('min_temp') or nozzle - 20)
+        hi = int(rec.get('max_temp') or nozzle + 20)
+        step = gcmd.get_int('STEP', 5, minval=2, maxval=20)
+        start = gcmd.get_int('START', min(hi, nozzle + 3 * step),
+                             minval=170, maxval=320)
+        end = gcmd.get_int('END', max(lo, nozzle - 3 * step),
+                           minval=170, maxval=320)
+        if end >= start:
+            raise gcmd.error("START (%d) must be hotter than END (%d)"
+                             % (start, end))
+        temps = list(range(start, end - 1, -step))
+        if len(temps) > 10:
+            raise gcmd.error("%d blocks is too tall: use a bigger STEP or a "
+                             "narrower START/END (10 at most)" % len(temps))
+        lines = temp_tower(slot, rec, temps, self.style, self.fan,
+                           self.name)
+        lines += ["END_PRINT", "CALIB_PICK KIND=temp SLOT=%s VALUES=%s"
+                  % (slot, ",".join("%d" % t for t in temps))]
+        self._start(gcmd, "calib_temp_slot%s.gcode" % slot, lines)
+
     def cmd_CALIB_PICK(self, gcmd):
         kind = gcmd.get('KIND').lower()
         if kind not in KINDS:
-            raise gcmd.error("KIND must be flow or retraction")
+            raise gcmd.error("KIND must be flow, retraction, pa or temp")
         slot = gcmd.get('SLOT').upper()
         try:
             values = [float(v) for v in gcmd.get('VALUES').split(',') if v]
         except ValueError:
             raise gcmd.error("VALUES must be numbers separated by commas")
         _, what, item = KINDS[kind]
+        hint = HINTS[kind]
         self.pending = {'kind': kind, 'slot': slot, 'values': values,
+                        'labels': [self._label(kind, v) for v in values],
+                        'what': what, 'hint': hint,
                         'label': "Pick the best %s for slot %s"
                                  % (item, slot)}
-        if kind == 'flow':
-            hint = ("Look at the tops side-on: the lowest number where the "
-                    "lines have closed up, before ridges.")
-        else:
-            hint = ("Look between each pair of pillars: the shortest "
-                    "retraction with no strings.")
         out = ['action:prompt_end',
                'action:prompt_begin Pick the best %s (slot %s)' % (item,
                                                                   slot),
@@ -389,8 +598,8 @@ class HarkCalib:
                 out += ['action:prompt_button_group_end',
                         'action:prompt_button_group_start']
             out.append('action:prompt_button %s|CALIB_SET KIND=%s SLOT=%s '
-                       'VALUE=%s|primary' % (self._fmt(kind, v), kind, slot,
-                                             v))
+                       'VALUE=%s|primary' % (self._label(kind, v), kind,
+                                             slot, v))
         out += ['action:prompt_button_group_end',
                 'action:prompt_footer_button Keep the old value|CALIB_SKIP|'
                 'secondary', 'action:prompt_show']
@@ -400,13 +609,23 @@ class HarkCalib:
     def cmd_CALIB_SET(self, gcmd):
         kind = gcmd.get('KIND').lower()
         if kind not in KINDS:
-            raise gcmd.error("KIND must be flow or retraction")
+            raise gcmd.error("KIND must be flow, retraction, pa or temp")
         slot = gcmd.get('SLOT').upper()
         value = gcmd.get_float('VALUE', minval=0.)
         param, what, _ = KINDS[kind]
+        extra = ""
+        if kind == 'temp':
+            # the first layer keeps its distance from the printing
+            # temperature (often +5)
+            slots = self.printer.lookup_object('hark_cfs_slots')
+            rec = slots.slots.get(slot) or {}
+            old = int(rec.get('nozzle_temp') or 0)
+            first = int(rec.get('nozzle_first') or old)
+            lift = max(0, first - old) if old else 0
+            extra = " NOZZLE_FIRST=%d" % (round(value) + lift)
         self.gcode.run_script_from_command(
-            "CFS_SLOT_SET SLOT=%s %s=%s" % (slot, param, self._fmt(kind,
-                                                                  value)))
+            "CFS_SLOT_SET SLOT=%s %s=%s%s" % (slot, param,
+                                              self._fmt(kind, value), extra))
         self.pending = None
         self.gcode.respond_raw('// action:prompt_end')
         gcmd.respond_info("Slot %s %s set to %s"

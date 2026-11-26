@@ -51,6 +51,44 @@ COLOURS = (
     ('Navy', '1A237E'), ('Purple', '8E24AA'), ('Pink', 'EC407A'),
     ('Brown', '6D4C41'), ('Beige', 'D7CCC8'),
 )
+# The fuller palette for touchscreens and colour names: the 17 above plus
+# Hark Tech's stocked filament colours, grouped Solid / Matte / Silk / Multi /
+# Carbon fibre (hark_colours.json; names are unique, so COLOR=Matte Navy
+# works). The Mainsail prompt editor keeps the 17 buttons.
+COLOURS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            'hark_colours.json')
+
+
+def load_palette(path=COLOURS_FILE):
+    palette = [{'group': 'Solid', 'name': n, 'hex': h} for n, h in COLOURS]
+    try:
+        with open(path, encoding='utf-8') as f:
+            extra = json.load(f)['colours']
+    except Exception:
+        logging.exception("hark_cfs_slots: no colour palette (%s)", path)
+        return palette
+    names = set(c['name'].lower() for c in palette)
+    for c in extra:
+        try:
+            entry = {'group': str(c.get('group') or 'Solid'),
+                     'name': str(c['name']),
+                     'hex': str(c['hex']).lstrip('#').upper()[:6]}
+            int(entry['hex'], 16)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if len(entry['hex']) == 6 and entry['name'].lower() not in names:
+            names.add(entry['name'].lower())
+            palette.append(entry)
+    return palette
+
+
+PALETTE = load_palette()
+# Settings a calibration or an edit tunes for one filament (and colour):
+# remembered per filament profile, so the same filament loaded again later,
+# in any slot, comes back with them (CFS_SLOT_SET FILAMENT=)
+TUNED_KEYS = ('nozzle_temp', 'nozzle_first', 'bed_temp', 'pressure_advance',
+              'flow_ratio', 'retract_length', 'retract_speed', 'fan_min',
+              'fan_max')
 # Filament settings: (key, gcode parameter, type, OrcaSlicer preset key).
 # Keys follow the K2/Orca preset fields so profiles move between them as is.
 SETTINGS = (
@@ -75,6 +113,9 @@ SETTING_MAX = {'max_flow': 100.}
 # which would also close a prompt sent by that command. Send the next dialog
 # just after the command has finished.
 PROMPT_DELAY = 0.4
+# More filaments of one type than this in the prompt editor: pick the brand
+# first (the Hi's library has 130+ PLAs)
+PROMPT_MAX_BUTTONS = 24
 # Creality filament name -> the filament_id of OrcaSlicer's own Creality K2
 # preset (tools/orca/make_orca_filament_ids.py). Orca 2.5.0-beta and later
 # pick the preset carrying a lane's filament_id, so a slot of Hyper PLA syncs
@@ -101,9 +142,9 @@ EMPTY = dict({'loaded': False, 'filament': '', 'type': '', 'name': '',
 def _norm_colour(value):
     """Accept a colour name, RRGGBB, #RRGGBB or Creality's #0RRGGBB."""
     value = value.strip()
-    for name, hexval in COLOURS:
-        if value.lower() == name.lower():
-            return hexval
+    for c in PALETTE:
+        if value.lower() == c['name'].lower():
+            return c['hex']
     value = value.lstrip('#')
     if len(value) == 7 and value[0] == '0':
         value = value[1:]
@@ -118,9 +159,9 @@ def _norm_colour(value):
 def _colour_name(hexval):
     if not hexval:
         return ''
-    for name, h in COLOURS:
-        if h == hexval.upper():
-            return name
+    for c in PALETTE:
+        if c['hex'] == hexval.upper():
+            return c['name']
     return '#' + hexval.upper()
 
 
@@ -153,6 +194,9 @@ class HarkCfsSlots:
             'moonraker_url', 'http://127.0.0.1:7126').rstrip('/')
         self.materials = []
         self.library = {}
+        # filament id -> {'*': settings, 'RRGGBB': settings}: what was last
+        # tuned for that filament, and for that filament in that colour
+        self.tuned = {}
         self.slots = {}
         self.revision = 0
         # CFS_TOOL_MAP: tool -> slot set for the next print, and the file it
@@ -251,6 +295,8 @@ class HarkCfsSlots:
             self.slots = {s: dict(EMPTY, **data['slots'].get(s, {}))
                           for s in SLOTS}
             self.library = {f['id']: f for f in data.get('library', [])}
+            self.tuned = {k: v for k, v in (data.get('tuned') or {}).items()
+                          if isinstance(v, dict)}
             self.revision = int(data.get('revision', 0))
             tm = data.get('tool_map') or {}
             self.tool_map = {t: v for t, v in (tm.get('map') or {}).items()
@@ -294,6 +340,7 @@ class HarkCfsSlots:
             with open(tmp, 'w', encoding='utf-8') as f:
                 json.dump({'revision': self.revision, 'slots': self.slots,
                            'library': list(self.library.values()),
+                           'tuned': self.tuned,
                            'tool_map': {'map': self.tool_map,
                                         'file': self.tool_map_file}},
                           f, indent=2, sort_keys=True)
@@ -318,6 +365,10 @@ class HarkCfsSlots:
         return {'slots': {k: dict(v) for k, v in self.slots.items()},
                 'library': [dict(f) for f in self.library.values()],
                 'revision': self.revision, 'materials': self.materials,
+                # static: the touchscreen's colour choices
+                'colours': PALETTE,
+                # what was tuned per filament (and colour), see tuned_for()
+                'tuned': {k: dict(v) for k, v in self.tuned.items()},
                 # the slot each tool prints from now ('' = it cannot print)
                 'tool_map': tools,
                 # what CFS_TOOL_MAP set, and for which file
@@ -641,6 +692,7 @@ class HarkCfsSlots:
                         'type': fil['type'], 'brand': fil['brand'],
                         'filament_id': fil.get('filament_id', '')})
             colour = colour or fil.get('color', '')
+            rec.update(self.tuned_for(fil['id'], colour))
         else:
             rec['name'] = name
         rec.update({'loaded': True, 'color': colour or 'FFFFFF',
@@ -648,6 +700,7 @@ class HarkCfsSlots:
         return rec
 
     def _apply_setting_params(self, gcmd, rec):
+        given = {}
         for key, param, cast, _ in SETTINGS:
             if cast is int:
                 value = gcmd.get_int(param, None, minval=0, maxval=500)
@@ -656,6 +709,29 @@ class HarkCfsSlots:
                                        maxval=SETTING_MAX.get(key, 10.))
             if value is not None:
                 rec[key] = value
+                given[key] = value
+        return given
+
+    # --- tuned values per filament ------------------------------------
+    def tuned_for(self, fid, colour=''):
+        """Settings last tuned for this filament: its own, then those of
+        this colour of it on top."""
+        entry = self.tuned.get(fid) or {}
+        out = dict(entry.get('*') or {})
+        if colour:
+            out.update(entry.get(colour.upper()) or {})
+        return {k: v for k, v in out.items() if k in TUNED_KEYS}
+
+    def _remember(self, rec, given):
+        fid = rec.get('filament')
+        # 0 means "not set" (the file's or the profile's value is used)
+        values = {k: v for k, v in given.items() if k in TUNED_KEYS and v}
+        if not fid or not values:
+            return
+        entry = self.tuned.setdefault(fid, {})
+        for key in ('*', (rec.get('color') or '').upper()):
+            if key:
+                entry.setdefault(key, {}).update(values)
 
     def _types(self):
         present = sorted({m['type'] for m in self._all_filaments()
@@ -720,13 +796,16 @@ class HarkCfsSlots:
             value = gcmd.get(param, None)
             if value is not None:
                 rec[field] = value
-        self._apply_setting_params(gcmd, rec)
+        given = self._apply_setting_params(gcmd, rec)
         if not rec.get('name') or not rec.get('type'):
             raise gcmd.error("Slot %s needs a filament, or NAME and TYPE"
                              % slot)
         rec['loaded'] = True
         rec['source'] = 'manual'
         self.slots[slot] = rec
+        # REMEMBER=0: set the slot only (a one-off), not the filament
+        if gcmd.get_int('REMEMBER', 1):
+            self._remember(rec, given)
         self._save()
         gcmd.respond_info("Slot updated: %s" % self._describe(slot))
         if gcmd.get_int('MENU', 0):
@@ -861,6 +940,20 @@ class HarkCfsSlots:
                          [self._describe(slot)], buttons, back)
         elif name is None:
             mats = [m for m in self._all_filaments() if m['type'] == mtype]
+            brand = gcmd.get('BRAND', None)
+            brands = sorted({m.get('brand') or 'Other' for m in mats},
+                            key=lambda b: (b != 'Creality', b.lower()))
+            if brand is None and len(mats) > PROMPT_MAX_BUTTONS \
+                    and len(brands) > 1:
+                buttons = [(b, 'CFS_SLOT_EDIT SLOT=%s TYPE=%s BRAND=%s'
+                            % (slot, mtype, _quote(b)), 'primary')
+                           for b in brands]
+                self._prompt('Slot %s: %s, which brand?' % (slot, mtype),
+                             [self._describe(slot)], buttons, back)
+                return
+            if brand is not None:
+                mats = [m for m in mats
+                        if (m.get('brand') or 'Other') == brand]
             mats.sort(key=lambda m: (m['source'] == 'creality',
                                      m['brand'] != 'Creality', m['name']))
             buttons = [(m['name'], 'CFS_SLOT_EDIT SLOT=%s TYPE=%s NAME=%s'

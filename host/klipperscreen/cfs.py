@@ -5,11 +5,20 @@
 # firmware on this printer can move filament (the CFS_LOAD_SLOT and
 # CFS_UNLOAD_ACTIVE macros exist and [k2_cfs] allow_actuation is on).
 #
-# Edit sets what a slot holds: material type, filament profile (Creality's
-# list plus the custom ones saved with CFS_FILAMENT_SAVE), spool colour, and
-# the slot's own nozzle / bed temperature, pressure advance and flow. It saves
-# with CFS_SLOT_SET, the same record Mainsail's CFS_FILAMENTS dialog and
-# OrcaSlicer's filament sync use.
+# Edit sets what a slot holds: material type and finish, brand, filament
+# profile (Creality's list, the OrcaSlicer library and the custom ones saved
+# with CFS_FILAMENT_SAVE), spool colour (Hark Tech's stocked colours, grouped
+# Solid / Matte / Silk / Multi / Carbon fibre), and the slot's own nozzle /
+# bed temperature, pressure advance, flow and retraction. It saves with
+# CFS_SLOT_SET, the same record Mainsail's CFS_FILAMENTS dialog and
+# OrcaSlicer's filament sync use. A filament picked again later comes back
+# with what was last tuned for it (hark_cfs_slots 'tuned').
+#
+# Calibrate runs the printer's tests for the selected slot: pressure advance
+# measured at the chute (saved by itself), or a printed PA pattern, flow
+# pads, retraction test or temperature tower, after which this page asks
+# which result is best and saves it to the slot (CALIB_SET). The slot's
+# values are then used over the sliced file's (hark_filament_override).
 #
 # Install: link or copy this file to ~/KlipperScreen/panels/cfs.py and add to
 # KlipperScreen.conf:
@@ -50,9 +59,29 @@ ADJUST = (
     ("bed_temp", "BED", "Bed", 5, 0, 120, "%d °C"),
     ("pressure_advance", "PA", "Pressure advance", .002, 0., .3, "%.3f"),
     ("flow_ratio", "FLOW", "Flow", .01, .5, 1.5, "%.2f"),
+    ("retract_length", "RETRACT", "Retraction", .1, 0., 5., "%.1f mm"),
 )
 PROFILE_KEYS = ("nozzle_temp", "nozzle_first", "min_temp", "max_temp",
-                "bed_temp", "pressure_advance", "flow_ratio")
+                "bed_temp", "pressure_advance", "flow_ratio",
+                "retract_length", "retract_speed", "fan_min", "fan_max")
+# A type with more profiles than this asks for the brand first
+BRAND_STEP = 16
+# Finish words for profiles that do not carry one (Creality's list)
+FINISH_WORDS = (("Matte", ("matte",)), ("Silk", ("silk", "satin")),
+                ("Wood", ("wood",)), ("Marble", ("marble",)),
+                ("Glow", ("luminous", "glow")),
+                ("Sparkle", ("stardust", "sparkle", "galaxy")))
+# The printed tests: (kind, button, command, what it prints)
+CALIBRATIONS = (
+    ("pa", "PA pattern", "CALIBRATE_PA",
+     "11 chevrons around the slot's pressure advance, labelled x1000"),
+    ("flow", "Flow pads", "CALIBRATE_FLOW",
+     "9 pads, each at its own flow ratio"),
+    ("retraction", "Retraction", "CALIBRATE_RETRACTION",
+     "7 pairs of pillars, each pair at its own retraction"),
+    ("temp", "Temp tower", "CALIBRATE_TEMP",
+     "a tower of blocks, 5 °C cooler each block up"),
+)
 
 
 def hex_to_rgb(text):
@@ -75,19 +104,76 @@ def colour_name(hexval):
     return "#" + hexval
 
 
+def finish_of(fil):
+    if fil.get("finish"):
+        return fil["finish"]
+    name = (fil.get("name") or "").lower()
+    for finish, words in FINISH_WORDS:
+        if any(w in name for w in words):
+            return finish
+    return ""
+
+
+def kind_of(fil):
+    """What the type page shows: the type, with its finish (PLA Matte)."""
+    finish = finish_of(fil)
+    mtype = fil.get("type") or ""
+    return "%s %s" % (mtype, finish) if finish in (
+        "Matte", "Silk", "Wood", "Marble", "Glow", "Sparkle") else mtype
+
+
 def filament_types(filaments):
-    present = sorted({f.get("type") for f in filaments if f.get("type")})
-    ordered = [t for t in TYPE_ORDER if t in present]
-    return ordered + [t for t in present if t not in ordered]
+    """Type pages in TYPE_ORDER, each type's finishes after it, then the
+    rest by how many profiles they have."""
+    counts = {}
+    for f in filaments:
+        if f.get("type"):
+            counts[kind_of(f)] = counts.get(kind_of(f), 0) + 1
+
+    def key(kind):
+        base = kind.split(" ")[0]
+        rank = TYPE_ORDER.index(base) if base in TYPE_ORDER \
+            else len(TYPE_ORDER)
+        return (rank, -counts[kind] if rank == len(TYPE_ORDER) else 0,
+                kind != base, kind)
+    return sorted(counts, key=key)
 
 
-def filaments_of_type(filaments, mtype):
-    """Custom profiles first, then Creality's own, then the generic ones."""
-    found = [f for f in filaments if f.get("type") == mtype]
-    found.sort(key=lambda f: (f.get("source") == "creality",
+def filaments_of_type(filaments, mtype, brand=None):
+    """Custom profiles first, then Creality's own, then the rest by name."""
+    found = [f for f in filaments if kind_of(f) == mtype
+             and (brand is None or brand_of(f) == brand)]
+    found.sort(key=lambda f: (f.get("source") not in ("custom",),
+                              f.get("source") != "creality",
                               f.get("brand") != "Creality",
-                              f.get("name", "")))
+                              f.get("name", "").lower()))
     return found
+
+
+def brand_of(fil):
+    if fil.get("source") == "custom":
+        return "My profiles"
+    return fil.get("brand") or "Other"
+
+
+def brands_of(filaments):
+    """(brand, count): my profiles, Creality, then the rest by count."""
+    counts = {}
+    for f in filaments:
+        counts[brand_of(f)] = counts.get(brand_of(f), 0) + 1
+    return sorted(counts.items(), key=lambda bc: (
+        bc[0] != "My profiles", bc[0] != "Creality", bc[0] != "Generic",
+        -bc[1], bc[0].lower()))
+
+
+def apply_tuned(draft, tuned, colour=""):
+    """What was last tuned for this filament (and this colour of it)."""
+    entry = (tuned or {}).get(draft.get("filament") or "") or {}
+    for part in ("*", (colour or "").upper()):
+        for key, value in (entry.get(part) or {}).items():
+            if key in PROFILE_KEYS and value:
+                draft[key] = value
+    return draft
 
 
 def profile_summary(fil):
@@ -199,7 +285,13 @@ class Panel(ScreenPanel):
         self.edit_slot = None
         self.draft = {}
         self.pick_type = None
+        self.pick_brand = None
         self.edit_widgets = {}
+        self.palette = []
+        self.tuned = {}
+        self.calib = {}
+        self.calib_done = None
+        self.calib_slot = None
 
         self.header = Gtk.Label(hexpand=True, halign=Gtk.Align.START,
                                 ellipsize=Pango.EllipsizeMode.END)
@@ -229,11 +321,14 @@ class Panel(ScreenPanel):
         self.btn_edit.connect("clicked", self.edit_selected)
         self.btn_tags = self._gtk.Button("refresh", "Read tags", "color4")
         self.btn_tags.connect("clicked", self.read_tags)
+        self.btn_calib = self._gtk.Button("bed-level", "Calibrate", "color2")
+        self.btn_calib.connect("clicked", self.calibrate_selected)
         actions = Gtk.Grid(column_homogeneous=True, hexpand=True)
         actions.attach(self.btn_load, 0, 0, 1, 1)
         actions.attach(self.btn_unload, 1, 0, 1, 1)
         actions.attach(self.btn_edit, 2, 0, 1, 1)
-        actions.attach(self.btn_tags, 3, 0, 1, 1)
+        actions.attach(self.btn_calib, 3, 0, 1, 1)
+        actions.attach(self.btn_tags, 4, 0, 1, 1)
         actions.set_vexpand(False)
 
         self.main_view = Gtk.Box(orientation=Gtk.Orientation.VERTICAL,
@@ -277,7 +372,8 @@ class Panel(ScreenPanel):
     def refresh(self, *args):
         try:
             self._screen._ws.api.query_objects(
-                {"k2_cfs": None, "hark_cfs_slots": ["slots", "tool_map"]},
+                {"k2_cfs": None, "hark_cfs_slots": ["slots", "tool_map"],
+                 "hark_calib": ["pending"]},
                 self._on_data)
         except Exception:
             logging.exception("cfs panel: query failed")
@@ -293,6 +389,18 @@ class Panel(ScreenPanel):
         slots = status.get("hark_cfs_slots") or {}
         self.slots = slots.get("slots") or {}
         self.tool_map = slots.get("tool_map") or {}
+        pending = (status.get("hark_calib") or {}).get("pending") or {}
+        if not pending:
+            self.calib_done = None
+        if pending and self._pick_key(pending) == self.calib_done:
+            # answered here; the printer has not cleared it yet
+            pending = {}
+        if pending and pending != self.calib and self.view == "main":
+            # a calibration print just finished: ask for the pick here too
+            self.calib = pending
+            self._show_pick()
+            return
+        self.calib = pending
         # firmware / per-slot presence / remaining come from one CFS_STATUS
         if (self.cfs.get("online") and "slots_loaded" not in self.cfs
                 and not self.asked_details and not self._busy_printing()):
@@ -305,7 +413,8 @@ class Panel(ScreenPanel):
         # page opens and when the editor does, not on every poll
         try:
             self._screen._ws.api.query_objects(
-                {"hark_cfs_slots": ["materials", "library"]},
+                {"hark_cfs_slots": ["materials", "library", "colours",
+                                    "tuned"]},
                 self._on_profiles)
         except Exception:
             logging.exception("cfs panel: profile query failed")
@@ -316,6 +425,8 @@ class Panel(ScreenPanel):
         slots = data["result"].get("status", {}).get("hark_cfs_slots") or {}
         self.materials = slots.get("materials") or []
         self.library = slots.get("library") or []
+        self.palette = slots.get("colours") or []
+        self.tuned = slots.get("tuned") or {}
         if self.view == "main":
             self._render()
 
@@ -430,7 +541,13 @@ class Panel(ScreenPanel):
         self.btn_edit.set_sensitive(
             sel is not None and bool(self._filaments()) and not error)
         self.btn_tags.set_sensitive(bool(self.cfs.get("online")) and idle)
-        if not self.cfs or error:
+        self.btn_calib.set_sensitive(
+            (bool(self.calib) or (sel is not None and idle
+             and bool((self.slots.get(sel) or {}).get("type")))) and not error)
+        if self.calib:
+            note = ("%s: tap Calibrate to pick it."
+                    % self.calib.get("label", "A calibration is waiting"))
+        elif not self.cfs or error:
             note = ""
         elif sel is not None and not self._filaments():
             note = ("No filament profiles from the printer yet: Edit needs "
@@ -496,7 +613,9 @@ class Panel(ScreenPanel):
     def back(self):
         if self.view == "main":
             return False
-        if self.view == "filament":
+        if self.view == "filament" and self.pick_brand is not None:
+            self._show_brands(None, self.pick_type)
+        elif self.view in ("filament", "brand"):
             self._show_types()
         elif self.view in ("type", "colour") and self._draft_known():
             self._show_edit()
@@ -529,9 +648,23 @@ class Panel(ScreenPanel):
         page.add(label)
         page.add(scroll)
 
+        cell = [0]
+
         def add(button):
-            n = len(grid.get_children())
+            n = cell[0]
             grid.attach(button, n % columns, n // columns, 1, 1)
+            cell[0] += 1
+
+        def heading(text):
+            # a heading on a row of its own
+            n = -(-cell[0] // columns) * columns
+            head = Gtk.Label(halign=Gtk.Align.START, hexpand=True)
+            head.set_markup("<b>%s</b>" % GLib.markup_escape_text(text))
+            head.set_margin_top(8)
+            head.set_margin_start(6)
+            grid.attach(head, 0, n // columns, columns, 1)
+            cell[0] = n + columns
+        add.heading = heading
         return page, add
 
     def edit_selected(self, widget):
@@ -563,13 +696,40 @@ class Panel(ScreenPanel):
             add(button)
         self._show("type", page, "Slot %s" % slot)
 
-    # step 2: filament profile of that type
-    def _show_filaments(self, widget, mtype):
+    # step 2a: brand, when the type has many profiles
+    def _show_brands(self, widget, mtype):
         slot = self.edit_slot
         self.pick_type = mtype
+        self.pick_brand = None
         page, add = self._picker(
-            "Slot %s: which %s filament?" % (slot, mtype), 2)
-        for fil in filaments_of_type(self._filaments(), mtype):
+            "Slot %s: which brand of %s?" % (slot, mtype), 3)
+        for i, (brand, count) in enumerate(
+                brands_of(filaments_of_type(self._filaments(), mtype))):
+            button = self._gtk.Button(None, "%s (%d)" % (brand, count),
+                                      "color%d" % (i % 4 + 1))
+            button.set_vexpand(False)
+            button.set_size_request(-1, int(self._gtk.img_scale * 1.6))
+            button.connect("clicked", self._show_filaments, mtype, brand)
+            add(button)
+        self._show("brand", page, "Slot %s" % slot)
+
+    # step 2: filament profile of that type
+    def _show_filaments(self, widget, mtype, brand=None):
+        slot = self.edit_slot
+        self.pick_type = mtype
+        found = filaments_of_type(self._filaments(), mtype)
+        if brand is None and len(found) > BRAND_STEP and \
+                len(brands_of(found)) > 1:
+            self._show_brands(widget, mtype)
+            return
+        self.pick_brand = brand
+        if brand is not None:
+            found = filaments_of_type(self._filaments(), mtype, brand)
+        page, add = self._picker(
+            "Slot %s: which %s%s filament?"
+            % (slot, (brand + " ") if brand and brand != "My profiles"
+               else "", mtype), 2)
+        for fil in found:
             button = self._button(
                 "color3" if fil.get("source") != "creality" else "color4")
             box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
@@ -580,7 +740,7 @@ class Panel(ScreenPanel):
                 fil.get("name", "")))
             detail = Gtk.Label(ellipsize=Pango.EllipsizeMode.END)
             who = fil.get("brand") or ""
-            if fil.get("source") != "creality":
+            if fil.get("source") == "custom":
                 who = "My profile"
             detail.set_markup("<small>%s</small>" % GLib.markup_escape_text(
                 "  ·  ".join(b for b in (who, profile_summary(fil)) if b)))
@@ -593,23 +753,36 @@ class Panel(ScreenPanel):
 
     def _pick_filament(self, widget, fil):
         had_colour = self.draft.get("color", "")
-        self.draft = draft_from_filament(fil, had_colour)
+        self.draft = apply_tuned(draft_from_filament(fil, had_colour),
+                                 self.tuned, had_colour)
         if self.draft["color"]:
             self._show_edit()
         else:
             self._show_colours()
 
     # step 3: spool colour
+    def _palette(self):
+        """(group, name, hex) from the printer, else the basic 17."""
+        if self.palette:
+            return [(c.get("group") or "Solid", c["name"],
+                     str(c["hex"]).upper()) for c in self.palette
+                    if c.get("name") and c.get("hex")]
+        return [("Solid", n, h) for n, h in COLOURS]
+
     def _show_colours(self, widget=None):
         slot = self.edit_slot
         page, add = self._picker(
             "Slot %s: what colour is the spool?" % slot, 6)
-        choices = list(COLOURS)
+        palette = self._palette()
         current = (self.draft.get("color") or "").upper()
-        if current and current not in [h for _, h in COLOURS]:
-            choices.insert(0, ("As it is now", current))
+        if current and current not in [h for _g, _n, h in palette]:
+            palette.insert(0, ("", "As it is now", current))
         size = self._gtk.img_scale
-        for name, hexval in choices:
+        group = None
+        for grp, name, hexval in palette:
+            if grp and grp != group:
+                group = grp
+                add.heading(grp)
             button = self._button()
             button.get_style_context().add_class("frame-item")
             if hexval == current:
@@ -618,7 +791,8 @@ class Panel(ScreenPanel):
             swatch = Swatch(size)
             swatch.set_rgb(hex_to_rgb(hexval))
             box.add(swatch)
-            box.add(Gtk.Label(label=name))
+            box.add(Gtk.Label(label=name, ellipsize=Pango.EllipsizeMode.END,
+                              max_width_chars=12))
             button.add(box)
             button.connect("clicked", self._pick_colour, hexval)
             add(button)
@@ -626,6 +800,8 @@ class Panel(ScreenPanel):
 
     def _pick_colour(self, widget, hexval):
         self.draft["color"] = hexval
+        # what was tuned for this filament in this colour
+        apply_tuned(self.draft, self.tuned, hexval)
         self._show_edit()
 
     # the slot's summary: change filament / colour, nudge its settings, save
@@ -680,8 +856,9 @@ class Panel(ScreenPanel):
         note.set_margin_top(4)
         note.set_margin_bottom(4)
         note.set_text(
-            "Used for loading, purging and colour changes. A sliced file's "
-            "own temperatures and pressure advance still win while it prints.")
+            "These values win over the sliced file while it prints "
+            "(temperatures, flow, retraction, PA, fan cap) and are kept for "
+            "this filament. 0 = use the file's.")
 
         btn_empty = self._gtk.Button("delete", "Mark empty", "color2",
                                      bts, side, 1)
@@ -738,6 +915,131 @@ class Panel(ScreenPanel):
         script = slot_set_script(self.edit_slot, self.draft)
         logging.info("cfs panel: %s", script)
         self._screen._ws.api.gcode_script(script)
+        self._show("main")
+        GLib.timeout_add(700, self._refresh_once)
+
+    # --- calibration ---------------------------------------------------
+    def calibrate_selected(self, widget):
+        if self.calib:
+            self._show_pick()
+            return
+        if self.selected is None:
+            return
+        self._show_calibrate(self.selected)
+
+    def _slot_summary(self, slot):
+        info = self.slots.get(slot) or {}
+        bits = [info.get("name") or info.get("type") or "?"]
+        if info.get("color"):
+            bits.append(colour_name(info["color"]))
+        if info.get("nozzle_temp"):
+            bits.append("%d °C" % info["nozzle_temp"])
+        bits.append("PA %.4f" % info["pressure_advance"]
+                    if info.get("pressure_advance") else "PA not measured")
+        if info.get("flow_ratio"):
+            bits.append("flow %.2f" % info["flow_ratio"])
+        if info.get("retract_length"):
+            bits.append("retraction %.1f mm" % info["retract_length"])
+        return "  ·  ".join(bits)
+
+    def _show_calibrate(self, slot):
+        self.calib_slot = slot
+        page, add = self._picker(
+            "Slot %s: %s" % (slot, self._slot_summary(slot)), 2)
+        size = int(self._gtk.img_scale * 1.8)
+
+        def tile(title, detail, style, callback, *args):
+            button = self._button(style)
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            box.set_margin_top(10)
+            box.set_margin_bottom(10)
+            name = Gtk.Label()
+            name.set_markup("<b>%s</b>" % GLib.markup_escape_text(title))
+            sub = Gtk.Label(wrap=True, max_width_chars=34,
+                            justify=Gtk.Justification.CENTER)
+            sub.set_markup("<small>%s</small>" % GLib.markup_escape_text(
+                detail))
+            box.add(name)
+            box.add(sub)
+            button.add(box)
+            button.set_size_request(-1, size)
+            button.connect("clicked", callback, *args)
+            add(button)
+
+        add.heading("Measured at the chute (no print)")
+        tile("Measure PA", "Loads the slot if needed, measures pressure "
+             "advance with the strain gauge and saves it (about 3 min)",
+             "color3", self._run_measure_pa, slot)
+        add.heading("Printed tests: pick the best when it finishes")
+        for i, (kind, title, cmd, what) in enumerate(CALIBRATIONS):
+            tile(title, what, "color%d" % (i % 4 + 1), self._run_print_cal,
+                 slot, kind, title, cmd, what)
+        self._show("calibrate", page, "Slot %s calibrate" % slot)
+
+    def _run_measure_pa(self, widget, slot):
+        feeding = self._feeding_slot()
+        script = "PA_CAL_STATIC SLOT=%s SAVE=1" % slot
+        if feeding != slot:
+            script = "CFS_LOAD_SLOT SLOT=%s PA=0 COOL=0\n%s" % (slot, script)
+        self._screen._confirm_send_action(
+            widget,
+            "Measure pressure advance for slot %s?\n\n%s%sThe nozzle heats "
+            "to the slot's temperature at the chute; a good result is saved "
+            "to the slot and used on every print."
+            % (slot, self._slot_summary(slot) + "\n\n",
+               "Slot %s is loaded first (the filament in the nozzle is cut "
+               "and purged out).\n" % slot if feeding != slot else ""),
+            "printer.gcode.script", {"script": script})
+
+    def _run_print_cal(self, widget, slot, kind, title, cmd, what):
+        self._screen._confirm_send_action(
+            widget,
+            "Print the %s test for slot %s?\n\n%s\n%s.\n\nThe bed must be "
+            "clear. When it finishes, pick the best result here and it is "
+            "saved to the slot." % (title.lower(), slot,
+                                     self._slot_summary(slot), what),
+            "printer.gcode.script", {"script": "%s SLOT=%s" % (cmd, slot)})
+        self._show("main")
+
+    def _show_pick(self):
+        pend = self.calib or {}
+        values = pend.get("values") or []
+        labels = pend.get("labels") or ["%g" % v for v in values]
+        page, add = self._picker(
+            "%s\n%s" % (pend.get("label", "Pick the best result"),
+                         pend.get("hint", "")), 3)
+        for value, label in zip(values, labels):
+            button = self._gtk.Button(None, label, "color3")
+            button.set_vexpand(False)
+            button.set_size_request(-1, int(self._gtk.img_scale * 1.6))
+            button.connect("clicked", self._pick_result, pend, value, label)
+            add(button)
+        keep = self._gtk.Button(None, "Keep the old value", "color2")
+        keep.set_vexpand(False)
+        keep.connect("clicked", self._skip_result)
+        add.heading("")
+        add(keep)
+        self._show("pick", page, "Calibration result")
+
+    @staticmethod
+    def _pick_key(pend):
+        return (pend.get("kind"), pend.get("slot"),
+                tuple(pend.get("values") or ()))
+
+    def _pick_result(self, widget, pend, value, label):
+        script = "CALIB_SET KIND=%s SLOT=%s VALUE=%s" % (
+            pend.get("kind"), pend.get("slot"), value)
+        logging.info("cfs panel: %s", script)
+        self._screen._ws.api.gcode_script(script)
+        self.calib_done = self._pick_key(pend)
+        self.calib = {}
+        self._show("main")
+        GLib.timeout_add(700, self._refresh_once)
+
+    def _skip_result(self, widget):
+        self._screen._ws.api.gcode_script("CALIB_SKIP")
+        self.calib_done = self._pick_key(self.calib or {})
+        self.calib = {}
         self._show("main")
         GLib.timeout_add(700, self._refresh_once)
 
