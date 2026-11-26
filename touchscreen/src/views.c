@@ -9,6 +9,12 @@
 #include <time.h>
 enum { HOME_MAIN = 470, HOME_SIDE_X = 488, HOME_SIDE_W = 190 };
 static bool calibrate_before;
+/* LVGL invalidates and reallocates even when the displayed text is unchanged. */
+static void label_update(lv_obj_t *label, const char *value) {
+    if (strcmp(lv_label_get_text(label), value))
+        lv_label_set_text(label, value);
+}
+
 static bool has(const char *path) {
     return J(path) != NULL && !cJSON_IsNull(J(path));
 }
@@ -123,7 +129,7 @@ static const char *filament_activity_label(void) {
 static bool filament_slot_busy(const char *slot) {
     return *slot && *filament_activity_label() && !strcmp(slot, S("filament_activity.slot"));
 }
-static void filament_spinner(lv_obj_t *parent, int x, int y, int size) {
+static lv_obj_t *filament_spinner(lv_obj_t *parent, int x, int y, int size) {
     lv_obj_t *spinner = lv_spinner_create(parent, 1000, 60);
     lv_obj_set_pos(spinner, x, y);
     lv_obj_set_size(spinner, size, size);
@@ -132,6 +138,7 @@ static void filament_spinner(lv_obj_t *parent, int x, int y, int size) {
     lv_obj_set_style_arc_color(spinner, colour("343e4b"), LV_PART_MAIN);
     lv_obj_set_style_arc_color(spinner, app.accent, LV_PART_INDICATOR);
     lv_obj_clear_flag(spinner, LV_OBJ_FLAG_CLICKABLE);
+    return spinner;
 }
 /* The extruder sensor confirms the path; spool presence is a separate state.
  * An old active_slot after unloading must never imply filament in the nozzle. */
@@ -362,7 +369,7 @@ void views_refresh(void) {
     char value[180];
     if (app.extrusion_temp) {
         snprintf(value, sizeof(value), "E %.0f°", N("status.extruder.temperature"));
-        lv_label_set_text(app.extrusion_temp, value);
+        label_update(app.extrusion_temp, value);
     }
     for (int i = 0; i < 3; i++) {
         cJSON *heater = cJSON_GetArrayItem(J("heaters"), i);
@@ -374,11 +381,11 @@ void views_refresh(void) {
                 app.temperature_shown[i] = true;
             }
             snprintf(value, sizeof(value), "%d°", app.shown_temperature[i]);
-            lv_label_set_text(app.current[i], value);
+            label_update(app.current[i], value);
         }
         if (app.target[i]) {
             snprintf(value, sizeof(value), "%.0f°", target);
-            lv_label_set_text(app.target[i], value);
+            label_update(app.target[i], value);
         }
         if (app.temperature_arrow[i]) {
             bool approaching = target > 0 && fabs(jnum(heater, "current", 0) - target) > 1.0;
@@ -408,7 +415,7 @@ void views_refresh(void) {
         if (app.positions[i]) {
             cJSON *p = cJSON_GetArrayItem(J("status.gcode_move.gcode_position"), i);
             snprintf(value, sizeof(value), "%.2f", cJSON_IsNumber(p) ? p->valuedouble : 0);
-            lv_label_set_text(app.positions[i],
+            label_update(app.positions[i],
                               strchr(S("status.toolhead.homed_axes"), "xyz"[i]) ? value : "—");
         }
     }
@@ -420,7 +427,7 @@ void views_refresh(void) {
         lv_point_t size;
         lv_txt_get_size(&size, state, &font_ui_20, 0, 0, HOME_MAIN - 52, LV_TEXT_FLAG_NONE);
         lv_obj_set_height(app.status_label, size.y > 56 ? 56 : size.y);
-        lv_label_set_text(app.status_label, state);
+        label_update(app.status_label, state);
         lv_obj_update_layout(app.status_label);
         lv_obj_align(app.status_label, LV_ALIGN_LEFT_MID, 0, 0);
     }
@@ -435,7 +442,7 @@ void views_refresh(void) {
                 snprintf(value, sizeof(value), "%d min remaining", minutes);
         } else
             value[0] = 0;
-        lv_label_set_text(app.time_label, value);
+        label_update(app.time_label, value);
     }
     if (app.layer_label) {
         double total = N("status.print_stats.info.total_layer");
@@ -450,13 +457,13 @@ void views_refresh(void) {
             snprintf(value, sizeof(value), "%.0f layers", total);
         else
             value[0] = 0;
-        lv_label_set_text(app.layer_label, value);
+        label_update(app.layer_label, value);
     }
     if (app.progress) {
         double p = *S("platform.starting_file") ? 0 : N("status.virtual_sdcard.progress") * 100;
         lv_bar_set_value(app.progress, (int)p, LV_ANIM_OFF);
         snprintf(value, sizeof(value), "%.0f%%", p);
-        lv_label_set_text(app.percent, value);
+        label_update(app.percent, value);
     }
 }
 static void move_icon(lv_obj_t *control, const char *name, const char *label) {
@@ -603,7 +610,7 @@ static void slider_event(lv_event_t *e) {
         if (label) {
             char value[20];
             snprintf(value, sizeof(value), "%d%%", lv_slider_get_value(slider));
-            lv_label_set_text(label, value);
+            label_update(label, value);
         }
     }
     if (lv_event_get_code(e) == LV_EVENT_RELEASED) {
@@ -849,7 +856,8 @@ static void filament_view(void) {
                                            : "Empty",
                       4, content_y + 109, tile_width - 8, &font_ui_16, false));
         if (filament_slot_busy(slot)) {
-            filament_spinner(tile, (tile_width - 30) / 2, content_y + 59, 30);
+            lv_obj_t *spinner = filament_spinner(tile, 0, 0, 30);
+            lv_obj_align_to(spinner, spool, LV_ALIGN_CENTER, 0, 0);
             centered(text(tile, filament_activity_label(), 2, content_y + 140, tile_width - 4,
                           &font_ui_14, false));
         } else if (feeding_slot(slot))

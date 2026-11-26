@@ -33,6 +33,8 @@ from pathlib import Path
 import action_policy
 import gcode_metadata
 import model
+from snapshot_codec import SnapshotEncoder
+from static_resources import ResourceFile
 import platform_services as platform
 import storage
 
@@ -71,6 +73,13 @@ OBJECTS = (
     "k2_motor_bus",
 )
 
+# The catalogue is queried separately when its revision changes. Do not repeat
+# it in live status queries, subscriptions, comparisons or screen updates.
+SLOT_FIELDS = (
+    "slots", "revision", "tool_map", "tool_map_set", "tool_map_file",
+    "tool_map_external", "map_tools", "map_targets",
+)
+
 
 class Moonraker:
     def __init__(self, base):
@@ -94,7 +103,11 @@ class Moonraker:
     def status_snapshot(self):
         return self.request(
             "/printer/objects/query?"
-            + "&".join(urllib.parse.quote(name) for name in OBJECTS)
+            + "&".join(
+                urllib.parse.quote(name)
+                + ("=" + ",".join(SLOT_FIELDS) if name == "hark_cfs_slots" else "")
+                for name in OBJECTS
+            )
         )
 
     def query(self):
@@ -264,6 +277,12 @@ class Service:
         self.usb_initialized = False
         self.connected = False
         self.stream_connected = False
+        self.subscription_refresh = threading.Event()
+        self.cfs_query_lock = threading.Lock()
+        self.cfs_initializing = True
+        self.cfs_query_at = 0.0
+        self.visible_page = ""
+        self.view_client = None
         self.status_times = {}
         self.status_epoch = 0
         self.printer_generation = 0
@@ -287,6 +306,10 @@ class Service:
         self.asleep = False
         self.power_lock = threading.Lock()
         self.cache_path = self.config_path.parent / "native-screen-cache"
+        self.resources = ResourceFile(self.cache_path / "screen-resources.json")
+        self.catalogue = ResourceFile(self.cache_path / "material-catalogue.json")
+        self.catalogue_revision = None
+        self.catalogue_lock = threading.Lock()
         self.print_file = ""
         self.artwork_key = None
 
@@ -341,10 +364,9 @@ class Service:
                 clock_baseline=baseline,
             ):
                 raise RuntimeError("Printer connection changed; retry the action.")
-            status = {
-                key: dict(value) if isinstance(value, dict) else value
-                for key, value in self.status.items()
-            }
+            # Status objects are replaced by merge_status, never edited in
+            # place. Retain unchanged references through the presentation layer.
+            status = dict(self.status)
             self.settings = settings
             self.settings_refresh_needed = False
         if model.stopped(status):
@@ -363,6 +385,14 @@ class Service:
 
     def submit(self, request):
         action = request.get("action")
+        if action == "view":
+            page = str(request.get("page", ""))[:48]
+            with self.lock:
+                entering = page == "filament" and self.visible_page != page
+                self.visible_page = page
+            if entering:
+                threading.Thread(target=self.refresh_cfs, daemon=True).start()
+            return
         if action == "files":
             # Browsing storage is a background read, not a printer operation.
             # Coalesce repeated navigation/refresh taps while the read is active.
@@ -592,10 +622,9 @@ class Service:
 
     def snapshot(self):
         with self.lock:
-            status = {
-                key: dict(value) if isinstance(value, dict) else value
-                for key, value in self.status.items()
-            }
+            # Unchanged objects retain identity; optimistic values below get
+            # their own presentation copies and never rewrite live status.
+            status = dict(self.status)
             settings = self.settings
             for (action, channel), (value, expiry) in list(
                 self.requested_values.items()
@@ -628,7 +657,9 @@ class Service:
                 ):
                     self.requested_values.pop((action, channel), None)
                 else:
-                    status.setdefault(obj, {})[field] = desired
+                    presented = dict(status.get(obj, {}))
+                    presented[field] = desired
+                    status[obj] = presented
             slots = []
             for key, rec in model.records(status).items():
                 # Removed spool data remains inside Klipper for the in-flight
@@ -689,6 +720,8 @@ class Service:
                 "heaters": heaters,
                 "axes": axis,
                 "materials": self.materials,
+                "resources": self.resources.descriptor,
+                "catalogue": self.catalogue.descriptor,
                 "prefs": self.current_preferences(),
                 "events": self.events,
                 "notices": self.notices,
@@ -1265,6 +1298,7 @@ class Service:
             self.gcode("CFS_LOAD_SLOT SLOT=%s CONFIRM=1" % slot)
 
     def save_slot(self, r, status, settings):
+        self.refresh_catalogue()
         slot = str(r["slot"])
         record = r["record"]
         if slot != "E" and slot not in model.slots(status):
@@ -1473,7 +1507,7 @@ class Service:
                 self.status_times.clear()
                 self.status.clear()
                 if remote_reboot or reset_clock:
-                    self.settings.clear()
+                    self.settings = {}
                 self.settings_refresh_needed = True
                 self.requested_values.clear()
                 self.pending_temperatures.clear()
@@ -1487,8 +1521,13 @@ class Service:
                     if eventtime < self.status_times.get(name, float("-inf")):
                         continue
                     self.status_times[name] = eventtime
+                if name == "hark_cfs_slots" and isinstance(values, dict):
+                    values = {key: value for key, value in values.items()
+                              if key not in ("library", "materials")}
                 if isinstance(values, dict) and not full:
-                    self.status.setdefault(name, {}).update(values)
+                    updated = dict(self.status.get(name, {}))
+                    updated.update(values)
+                    self.status[name] = updated
                 else:
                     self.status[name] = values
             self.connected = True
@@ -1559,7 +1598,8 @@ class Service:
         elif "result" in message and "status" in message["result"]:
             result = message["result"]
             self.merge_status(
-                result["status"], result.get("eventtime"), full=True, new_epoch=True
+                result["status"], result.get("eventtime"), full=True,
+                new_epoch=message.get("id") != 2
             )
             self.stream_connected = True
         elif method in (
@@ -1582,15 +1622,31 @@ class Service:
             ws = None
             try:
                 ws = WebSocket(self.mr.base)
+                with self.lock:
+                    self.cfs_initializing = True
+                self.subscription_refresh.clear()
                 ws.send(
                     {
                         "jsonrpc": "2.0",
                         "id": 1,
                         "method": "printer.objects.subscribe",
-                        "params": {"objects": {name: None for name in OBJECTS}},
+                        "params": {"objects": {
+                            name: list(SLOT_FIELDS) if name == "hark_cfs_slots" else None
+                            for name in OBJECTS
+                        }},
                     }
                 )
                 while True:
+                    if self.subscription_refresh.is_set():
+                        self.subscription_refresh.clear()
+                        ws.send({
+                            "jsonrpc": "2.0", "id": 2,
+                            "method": "printer.objects.subscribe",
+                            "params": {"objects": {
+                                name: list(SLOT_FIELDS) if name == "hark_cfs_slots" else None
+                                for name in OBJECTS
+                            }},
+                        })
                     self.stream_message(ws.receive())
             except Exception as error:
                 self.stream_connected = False
@@ -1920,15 +1976,84 @@ class Service:
         except (OSError, ValueError):
             pass
 
+    def refresh_catalogue(self):
+        """Keep one separate catalogue file; slot changes remain live status."""
+        with self.catalogue_lock:
+            with self.lock:
+                revision = self.status.get("hark_cfs_slots", {}).get("revision")
+                key = (self.status_epoch, revision)
+                if self.catalogue_revision == key:
+                    return
+            result = self.mr.request(
+                "/printer/objects/query?hark_cfs_slots=library,materials,revision"
+            )
+            if not isinstance(result, dict):
+                return
+            data = result.get("status", {}).get("hark_cfs_slots", {})
+            if not any(name in data for name in ("library", "materials")):
+                return
+            materials = list(data.get("library", [])) + list(data.get("materials", []))
+            self.catalogue.publish(materials)
+            with self.lock:
+                self.materials = self.filaments = materials
+                self.catalogue_revision = (self.status_epoch, data.get("revision", revision))
+
+    def cfs_fitted(self):
+        """Only query optional CFS hardware when the printer reports it fitted."""
+        cfs = self.status.get("k2_cfs", {})
+        return cfs.get("fitted") is True
+
+    def cfs_refresh_due(self, now):
+        return self.cfs_fitted() and (
+            self.cfs_initializing or (
+                self.visible_page == "filament" and not model.active(self.status)
+            )
+        ) and now - self.cfs_query_at >= 3
+
+    def refresh_cfs(self):
+        # A tab-entry read is allowed during printing; recurring reads are not.
+        # Coalesce a quick tab switch with the background startup/tab refresh.
+        if not self.cfs_query_lock.acquire(blocking=False):
+            return
+        try:
+            with self.lock:
+                if not self.cfs_fitted() or self.status.get("webhooks", {}).get("state") != "ready":
+                    return
+                epoch = self.status_epoch
+                known = {name: set(self.status.get(name, {}))
+                         for name in ("k2_cfs", "hark_cfs_slots")}
+            result = self.mr.request(
+                "/printer/objects/query?k2_cfs&hark_cfs_slots=" + ",".join(SLOT_FIELDS)
+            )
+            status = result["status"]
+            self.merge_status(status, result.get("eventtime"), epoch=epoch)
+            with self.lock:
+                if epoch != self.status_epoch:
+                    return
+                cfs = status.get("k2_cfs", {})
+                initialized = cfs.get("online") and "temperature" in cfs and "humidity" in cfs
+                new_fields = any(set(values) - known.get(name, set())
+                                 for name, values in status.items())
+                if new_fields or (self.cfs_initializing and initialized):
+                    self.subscription_refresh.set()
+                if initialized:
+                    self.cfs_initializing = False
+                self.cfs_query_at = time.monotonic()
+        except Exception as error:
+            # A failed optional read must not disconnect a healthy subscription.
+            print("screen CFS refresh: %s" % error, flush=True)
+        finally:
+            self.cfs_query_lock.release()
+
     def poll(self):
-        config_at = platform_at = alerts_at = full_at = 0
+        config_at = platform_at = alerts_at = 0
         while True:
             querying_status = False
             try:
                 now = time.monotonic()
-                if not self.stream_connected or not self.status or now - full_at >= 5:
-                    # CFS adds environment fields after its startup poll. Some
-                    # Moonraker versions subscribe only to initially known keys.
+                if not self.stream_connected or not self.status:
+                    # Full HTTP status is only a connection fallback. Healthy
+                    # subscriptions deliver updates without recurring full reads.
                     with self.lock:
                         epoch = self.status_epoch
                         baseline = max(
@@ -1944,7 +2069,10 @@ class Service:
                         clock_baseline=baseline,
                     )
                     querying_status = False
-                    full_at = now
+                with self.lock:
+                    cfs_due = self.cfs_refresh_due(now)
+                if self.stream_connected and cfs_due:
+                    self.refresh_cfs()
                 if (
                     now - config_at > 30
                     or not self.settings
@@ -1957,13 +2085,12 @@ class Service:
                         if epoch == self.status_epoch:
                             self.settings = refreshed
                             self.settings_refresh_needed = False
-                    data = self.status.get("hark_cfs_slots", {})
-                    # Library fields need an explicit full object query on
-                    # adapters which advertise a reduced subscription shape.
-                    self.materials = list(data.get("library", [])) + list(
-                        data.get("materials", [])
-                    )
-                    self.filaments = self.materials
+                    self.resources.publish({
+                        "settings": self.settings,
+                        "zones": storage.timezones(),
+                        "timezone_presets": storage.timezone_presets(),
+                        "tune_limits": model.TUNE_LIMITS,
+                    })
                     config_at = now
                     try:
                         self.platform["timelapse"] = self.mr.request(
@@ -1971,6 +2098,7 @@ class Service:
                         )
                     except Exception:
                         self.platform.pop("timelapse", None)
+                self.refresh_catalogue()
                 self.update_screen_idle()
                 self.preload_files()
                 filename = self.status.get("print_stats", {}).get("filename", "")
@@ -2058,6 +2186,7 @@ class Service:
         buffer = b""
         previous = ""
         last_warning = 0.0
+        encoder = SnapshotEncoder(immutable_status=True)
         try:
             while True:
                 readable, _, _ = select.select([connection], [], [], 0.2)
@@ -2071,7 +2200,11 @@ class Service:
                     while b"\n" in buffer:
                         line, buffer = buffer.split(b"\n", 1)
                         try:
-                            self.submit(json.loads(line))
+                            request = json.loads(line)
+                            if request.get("action") == "view":
+                                with self.lock:
+                                    self.view_client = connection
+                            self.submit(request)
                         except action_policy.ActionBusy:
                             # A rapid second tap is rejected, not queued or
                             # promoted into a modal printer error.
@@ -2083,12 +2216,19 @@ class Service:
                 with self.lock:
                     lock_wait = time.monotonic() - started
                     value = self.snapshot()
-                snapshot_at = time.monotonic()
+                    # These large resources are local files, not telemetry.
+                    # The renderer loads core data on revision changes and
+                    # loads the material catalogue only in the chooser.
+                    for key in ("settings", "materials", "zones", "timezone_presets", "tune_limits"):
+                        value.pop(key, None)
+                    snapshot_at = time.monotonic()
+                    # The paired renderer receives only changed sections after
+                    # the initial full state on every connection.
+                    encoded = encoder.encode(value)
                 # Suppress identical snapshots. The 200 ms idle wait bounds
                 # routine traffic; incoming commands still wake select immediately.
-                encoded = json.dumps(value, separators=(",", ":"), ensure_ascii=False)
                 encoded_at = time.monotonic()
-                if encoded != previous:
+                if encoded is not None and encoded != previous:
                     connection.sendall(encoded.encode() + b"\n")
                     previous = encoded
                 elapsed = time.monotonic() - started
@@ -2102,7 +2242,7 @@ class Service:
                             snapshot_at - started,
                             encoded_at - snapshot_at,
                             time.monotonic() - encoded_at,
-                            len(encoded),
+                            len(encoded or ""),
                         ),
                         flush=True,
                     )
@@ -2110,6 +2250,10 @@ class Service:
         except (OSError, ValueError):
             pass
         finally:
+            with self.lock:
+                if self.view_client is connection:
+                    self.visible_page = ""
+                    self.view_client = None
             connection.close()
 
 

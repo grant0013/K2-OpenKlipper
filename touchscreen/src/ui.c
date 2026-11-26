@@ -108,7 +108,8 @@ static ConnectionMode connection_state(void) {
     const char *state = S("status.webhooks.state");
     bool complete = app.connected && !strcmp(state, "ready") &&
                     cJSON_GetArraySize(J("settings")) > 0 && cJSON_GetArraySize(J("heaters")) > 0;
-    if (complete && (app.ever_ready || !cJSON_IsObject(J("status.k2_motor_bus")) ||
+    if (complete && ((!app.restart_waiting && app.ever_ready) ||
+                     !cJSON_IsObject(J("status.k2_motor_bus")) ||
                      B("status.k2_motor_bus.motors_ready")))
         return CONNECTION_READY;
     return app.ever_ready || !strcmp(state, "error") || !strcmp(state, "shutdown")
@@ -716,6 +717,19 @@ static void number_validate(void) {
     }
 }
 
+static void report_visible_page(void) {
+    if (!app.fixture && app.service_link) {
+        cJSON *r = cJSON_CreateObject();
+        cJSON_AddStringToObject(r, "action", "view");
+        cJSON_AddStringToObject(r, "page", app.route);
+        char *raw = cJSON_PrintUnformatted(r);
+        cJSON_Delete(r);
+        if (!platform_send(raw))
+            ui_transport_lost();
+        free(raw);
+    }
+}
+
 void ui_route(const char *route, bool back) {
     bool editing = !strcmp(app.route, "edit") || !strcmp(app.route, "materials") ||
                    !strcmp(app.route, "colors");
@@ -743,6 +757,9 @@ void ui_route(const char *route, bool back) {
     bool enter_files = !back && !strcmp(route, "files") && strcmp(app.route, "files") &&
                        strcmp(app.route, "file") && strncmp(app.route, "mapping", 7);
     snprintf(app.route, sizeof(app.route), "%s", route);
+    report_visible_page();
+    if (!strcmp(route, "materials"))
+        ui_catalogue_load();
     if (enter_files) {
         cJSON *r = cJSON_CreateObject();
         cJSON_AddStringToObject(r, "action", "files");
@@ -879,15 +896,21 @@ void ui_data(cJSON *data) {
         cJSON_Delete(data);
         return;
     }
+    bool patch = jbool(data, "_screen_patch", false);
+    if (patch && (!app.data || strcmp(S("session"), jstr(data, "session", "")))) {
+        cJSON_Delete(data);
+        return; /* A new connection must establish a complete baseline first. */
+    }
+    ui_resources_load(data);
     static uint64_t result_ids[32];
     static unsigned result_cursor;
     ConnectionMode previous_connection = ui_connection_mode();
     bool previous_link = app.service_link;
-    char *previous_view = ui_view_signature();
-    char *previous_policy = cJSON_PrintUnformatted(J("availability"));
-    char *previous_operations = cJSON_PrintUnformatted(J("operations"));
-    char *previous_operation = cJSON_PrintUnformatted(J("operation"));
-    char *previous_filament = cJSON_PrintUnformatted(J("filament_activity"));
+    bool view_changed = ui_view_changed(app.data, data);
+    bool policy_changed = !json_equal(J("availability"), json_update_value(app.data, data, "availability"));
+    bool activity_changed = !json_equal(J("operations"), json_update_value(app.data, data, "operations")) ||
+                            !json_equal(J("operation"), json_update_value(app.data, data, "operation")) ||
+                            !json_equal(J("filament_activity"), json_update_value(app.data, data, "filament_activity"));
     bool session_changed = strcmp(S("session"), jstr(data, "session", "")) != 0;
     char previous_home[1024];
     home_state(previous_home, sizeof(previous_home));
@@ -901,8 +924,10 @@ void ui_data(cJSON *data) {
     snprintf(previous_file, sizeof(previous_file), "%s", S("status.print_stats.filename"));
     int old_heaters = cJSON_GetArraySize(J("heaters"));
     bool old_fitted = B("status.k2_cfs.fitted");
-    cJSON_Delete(app.data);
-    app.data = data;
+    app.data = json_update(app.data, data);
+    data = app.data;
+    if (!strcmp(app.route, "materials") && ui_catalogue_load())
+        app.dirty = true;
     if (files_busy != B("files_refresh.busy") || wifi_busy != B("wifi.busy"))
         app.nav_dirty = true;
     if (app.file_waiting && !strcmp(S("file"), app.file) && B("file_read.busy"))
@@ -919,6 +944,8 @@ void ui_data(cJSON *data) {
     }
     app.connected = B("connected");
     app.service_link = true;
+    if (!previous_link || !patch)
+        report_visible_page();
     app.ever_service = true;
     ConnectionMode actual = connection_state();
     const char *printer_state = S("status.webhooks.state");
@@ -947,40 +974,19 @@ void ui_data(cJSON *data) {
         close_modal();
         app.dirty = true;
     }
-    char *new_view = ui_view_signature();
-    if (strcmp(previous_view ? previous_view : "", new_view ? new_view : ""))
+    if (view_changed)
         app.dirty = true;
-    free(previous_view);
-    free(new_view);
-    char *new_policy = cJSON_PrintUnformatted(J("availability"));
-    char *new_operations = cJSON_PrintUnformatted(J("operations"));
-    char *new_operation = cJSON_PrintUnformatted(J("operation"));
-    char *new_filament = cJSON_PrintUnformatted(J("filament_activity"));
-    bool policy_changed =
-        strcmp(previous_policy ? previous_policy : "", new_policy ? new_policy : "") != 0;
     if (policy_changed) {
         sync_availability(app.screen);
         if (app.number_open)
             number_validate();
     }
-    if (policy_changed ||
-        strcmp(previous_operations ? previous_operations : "",
-               new_operations ? new_operations : "") ||
-        strcmp(previous_operation ? previous_operation : "", new_operation ? new_operation : "") ||
-        strcmp(previous_filament ? previous_filament : "", new_filament ? new_filament : ""))
+    if (policy_changed || activity_changed)
         app.nav_dirty = true;
     if (policy_changed && !strcmp(app.route, "home"))
         app.dirty = true;
     if (policy_changed && !strcmp(app.route, "fans"))
         app.dirty = true;
-    free(previous_policy);
-    free(previous_operations);
-    free(previous_operation);
-    free(new_policy);
-    free(new_operations);
-    free(new_operation);
-    free(previous_filament);
-    free(new_filament);
     char current_home[1024];
     home_state(current_home, sizeof(current_home));
     char current_move[256];

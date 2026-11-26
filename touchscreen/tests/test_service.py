@@ -802,5 +802,133 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(snap["heaters"], [])
 
 
+    def test_stream_updates_and_reconnect_baselines(self):
+        import json
+        import socket
+        import threading
+
+        def connection():
+            server, client = socket.socketpair()
+            client.settimeout(3)
+            thread = threading.Thread(target=self.s.client, args=(server,), daemon=True)
+            thread.start()
+            reader = client.makefile("rb")
+            try:
+                baseline = json.loads(reader.readline())
+                self.assertNotIn("settings", baseline)
+                self.assertIn("resources", baseline)
+                self.assertNotIn("_screen_patch", baseline)
+                with self.s.lock:
+                    self.s.sequence += 1
+                    self.s.status["extruder"] = {
+                        "temperature": self.s.status.get("extruder", {}).get("temperature", 20) + 1
+                    }
+                update = json.loads(reader.readline())
+                self.assertTrue(update["_screen_patch"])
+                self.assertNotIn("settings", update["set"])
+                self.assertIn("status", update["set"])
+            finally:
+                reader.close()
+                client.close()
+                thread.join(timeout=3)
+                self.assertFalse(thread.is_alive())
+
+        connection()
+        connection()
+        connection()
+
+
+    def test_status_objects_remain_immutable_across_deltas_and_presented_targets(self):
+        self.s.status["extruder"] = {"temperature": 29, "target": 0}
+        before = self.s.snapshot()
+        original = before["status"]["extruder"]
+        self.s.merge_status({"extruder": {"temperature": 30}}, 20)
+        after = self.s.snapshot()
+        self.assertEqual(original, {"temperature": 29, "target": 0})
+        self.assertEqual(after["status"]["extruder"]["temperature"], 30)
+        self.assertIs(before["status"]["hark_cfs_slots"], after["status"]["hark_cfs_slots"])
+        self.s.requested_values[("temperature", "extruder")] = (180, time.monotonic() + 8)
+        presented = self.s.snapshot()
+        self.assertEqual(presented["status"]["extruder"]["target"], 180)
+        self.assertEqual(self.s.status["extruder"]["target"], 0)
+        self.assertEqual(after["status"]["extruder"]["target"], 0)
+
+
+    def test_catalogue_is_separate_and_refreshed_only_for_source_revisions(self):
+        import json
+        self.s.status["hark_cfs_slots"]["revision"] = 1
+        self.mr.request.return_value = {"status": {"hark_cfs_slots": {
+            "revision": 1, "materials": [{"name": "PLA"}], "library": []}}}
+        self.s.refresh_catalogue()
+        descriptor = self.s.catalogue.descriptor
+        self.assertEqual(json.loads(Path(descriptor["path"]).read_text()), [{"name": "PLA"}])
+        self.s.refresh_catalogue()
+        self.assertEqual(self.mr.request.call_count, 1)
+        self.s.merge_status({"hark_cfs_slots": {"revision": 2,
+                            "materials": [{"name": "not live"}]}}, 21)
+        self.assertNotIn("materials", self.s.status["hark_cfs_slots"])
+        self.mr.request.return_value = {"status": {"hark_cfs_slots": {
+            "revision": 2, "materials": [{"name": "PETG"}], "library": []}}}
+        self.s.refresh_catalogue()
+        self.assertEqual(self.mr.request.call_count, 2)
+        self.assertNotEqual(descriptor["revision"], self.s.catalogue.descriptor["revision"])
+        self.assertEqual(self.s.materials, [{"name": "PETG"}])
+
+
+    def test_cfs_polling_is_scoped_to_idle_visible_tab(self):
+        self.s.cfs_initializing = False
+        self.s.cfs_query_at = 10
+        self.s.visible_page = "home"
+        self.assertFalse(self.s.cfs_refresh_due(20))
+        self.s.visible_page = "filament"
+        self.assertTrue(self.s.cfs_refresh_due(20))
+        self.assertFalse(self.s.cfs_refresh_due(12))
+        for state in ("printing", "paused"):
+            self.s.status["print_stats"]["state"] = state
+            self.assertFalse(self.s.cfs_refresh_due(20))
+        self.s.cfs_initializing = True
+        self.assertTrue(self.s.cfs_refresh_due(20))
+        self.s.status["k2_cfs"]["fitted"] = False
+        self.assertFalse(self.s.cfs_refresh_due(20))
+        self.s.refresh_cfs()
+        self.mr.request.assert_not_called()
+
+    def test_cfs_refresh_discovers_late_fields_and_renews_subscription(self):
+        self.s.merge_status(self.state, 100, full=True)
+        self.mr.request.return_value = {"eventtime": 101, "status": {
+            "k2_cfs": dict(self.state["k2_cfs"], temperature=24, humidity=30),
+            "hark_cfs_slots": self.state["hark_cfs_slots"],
+        }}
+        self.s.refresh_cfs()
+        self.assertTrue(self.s.subscription_refresh.is_set())
+        self.assertFalse(self.s.cfs_initializing)
+        self.assertEqual(self.s.status["k2_cfs"]["temperature"], 24)
+        self.s.subscription_refresh.clear()
+        self.mr.request.return_value["eventtime"] = 102
+        self.s.refresh_cfs()
+        self.assertFalse(self.s.subscription_refresh.is_set())
+
+    def test_subscription_renewal_keeps_epoch_and_configuration(self):
+        self.s.merge_status(self.state, 100, full=True)
+        epoch = self.s.status_epoch
+        self.s.settings_refresh_needed = False
+        self.s.stream_message({"id": 2, "result": {"eventtime": 101, "status": self.state}})
+        self.assertEqual(self.s.status_epoch, epoch)
+        self.assertFalse(self.s.settings_refresh_needed)
+
+    def test_healthy_stream_does_not_poll_full_status_repeatedly(self):
+        self.s.stream_connected = True
+        self.s.cfs_initializing = False
+        self.s.visible_page = "home"
+        self.s.refresh_platform = mock.Mock()
+        self.s.update_screen_idle = mock.Mock()
+        self.s.preload_files = mock.Mock()
+        self.s.read_policy.update = mock.Mock()
+        with mock.patch("service.time.sleep", side_effect=StopIteration):
+            with self.assertRaises(StopIteration):
+                self.s.poll()
+        self.mr.status_snapshot.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
