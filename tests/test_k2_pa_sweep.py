@@ -191,6 +191,82 @@ class SweepRenderTest(unittest.TestCase):
             self.render(purge_x=120.)
 
 
+def k2_sweep(zero_pa=0.050, rounds=31, start=0.010, step=0.002,
+             loading=4, glitch_rounds=()):
+    """A synthetic K2 sweep: per round a slow stretch, a fast stroke whose
+    force steps up and settles flat within ~0.1 s (as the K2's does), then
+    a tail after the stroke proportional to (zero_pa - PA). The first
+    `loading` rounds have no flow. Returns (samples, moves)."""
+    samples, moves, t = [], [], 0.
+    for r in range(rounds):
+        pa = start + r * step
+        flow = r >= loading
+        for i in range(140):                                 # slow before
+            samples.append((t + i * 0.01, 1000))
+        t += 1.4
+        moves.append((t, 0.0707, 0., 92.7))                  # accel
+        moves.append((t + 0.0707, 0.2121, 6.551, 0.))        # cruise
+        moves.append((t + 0.2828, 0.0707, 6.551, -92.7))     # decel
+        e = t + 0.3536
+        for i in range(int(0.3536 / 0.005)):
+            x = i * 0.005
+            f = 80000 * min(1., x / 0.1) if flow else 0
+            samples.append((t + x, 1000 + int(f)))
+        tail = 3. * (zero_pa - pa) * 80000 if flow else 0
+        for i in range(150):                                 # slow after
+            x = i * 0.01
+            v = 1000 + (tail if x < 0.15 else 0)
+            if r in glitch_rounds and 0.05 < x < 0.08:
+                v += 400000                                  # gauge glitch
+            samples.append((e + x, int(v)))
+        t = e + 1.5
+    return samples, moves
+
+
+class TailTest(unittest.TestCase):
+    """METHOD=tail, the K2's reading (26 Nov 2026)."""
+
+    def run_tail(self, samples, moves, start=0.010, step=0.002):
+        from extras import hi_pa_compute as h
+        starts = h.fast_strokes(moves, 1.853 / (14. / 52.5))
+        self.assertEqual(len(starts), 31)
+        ends = h.stroke_ends(moves, starts)
+        self.assertAlmostEqual(ends[0] - starts[0], 0.3535, places=3)
+        return h.tail_result(h.tail_ratios(sorted(samples), starts, ends),
+                             start, step)
+
+    def test_zero_crossing_is_the_pa(self):
+        r = self.run_tail(*k2_sweep(0.050))
+        self.assertEqual(r["status"], "ok")
+        self.assertAlmostEqual(r["pa"], 0.050, places=3)
+
+    def test_loading_rounds_and_glitches_are_left_out(self):
+        r = self.run_tail(*k2_sweep(0.042, loading=8,
+                                    glitch_rounds=(12, 20)))
+        self.assertEqual(r["status"], "ok")
+        self.assertAlmostEqual(r["pa"], 0.042, places=3)
+        self.assertLessEqual(r["points"], 23)
+
+    def test_crossing_past_either_end(self):
+        self.assertEqual(self.run_tail(*k2_sweep(0.090))["status"], "high")
+        self.assertEqual(self.run_tail(*k2_sweep(0.004))["status"], "low")
+
+    def test_the_knee_reads_this_sweep_as_low(self):
+        # why the K2 needs the tail: a flat plateau peaks anywhere
+        from extras import hi_pa_compute as h
+        samples, moves = k2_sweep(0.050)
+        starts = h.fast_strokes(moves, 1.853 / (14. / 52.5))
+        pos = h.peak_positions(sorted(samples), starts, 14. / 52.5)
+        self.assertNotEqual(h.knee_result(pos, 0.010, 0.002)["status"], "ok")
+
+    def test_k2_macros_use_the_tail(self):
+        self.assertIn('METHOD={params.METHOD|default("tail")}',
+                      section("gcode_macro PA_SWEEP_CAL"))
+        self.assertIn("METHOD=tail", section("gcode_macro _PA_SWEEP_TEST"))
+        self.assertIn('METHOD={params.METHOD|default("tail")}',
+                      section("gcode_macro _PA_SWEEP_RESULT"))
+
+
 class KneeOnScaledStrokeTest(unittest.TestCase):
     """The K2's 14 mm stroke at F3150 lasts as long as the Hi's 40 mm at
     F9000, so the same capture reads the same knee once STROKE is given."""

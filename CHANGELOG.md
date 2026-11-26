@@ -6,9 +6,12 @@
   own strain-gauge test, as the Hi port runs it: over the chute, 31 rounds
   of one PA each, a slow stroke, a fast stroke back and a slow stroke home,
   extruding in the air while the head moves (Klipper only applies PA to
-  moves with X/Y in them). Where the gauge force peaks inside each fast
-  stroke gives the PA (`PA_SWEEP_COMPUTE`, the knee), read on the host; no
-  Creality program needed. The Hi moves its bed, the K2 moves its head, so
+  moves with X/Y in them). The K2 reads the force just after each fast
+  stroke (`PA_SWEEP_COMPUTE METHOD=tail`): pressure left in the nozzle
+  while the PA is too low, pulled under once it is too high; the PA is where
+  that crosses zero across the rounds. The Hi's own reading (where the
+  force peaks in the stroke) does not work on the K2, whose nozzle pressure
+  settles within 0.1 s. Read on the host; no Creality program needed. The Hi moves its bed, the K2 moves its head, so
   the K2 runs a scaled copy that fits between the bucket lever and the wiper
   pad (14 mm with `purge_x: 110`): stroke, speed and accel all scaled alike,
   so the extruder runs exactly the Hi's flow against time. The gauge is

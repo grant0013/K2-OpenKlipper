@@ -47,6 +47,16 @@
 # where that flips, found as the split that best separates late peaks from
 # early ones. 18 Nov 2026, black Hyper PETG 250 C: knee 0.066 / 0.068 / 0.068
 # over three sweeps where pa_compute answered on two of five (0.068, 0.076).
+# METHOD=tail (the K2's, 26 Nov 2026): the K2's nozzle pressure settles
+# ~0.1 s into the fast stroke and stays flat, so its peak lands anywhere on
+# the plateau and the knee reads every round as early. What does follow PA
+# is the force just after the stroke ends (0.03-0.13 s, past the PA
+# smoothing): pressure left in the nozzle while the PA is too low, pulled
+# under once it is too high. tail = that force less the slow-flow level it
+# settles to, over the stroke's step up; the PA is where the line through
+# the rounds crosses zero (Theil-Sen, outliers out, least squares). First
+# K2 run (black PETG 250 C, half the rounds still loading the strand):
+# 0.050, R2 0.97; printed chevron pick for that filament 11-04 0.052.
 # CROSS=1 also runs pa_compute and reports it next to the knee. QUIET=1
 # records a failure in get_status instead of raising (the automatic blend
 # carries on with its other test). The capture's _extruder.csv gives the
@@ -223,6 +233,111 @@ def knee_result(positions, start, step, max_errors=None):
     return out
 
 
+def stroke_ends(moves, starts):
+    """End print time of each fast stroke: walk on from its accelerating
+    phase to the end of the next decelerating phase (with a cruise ratio
+    the stroke lasts longer than length / speed)."""
+    moves = sorted(moves)
+    times = [m[0] for m in moves]
+    import bisect
+    out = []
+    for s in starts:
+        i = bisect.bisect_left(times, s)
+        end = None
+        for t, move_t, start_v, accel in moves[i:i + 6]:
+            if accel < 0.:
+                end = t + move_t
+                break
+        out.append(end)
+    return out
+
+
+def _window_median(samples, times, a, b, spread=300000):
+    """Median of the samples in [a, b), single-sample gauge glitches
+    (further than spread from the median) left out."""
+    import bisect
+    vals = [v for t, v in samples[bisect.bisect_left(times, a):
+                                  bisect.bisect_left(times, b)]]
+    if len(vals) < 5:
+        return None
+    m = _median(vals)
+    return _median([v for v in vals if abs(v - m) < spread])
+
+
+def tail_ratios(samples, starts, ends, tail=(0.03, 0.13)):
+    """Per round: the force just after the fast stroke ends, against the
+    slow flow it settles to, as a fraction of the fast stroke's step up.
+    PA too low leaves pressure in the nozzle (positive); too high pulls it
+    under (negative). samples [(print_time, raw)] sorted. -> [(ratio,
+    step_up)] with None where the gauge had a gap."""
+    times = [t for t, v in samples]
+    out = []
+    for s, e in zip(starts, ends):
+        if e is None:
+            out.append(None)
+            continue
+        base = _window_median(samples, times, s - 0.8, s - 0.1)
+        plat = _window_median(samples, times, s + 0.15, e - 0.07)
+        after = _window_median(samples, times, e + 0.5, e + 1.2)
+        tl = _window_median(samples, times, e + tail[0], e + tail[1])
+        if None in (base, plat, after, tl) or plat == base:
+            out.append(None)
+            continue
+        out.append(((tl - after) / float(plat - base), plat - base))
+    return out
+
+
+def tail_result(ratios, start, step, min_points=8, min_r2=0.6,
+                min_flow=0.5):
+    """Where the tail crosses zero across the sweep: a Theil-Sen line
+    through (PA, ratio), rounds further than 3 MADs from it left out, then
+    least squares. Rounds whose step up is under min_flow of the median
+    (no flow yet: the strand still loading) are left out first.
+    {'status': ok|low|high|unclear, 'pa', 'r2', 'points'}."""
+    steps = [r[1] for r in ratios if r is not None]
+    if not steps:
+        return {'status': 'unclear', 'pa': None, 'r2': None, 'points': 0}
+    sign = -1. if _median(steps) < 0 else 1.
+    flow = min_flow * abs(_median(steps))
+    pts = [(start + i * step, r[0]) for i, r in enumerate(ratios)
+           if r is not None and sign * r[1] >= flow]
+    out = {'pa': None, 'r2': None, 'points': len(pts)}
+    if len(pts) < min_points:
+        out['status'] = 'unclear'
+        return out
+    slopes = [(b[1] - a[1]) / (b[0] - a[0])
+              for i, a in enumerate(pts) for b in pts[i + 1:]]
+    b = _median(slopes)
+    a = _median([y - b * x for x, y in pts])
+    res = [y - a - b * x for x, y in pts]
+    mad = _median([abs(r) for r in res]) or 1e-9
+    keep = [p for p, r in zip(pts, res) if abs(r) <= 3. * 1.4826 * mad]
+    n = len(keep)
+    mx = sum(x for x, y in keep) / n
+    my = sum(y for x, y in keep) / n
+    sxx = sum((x - mx) ** 2 for x, y in keep)
+    syy = sum((y - my) ** 2 for x, y in keep)
+    if n < min_points or not sxx or not syy:
+        out['status'] = 'unclear'
+        return out
+    b = sum((x - mx) * (y - my) for x, y in keep) / sxx
+    a = my - b * mx
+    r2 = 1. - sum((y - a - b * x) ** 2 for x, y in keep) / syy
+    out.update(points=n, r2=round(r2, 3))
+    if b >= 0. or r2 < min_r2:
+        out['status'] = 'unclear'
+        return out
+    pa = -a / b
+    lo, hi = pts[0][0], pts[-1][0]
+    if pa < lo:
+        out['status'] = 'low'
+    elif pa > hi:
+        out['status'] = 'high'
+    else:
+        out.update(status='ok', pa=round(pa, 4))
+    return out
+
+
 def map_result(value, material_cfg, start, step, count):
     """pa_compute's answer -> (round, PA of our sweep)."""
     strat = float(material_cfg.get("paStrat"))
@@ -379,8 +494,8 @@ class HiPACompute:
         fast = gcmd.get_float("FAST", 9000., above=0.)
         stroke = gcmd.get_float("STROKE", 40., above=0.)
         method = gcmd.get("METHOD", "knee").lower()
-        if method not in ("knee", "pa_compute"):
-            raise gcmd.error("METHOD must be knee or pa_compute")
+        if method not in ("knee", "tail", "pa_compute"):
+            raise gcmd.error("METHOD must be knee, tail or pa_compute")
         cross = gcmd.get_int("CROSS", 0, minval=0, maxval=1)
         quiet = gcmd.get_int("QUIET", 0, minval=0, maxval=1)
         apply_pa = gcmd.get_int("SET", 0, minval=0, maxval=1)
@@ -402,24 +517,36 @@ class HiPACompute:
         except OSError as exc:
             return fail("Cannot read the capture %s: %s" % (name, exc))
         last["samples"] = len(samples)
-        if method == "knee" or cross:
+        if method in ("knee", "tail") or cross:
             try:
                 moves = self._read_moves(name)
             except (OSError, ValueError, AttributeError) as exc:
                 moves = None
-                last["knee_status"] = "no extruder log (%s)" % (exc,)
+                last["knee_status"] = last["tail_status"] = (
+                    "no extruder log (%s)" % (exc,))
             if moves is not None:
                 stroke_t = stroke / (fast / 60.)
-                starts = fast_strokes(moves, 1.853 / stroke_t)
-                positions = peak_positions(sorted(samples), starts[:count],
-                                           stroke_t)
-                k = knee_result(positions, start, step)
-                last.update(knee=k["pa"], knee_status=k["status"],
-                            knee_round=k["round"], knee_errors=k["errors"],
-                            strokes=len(starts))
-                logging.info("hi_pa_compute: knee %s positions %s", k,
-                             [None if x is None else round(x, 2)
-                              for x in positions])
+                starts = fast_strokes(moves, 1.853 / stroke_t)[:count]
+                last["strokes"] = len(starts)
+                if method == "knee" or cross:
+                    positions = peak_positions(sorted(samples), starts,
+                                               stroke_t)
+                    k = knee_result(positions, start, step)
+                    last.update(knee=k["pa"], knee_status=k["status"],
+                                knee_round=k["round"],
+                                knee_errors=k["errors"])
+                    logging.info("hi_pa_compute: knee %s positions %s", k,
+                                 [None if x is None else round(x, 2)
+                                  for x in positions])
+                if method == "tail":
+                    ratios = tail_ratios(sorted(samples), starts,
+                                         stroke_ends(moves, starts))
+                    tr = tail_result(ratios, start, step)
+                    last.update(tail=tr["pa"], tail_status=tr["status"],
+                                tail_r2=tr["r2"], tail_points=tr["points"])
+                    logging.info("hi_pa_compute: tail %s ratios %s", tr,
+                                 [None if x is None else round(x[0], 3)
+                                  for x in ratios])
         if method == "pa_compute" or cross:
             try:
                 value, rnd, pa, bins = self._pa_compute(
@@ -427,8 +554,14 @@ class HiPACompute:
                 last.update(pa_compute=pa, raw=value, round=rnd, bins=bins)
             except self.printer.command_error as exc:
                 last["pa_compute_error"] = str(exc)
-        chosen = last["knee"] if method == "knee" else last["pa_compute"]
+        chosen = last.get(method if method != "pa_compute" else
+                          "pa_compute")
         parts = []
+        if method == "tail":
+            parts.append("tail %s" % ("%.4f (fit R2 %.2f over %d rounds)" % (
+                last["tail"], last["tail_r2"], last["tail_points"])
+                if last.get("tail") is not None else
+                "none (%s)" % (last.get("tail_status"),)))
         if method == "knee" or cross:
             parts.append("knee %s" % ("%.4f" % last["knee"]
                                       if last["knee"] is not None else
@@ -440,12 +573,16 @@ class HiPACompute:
         summary = "PA sweep %s (%.3f-%.3f): %s" % (
             name, start, start + step * (count - 1), ", ".join(parts))
         if chosen is None:
-            why = {"low": "the knee is below this sweep: start lower",
-                   "high": "the knee is above this sweep: start higher"}.get(
-                last.get("knee_status"), "no pressure advance found")
+            what = "tail crossing" if method == "tail" else "knee"
+            why = {"low": "the %s is below this sweep: start lower" % what,
+                   "high": "the %s is above this sweep: start higher" % what
+                   }.get(last.get("%s_status" % (
+                       "tail" if method == "tail" else "knee",)),
+                       "no pressure advance found")
             return fail("%s; %s. PA left as it was." % (summary, why)
-                        if method == "knee" else "%s; %s. PA left as it "
-                        "was." % (summary, last.get("pa_compute_error", why)))
+                        if method != "pa_compute" else "%s; %s. PA left as "
+                        "it was." % (summary, last.get("pa_compute_error",
+                                                       why)))
         last["pa"] = chosen
         self.last = last
         gcmd.respond_info("%s -> PA %.4f" % (summary, chosen))
