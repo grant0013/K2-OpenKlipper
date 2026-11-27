@@ -1,0 +1,7 @@
+{
+  "description": "No mesh available during calibration.",
+  "scenario": "mesh-empty-busy",
+  "page": "mesh",
+  "printer_image": "assets/demo-printer-combo.png",
+  "actions": []
+}

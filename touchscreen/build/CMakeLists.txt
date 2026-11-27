@@ -24,10 +24,19 @@ file(GLOB UI_FONTS CONFIGURE_DEPENDS "${SCREEN_ROOT}/assets/generated/font_*.c")
 if(NOT UI_FONTS)
  message(FATAL_ERROR "Run touchscreen/developer-tools/build_assets.py first (see README)")
 endif()
-add_executable(openklipper-screen ${SCREEN_ROOT}/src/main.c ${SCREEN_ROOT}/src/platform.c ${SCREEN_ROOT}/src/json.c ${SCREEN_ROOT}/src/view_inputs.c ${SCREEN_ROOT}/src/ui.c ${SCREEN_ROOT}/src/views.c ${SCREEN_ROOT}/src/mesh.c ${cjson_SOURCE_DIR}/cJSON.c ${UI_FONTS})
+add_executable(openklipper-screen ${SCREEN_ROOT}/src/main.c ${SCREEN_ROOT}/src/platform.c ${SCREEN_ROOT}/src/json.c ${SCREEN_ROOT}/src/view_inputs.c ${SCREEN_ROOT}/src/ui.c ${SCREEN_ROOT}/src/views.c ${SCREEN_ROOT}/src/mesh.c ${SCREEN_ROOT}/src/printer_art.c ${cjson_SOURCE_DIR}/cJSON.c ${UI_FONTS})
 target_include_directories(openklipper-screen PRIVATE ${SCREEN_ROOT}/src ${cjson_SOURCE_DIR})
 target_link_libraries(openklipper-screen PRIVATE lvgl m pthread)
 target_compile_options(openklipper-screen PRIVATE -Wall -Wextra -Wformat=2 -Werror=implicit-function-declaration)
+# Keep local checkout, dependency and build paths out of __FILE__ and debug data.
+# Apply this to LVGL too: its assertion strings are linked into the runtime.
+foreach(target openklipper-screen lvgl)
+ target_compile_options(${target} PRIVATE
+  "-ffile-prefix-map=${SCREEN_ROOT}=touchscreen"
+  "-ffile-prefix-map=${CMAKE_BINARY_DIR}=build"
+  "-ffile-prefix-map=${lvgl_SOURCE_DIR}=lvgl"
+  "-ffile-prefix-map=${cjson_SOURCE_DIR}=cjson")
+endforeach()
 option(SCREEN_X11 "Build the interactive X11 simulator" ON)
 if(SCREEN_X11 AND NOT CMAKE_CROSSCOMPILING)
  find_package(X11)

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Rasterize the bundled, project-authored SVG preview artwork."""
+"""Refresh preview copies of production artwork and rasterize SVG fixtures."""
 
-import subprocess
+import sys
 import tempfile
-import xml.etree.ElementTree as ET
+import shutil
+import subprocess
 from pathlib import Path
 
 ASSETS = Path(__file__).resolve().parent / "fixtures/assets"
@@ -26,21 +27,23 @@ def render(source, destination):
 
 
 def main():
+    from build_printer_layers import build
+    build()
     render(ASSETS / "demo-part.svg", ASSETS / "demo-part.png")
     render(ASSETS / "demo-part-dark.svg", ASSETS / "demo-part-dark.png")
-    render(ASSETS.parents[2] / "assets/printer.svg", ASSETS / "demo-printer-combo.png")
-    render(
-        ASSETS.parents[2] / "assets/printer.svg",
-        ASSETS.parents[2] / "assets/printer-with-cfs.png",
-    )
-    tree = ET.parse(ASSETS.parents[2] / "assets/printer.svg")
-    root = tree.getroot()
-    root.remove(next(child for child in root if child.get("id") == "cfs"))
-    with tempfile.TemporaryDirectory(prefix="native-fixture-art-") as directory:
-        source = Path(directory) / "printer.svg"
-        tree.write(source, encoding="unicode")
-        render(source, ASSETS / "demo-printer-only.png")
-        render(source, ASSETS.parents[2] / "assets/printer-without-cfs.png")
+    # Use the same cached 400x286 canvas as the service. Tint masks and the
+    # base image must share a coordinate system in desktop and printer builds.
+    for source, target in (("printer-with-cfs.png", "demo-printer-combo.png"),
+                           ("printer-without-cfs.png", "demo-printer-only.png")):
+        sys.path.insert(0, str(ASSETS.parents[2] / "backend"))
+        from storage import prepare_image
+        with tempfile.TemporaryDirectory(prefix="printer-fixture-") as directory:
+            if source == "printer-with-cfs.png":
+                prepared = ASSETS.parents[2] / "assets/generated/printer-with-cfs-base.png"
+            else:
+                prepared = prepare_image(ASSETS.parents[2] / "assets" / source,
+                                         directory, "printer", (400, 286), lighten=True)
+            shutil.copyfile(prepared, ASSETS / target)
 
 
 if __name__ == "__main__":

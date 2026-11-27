@@ -85,21 +85,37 @@ bool ui_catalogue_load(void) {
     return true;
 }
 
-/* Patches replace whole top-level sections. Null is a value, not a deletion;
+/* Patches replace top-level sections or individual status objects. Null is a value, not a deletion;
  * explicit removals keep reconnects and cleared data unambiguous. */
 const cJSON *json_update_value(const cJSON *previous, const cJSON *update, const char *path) {
     if (!jbool(update, "_screen_patch", false))
         return jget(update, path);
     size_t length = strcspn(path, ".");
     const cJSON *item;
-    cJSON_ArrayForEach(item, jget(update, "remove"))
-        if (cJSON_IsString(item) && strlen(item->valuestring) == length &&
-            !strncmp(path, item->valuestring, length))
-            return NULL;
+    cJSON_ArrayForEach(
+        item, jget(update, "remove")) if (cJSON_IsString(item) &&
+                                          strlen(item->valuestring) == length &&
+                                          !strncmp(path, item->valuestring, length)) return NULL;
     const cJSON *changes = jget(update, "set");
-    cJSON_ArrayForEach(item, changes)
-        if (item->string && strlen(item->string) == length && !strncmp(path, item->string, length))
-            return jget(changes, path);
+    cJSON_ArrayForEach(item, changes) if (item->string && strlen(item->string) == length &&
+                                          !strncmp(path, item->string, length)) return jget(changes,
+                                                                                            path);
+    if (!strncmp(path, "status.", 7)) {
+        const char *object_path = path + 7;
+        size_t object_length = strcspn(object_path, ".");
+        cJSON_ArrayForEach(
+            item, jget(update, "status_remove")) if (cJSON_IsString(item) &&
+                                                     strlen(item->valuestring) == object_length &&
+                                                     !strncmp(object_path, item->valuestring,
+                                                              object_length)) return NULL;
+        cJSON_ArrayForEach(
+            item,
+            jget(update, "status_set")) if (item->string && strlen(item->string) == object_length &&
+                                            !strncmp(object_path, item->string,
+                                                     object_length)) return jget(jget(update,
+                                                                                      "status_set"),
+                                                                                 object_path);
+    }
     return jget(previous, path);
 }
 
@@ -123,9 +139,32 @@ cJSON *json_update(cJSON *previous, cJSON *update) {
                 cJSON_Delete(item);
         }
     }
-    cJSON_ArrayForEach(item, jget(update, "remove"))
-        if (cJSON_IsString(item))
-            cJSON_DeleteItemFromObjectCaseSensitive(previous, item->valuestring);
+    cJSON_ArrayForEach(item, jget(update, "remove")) if (cJSON_IsString(item))
+        cJSON_DeleteItemFromObjectCaseSensitive(previous, item->valuestring);
+    cJSON *objects = jget(update, "status_set"), *removed = jget(update, "status_remove");
+    if (objects || removed) {
+        cJSON *status = jget(previous, "status");
+        if (!cJSON_IsObject(status)) {
+            status = cJSON_CreateObject();
+            resource_set(previous, "status", status);
+        }
+        while (objects && objects->child) {
+            item = cJSON_DetachItemViaPointer(objects, objects->child);
+            cJSON *existing = cJSON_GetObjectItemCaseSensitive(status, item->string);
+            if (existing)
+                cJSON_ReplaceItemViaPointer(status, existing, item);
+            else {
+                char *key = strdup(item->string);
+                if (key) {
+                    cJSON_AddItemToObject(status, key, item);
+                    free(key);
+                } else
+                    cJSON_Delete(item);
+            }
+        }
+        cJSON_ArrayForEach(item, removed) if (cJSON_IsString(item))
+            cJSON_DeleteItemFromObjectCaseSensitive(status, item->valuestring);
+    }
     cJSON_Delete(update);
     return previous;
 }

@@ -174,3 +174,7 @@ for name in ("house", "printer-3d", "folder-open", "settings"):
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
     )
+
+# Small tint masks share the production illustration coordinate system.
+from build_printer_layers import build as build_printer_layers
+build_printer_layers()

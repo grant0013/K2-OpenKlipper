@@ -172,24 +172,9 @@ def system_identity():
                 result["interfaces"]["ethernet"] = {"name": name, "address": address}
     except (OSError, ValueError, subprocess.SubprocessError):
         pass
-    script = shutil.which("get_sn_mac.sh")
-    if script:
-        try:
-            value = (
-                subprocess.run(
-                    [script, "sn"],
-                    timeout=3,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.DEVNULL,
-                    check=True,
-                )
-                .stdout.decode()
-                .strip()
-            )
-            if value and len(value) < 100:
-                result["serial"] = value
-        except (OSError, subprocess.SubprocessError):
-            pass
+    serial = system_serial()
+    if serial:
+        result["serial"] = serial
     return result
 
 
@@ -486,3 +471,27 @@ def prepare_image(source, cache, name, bounds, lighten=False, trim=False):
         canvas.save(temporary)
         temporary.replace(target)
     return str(target)
+
+
+@lru_cache(maxsize=1)
+def system_serial():
+    """Hardware identity is constant for the lifetime of the backend."""
+    script = shutil.which("get_sn_mac.sh")
+    if script:
+        try:
+            value = (
+                subprocess.run(
+                    [script, "sn"],
+                    timeout=3,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    check=True,
+                )
+                .stdout.decode()
+                .strip()
+            )
+            if value and len(value) < 100:
+                return value
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return ""

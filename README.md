@@ -2,6 +2,7 @@
 
 This branch integrates the native touchscreen from
 [carmanspb/K2-OpenKlipper-Touchscreen](https://github.com/carmanspb/K2-OpenKlipper-Touchscreen).
+The vendored source revision is recorded in [TOUCHSCREEN-SOURCE](TOUCHSCREEN-SOURCE).
 
 **Open-source mainline Klipper for the Creality K2: strain-gauge probe, CFS
 multi-filament box, closed-loop motors and touchscreen, without Creality's

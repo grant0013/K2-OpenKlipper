@@ -316,7 +316,129 @@ class NativeUI(unittest.TestCase):
   data=demo_snapshot.preview_case('mesh-printing')
   items,commands=self.render('mesh',['mesh:save','mesh:load:1','mesh:delete:1','confirmed'],data)
   self.assertEqual(commands,[])
-  self.assertTrue(all(not i['enabled'] for i in items if i['action'].startswith('mesh:')))
+  self.assertTrue(all(not i['enabled'] for i in items if i['action'].startswith('mesh:') and not i['action'].startswith('mesh:preview:')))
+
+ def test_saved_mesh_preview_is_local_and_rename_is_available_for_every_profile(self):
+  import sys
+  sys.path.insert(0,str(ROOT/'developer-tools'))
+  import demo_snapshot
+  for case in ('mesh-unloaded','mesh-printing'):
+   items,commands=self.render('mesh',['mesh:preview:1'],demo_snapshot.preview_case(case))
+   self.assertEqual(commands,[])
+   self.assertTrue(any(i['action']=='mesh_reset' for i in items))
+   self.assertTrue(any(i['action']=='mesh:rename:1' for i in items))
+
+ def test_mesh_profile_name_selects_preview_and_moves_rename_to_header(self):
+  import sys
+  sys.path.insert(0,str(ROOT/'developer-tools'))
+  import demo_snapshot
+  items,commands=self.render('mesh',[{'tap':[580,350]}],demo_snapshot.preview_case('mesh'))
+  self.assertEqual(commands,[])
+  edits=[i for i in items if i['action'].startswith('mesh:rename:')]
+  self.assertEqual(len(edits),1)
+  self.assertEqual(edits[0]['action'],'mesh:rename:1')
+  self.assertLess(edits[0]['rect'][1],150)
+  self.assert_rect(items,'mesh:preview:1',[530,327,128,64])
+  loads=[i for i in items if i['action']=='mesh:load:1']
+  self.assertEqual(len(loads),2)
+  for item,want in zip(loads,[[717,90,52,52],[658,327,52,64]]):
+   for got,expected in zip(item['rect'],want): self.assertLessEqual(abs(got-expected),1)
+  self.assertEqual(edits[0]['rect'][1:],[loads[0]['rect'][1],52,52])
+  self.assert_rect(items,'mesh:delete:1',[710,327,52,64])
+
+ def test_mesh_selection_changes_rendered_surface_without_loading(self):
+  import sys
+  from PIL import Image
+  sys.path.insert(0,str(ROOT/'developer-tools'))
+  import demo_snapshot
+  data=demo_snapshot.preview_case('mesh')
+  pictures=[]
+  for index,y in enumerate((290,350,420)):
+   items,commands=self.render('mesh',[{'tap':[580,y]}],data)
+   self.assertEqual(commands,[])
+   self.assertFalse(any(i['action']=='mesh:save' for i in items))
+   self.assertEqual([i['action'] for i in items if i['action'].startswith('mesh:rename:')],['mesh:rename:'+str(index)])
+   with Image.open(self.path/'screen.ppm') as picture:
+    pictures.append(picture.crop((110,96,500,366)).tobytes())
+   rows=[i['rect'] for i in items if i['action'].startswith('mesh:preview:')]
+   self.assertEqual(len(rows),3)
+   self.assertTrue(all(y>=250 and y+h<=466 for x,y,w,h in rows))
+  self.assertEqual(len(set(pictures)),3)
+
+ def test_long_mesh_names_only_scroll_while_held(self):
+  import sys
+  from PIL import Image
+  sys.path.insert(0,str(ROOT/'developer-tools'))
+  import demo_snapshot
+  data=demo_snapshot.preview_case('mesh')
+  long_name='A very long mesh name for the installed textured build plate'
+  profiles=data['status']['bed_mesh']['profiles']
+  profiles[long_name]=profiles.pop('Demo bed')
+  data['status']['bed_mesh']['profile_name']=long_name
+  # This name is the third row and also appears in the preview header.
+  for point,region in (([580,420],(538,408,650,449)),([580,120],(533,103,707,137))):
+   self.render('mesh',data=data)
+   with Image.open(self.path/'screen.ppm') as image: idle=image.crop(region).tobytes()
+   self.render('mesh',[{'advance_ms':1800}],data)
+   with Image.open(self.path/'screen.ppm') as image: self.assertEqual(image.crop(region).tobytes(),idle)
+   hold=[{'queue_touch':point+[True]},{'advance_ms':700},{'advance_ms':1200}]
+   _,commands=self.render('mesh',hold,data)
+   self.assertEqual(commands,[])
+   with Image.open(self.path/'screen.ppm') as image: self.assertNotEqual(image.crop(region).tobytes(),idle)
+   _,commands=self.render('mesh',hold+[{'queue_touch':point+[False]}],data)
+   self.assertEqual(commands,[])
+   with Image.open(self.path/'screen.ppm') as image: self.assertEqual(image.crop(region).tobytes(),idle)
+
+ def test_holding_an_unselected_mesh_name_does_not_select_or_load_it(self):
+  import sys
+  sys.path.insert(0,str(ROOT/'developer-tools'))
+  import demo_snapshot
+  point=[580,350]
+  actions=[{'queue_touch':point+[True]},{'advance_ms':700},
+           {'advance_ms':1000},{'queue_touch':point+[False]}]
+  items,commands=self.render('mesh',actions,demo_snapshot.preview_case('mesh'))
+  self.assertEqual(commands,[])
+  self.assertEqual([i['action'] for i in items if i['action'].startswith('mesh:rename:')],['mesh:rename:0'])
+
+ def test_mesh_rotation_stops_at_upright_limits(self):
+  import sys
+  sys.path.insert(0,str(ROOT/'developer-tools'))
+  import demo_snapshot
+  data=demo_snapshot.preview_case('mesh')
+  drag=[{'queue_touch':[300,180,True]},{'queue_touch':[490,350,True]},
+        {'queue_touch':[490,350,False]}]
+  self.render('mesh',drag,data)
+  limited=(self.path/'screen.ppm').read_bytes()
+  _,commands=self.render('mesh',drag+drag,data)
+  self.assertEqual(commands,[])
+  self.assertEqual((self.path/'screen.ppm').read_bytes(),limited)
+
+ def test_profile_scroll_survives_preview_and_loading(self):
+  import sys
+  sys.path.insert(0,str(ROOT/'developer-tools'))
+  import demo_snapshot
+  data=demo_snapshot.preview_case('mesh')
+  profile=next(iter(data['status']['bed_mesh']['profiles'].values()))
+  data['status']['bed_mesh']['profiles']={str(n):profile for n in range(20)}
+  drag=[{'queue_touch':[650,y,True]} for y in (430,410,390,370,350)]
+  drag.append({'queue_touch':[650,350,False]})
+  items,_=self.render('mesh',drag,data)
+  before=next(i['rect'][1] for i in items if i['action']=='mesh:delete:0')
+  for action in ('mesh:preview:3','mesh:load:3','mesh:rename:3'):
+   items,_=self.render('mesh',drag+[action],data)
+   after=next(i['rect'][1] for i in items if i['action']=='mesh:delete:0')
+   self.assertEqual(after,before)
+
+ def test_empty_mesh_has_one_probe_action_or_idle_instruction(self):
+  import sys
+  sys.path.insert(0,str(ROOT/'developer-tools'))
+  import demo_snapshot
+  for case,probe in [('mesh-empty',True),('mesh-empty-printing',False),('mesh-empty-busy',False)]:
+   with self.subTest(case=case):
+    items,commands=self.render('mesh',data=demo_snapshot.preview_case(case))
+    self.assertEqual(any(i['action']=='calibrate:mesh' for i in items),probe)
+    self.assertFalse(any(i['action']=='mesh:save' for i in items))
+    self.assertEqual(commands,[])
 
  def test_mesh_saved_profiles_remain_accessible_without_active_mesh(self):
   import sys
@@ -763,5 +885,33 @@ class NativeUI(unittest.TestCase):
   self.assertIn({'action':'exclude','names':['Part_1'],'confirm':True},commands)
   self.assertFalse(any(i['action']=='back' and i['rect'][1]<100 for i in items))
 
+
+
+ def test_tune_loading_grace_skips_indicator_for_fast_reply(self):
+  waiting=copy.deepcopy(self.data);waiting['status']['print_stats']['state']='printing'
+  ready=copy.deepcopy(waiting);waiting['status'].pop('gcode_move')
+  items,commands=self.render(data=waiting,actions=['route:tune',{'advance_ms':40}])
+  self.assertTrue(any(i['action']=='route:objects' for i in items))
+  items,commands=self.render(data=waiting,actions=['route:tune',{'advance_ms':40},{'snapshot':ready}])
+  self.assertTrue(any(i['action']=='tune_input:speed' for i in items))
+
+ def test_tune_loading_indicator_has_minimum_visible_time(self):
+  waiting=copy.deepcopy(self.data);waiting['status']['print_stats']['state']='printing'
+  ready=copy.deepcopy(waiting);waiting['status'].pop('gcode_move')
+  actions=['route:tune',{'advance_ms':180}]
+  items,_=self.render(data=waiting,actions=actions)
+  self.assertFalse(any(i['action'] in ('route:objects','tune_input:speed') for i in items))
+  items,_=self.render(data=waiting,actions=actions+[{'snapshot':ready}])
+  self.assertFalse(any(i['action']=='tune_input:speed' for i in items))
+  items,_=self.render(data=waiting,actions=actions+[{'snapshot':ready},{'advance_ms':220}])
+  self.assertTrue(any(i['action']=='tune_input:speed' for i in items))
+
+ def test_tune_loading_grace_blocks_old_controls_and_allows_navigation(self):
+  waiting=copy.deepcopy(self.data);waiting['status']['print_stats']['state']='printing'
+  waiting['status'].pop('gcode_move')
+  _,commands=self.render(data=waiting,actions=['route:tune','{"action":"pause"}'])
+  self.assertFalse(any(c['action']=='pause' for c in commands))
+  items,_=self.render(data=waiting,actions=['route:tune',{'advance_ms':180},'route:home'])
+  self.assertTrue(any(i['action']=='route:objects' for i in items))
 
 if __name__=='__main__':unittest.main()

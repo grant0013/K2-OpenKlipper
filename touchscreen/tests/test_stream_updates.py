@@ -15,6 +15,16 @@ class StreamUpdates(unittest.TestCase):
     def pixels(self):
         return (self.path / 'screen.ppm').read_bytes()
 
+    def test_live_coordinates_return_to_centered_stationary_state(self):
+        self.render('move')
+        idle = self.pixels()
+        motion = {'current': [100, 150, 10], 'target': [300, 250, 10], 'moving': [True, True, False]}
+        self.render('move', [{'snapshot': self.patch({'motion': motion})}])
+        self.assertNotEqual(self.pixels(), idle)
+        self.render('move', [{'snapshot': self.patch({'motion': motion})},
+                             {'snapshot': self.patch({'motion': {}})}])
+        self.assertEqual(self.pixels(), idle)
+
     def test_partial_heater_update_matches_complete_state(self):
         changed = copy.deepcopy(self.data)
         changed['heaters'][0].update(current=187, target=210)
@@ -83,3 +93,39 @@ class StreamUpdates(unittest.TestCase):
         self.data['resources'] = {'path': str(self.path/'missing.json'), 'revision': 'missing'}
         items, _ = self.render('move')
         self.assertFalse(any(i['action'].startswith('jog:') for i in items))
+
+    def test_status_object_patch_matches_full_state_without_other_objects(self):
+        changed=copy.deepcopy(self.data)
+        changed['status']['fan']={'speed':.7}
+        self.render('fans',[{'snapshot':changed}])
+        expected=self.pixels()
+        patch=self.patch({})
+        patch['status_set']={'fan':{'speed':.7}}
+        patch['status_remove']=[]
+        self.render('fans',[{'snapshot':patch}])
+        self.assertEqual(self.pixels(),expected)
+
+    def test_status_replacement_and_removal_do_not_retain_old_interlocks(self):
+        changed=copy.deepcopy(self.data)
+        changed['status']['extruder']={'temperature':25}
+        del changed['status']['toolhead']
+        self.render('move',[{'snapshot':changed}])
+        expected=self.pixels()
+        patch=self.patch({})
+        patch['status_set']={'extruder':{'temperature':25}}
+        patch['status_remove']=['toolhead']
+        self.render('move',[{'snapshot':patch}])
+        self.assertEqual(self.pixels(),expected)
+
+    def test_ordered_object_patches_and_reconnect_match_full_baseline(self):
+        changed=copy.deepcopy(self.data)
+        changed['status']['fan']={'speed':.7}
+        self.render('fans',[{'snapshot':changed}])
+        expected=self.pixels()
+        first=self.patch({});first['status_remove']=['fan']
+        second=self.patch({});second['status_set']={'fan':{'speed':.7}}
+        self.render('fans',[{'snapshot':first},{'snapshot':second}])
+        self.assertEqual(self.pixels(),expected)
+        wrong=self.patch({},session='other');wrong['status_set']={'webhooks':{'state':'shutdown'}}
+        self.render('fans',[{'snapshot':second},{'snapshot':wrong},{'snapshot':changed}])
+        self.assertEqual(self.pixels(),expected)

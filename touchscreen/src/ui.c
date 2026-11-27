@@ -12,6 +12,25 @@ static char modal_kind[32];
 static bool rebuild;
 static lv_obj_t *current_scroll;
 static char rendered_route[48];
+static bool tune_entry_pending, tune_loading_visible;
+static uint32_t tune_entered_at, tune_loading_at;
+static bool tune_values_ready(void) {
+    return J("status.gcode_move.speed_factor") && J("status.gcode_move.extrude_factor") &&
+           J("status.gcode_move.homing_origin");
+}
+static bool defer_tune_render(void) {
+    if (strcmp(app.route, "tune") || (!app.printing && !app.paused) ||
+        ui_connection_mode() != CONNECTION_READY) {
+        tune_entry_pending = false;
+        return false;
+    }
+    if (tune_values_ready()) {
+        tune_entry_pending = false;
+        /* Once shown, keep the indicator long enough to avoid a single-frame flash. */
+        return tune_loading_visible && (uint32_t)(lv_tick_get() - tune_loading_at) < 200;
+    }
+    return tune_entry_pending && (uint32_t)(lv_tick_get() - tune_entered_at) < 150;
+}
 static struct {
     char route[48];
     int offset;
@@ -108,9 +127,9 @@ static ConnectionMode connection_state(void) {
     const char *state = S("status.webhooks.state");
     bool complete = app.connected && !strcmp(state, "ready") &&
                     cJSON_GetArraySize(J("settings")) > 0 && cJSON_GetArraySize(J("heaters")) > 0;
-    if (complete && ((!app.restart_waiting && app.ever_ready) ||
-                     !cJSON_IsObject(J("status.k2_motor_bus")) ||
-                     B("status.k2_motor_bus.motors_ready")))
+    if (complete &&
+        ((!app.restart_waiting && app.ever_ready) || !cJSON_IsObject(J("status.k2_motor_bus")) ||
+         B("status.k2_motor_bus.motors_ready")))
         return CONNECTION_READY;
     return app.ever_ready || !strcmp(state, "error") || !strcmp(state, "shutdown")
                ? CONNECTION_LOST
@@ -474,7 +493,7 @@ void ui_confirm(const char *message, const char *command) {
         : !strcmp(kind, "mesh_profile")
             ? (!strcmp(jstr(parsed, "operation", ""), "delete")   ? "Delete mesh profile?"
                : !strcmp(jstr(parsed, "operation", ""), "rename") ? "Rename mesh profile?"
-                                                                  : "Save mesh profile?")
+                                                                  : "Change mesh profile?")
         : !strcmp(kind, "motors")  ? "Unlock motors?"
         : !strcmp(kind, "restart") ? "Restart printer control?"
         : (!strcmp(kind, "delete_file") || !strcmp(kind, "delete_recording")) ? "Delete file?"
@@ -492,7 +511,7 @@ void ui_confirm(const char *message, const char *command) {
     else if (!strcmp(kind, "mesh_profile"))
         label = !strcmp(jstr(parsed, "operation", ""), "delete")   ? "Delete"
                 : !strcmp(jstr(parsed, "operation", ""), "rename") ? "Rename"
-                                                                   : "Save";
+                                                                   : "Continue";
     else if (!strcmp(kind, "motors"))
         label = "Unlock motors";
     else if (!strcmp(kind, "cancel"))
@@ -756,6 +775,9 @@ void ui_route(const char *route, bool back) {
     }
     bool enter_files = !back && !strcmp(route, "files") && strcmp(app.route, "files") &&
                        strcmp(app.route, "file") && strncmp(app.route, "mapping", 7);
+    tune_entry_pending = app.rendered && !strcmp(route, "tune") && strcmp(app.route, "tune") &&
+                         (app.printing || app.paused) && !tune_values_ready();
+    tune_entered_at = lv_tick_get();
     snprintf(app.route, sizeof(app.route), "%s", route);
     report_visible_page();
     if (!strcmp(route, "materials"))
@@ -783,6 +805,9 @@ void ui_action(const char *action) {
         return;
     if (mode == CONNECTION_LOST && strcmp(action, "close") && !recovery_action(action))
         return;
+    if (tune_entry_pending && strcmp(rendered_route, app.route) && strncmp(action, "route:", 6) &&
+        strcmp(action, "back"))
+        return; /* Old page stays visible during the grace period, but cannot submit controls. */
     if (*ui_control_reason(action))
         return;
     if (!app.fixture) {
@@ -872,12 +897,29 @@ void ui_init(const char *assets, const char *socket) {
 /* Home retains value widgets between snapshots. Rebuild its static artwork
  * and controls only when one of their actual inputs changes. */
 static void home_state(char *buffer, size_t size) {
-    snprintf(buffer, size, "%s|%g|%d|%d|%g|%g|%g|%g|%s|%s", S("status.k2_cfs.active_slot"),
-             N("status.hark_cfs_slots.revision"), B("status.k2_cfs.online"),
+    snprintf(buffer, size, "%s|%d|%d|%g|%g|%g|%g|%s|%s", S("status.k2_cfs.active_slot"),
+             B("status.k2_cfs.online"),
              B("status.filament_switch_sensor filament_sensor.filament_detected"),
              N("status.output_pin chamber_led.value"), N("status.fan.speed"),
              N("status.fan_generic auxiliary_fan.speed"), N("status.fan_generic exhaust_fan.speed"),
              S("platform.printer_image"), S("platform.thumbnail"));
+    /* Presence/structure can add controls; colour edits only tint existing
+     * dots and spool masks in views_refresh(), preserving the cached image. */
+    cJSON *record;
+    cJSON_ArrayForEach(record, J("slots")) {
+        size_t used = strlen(buffer);
+        if (used < size)
+            snprintf(buffer + used, size - used, "|%s:%d", jstr(record, "slot", ""),
+                     jbool(record, "loaded", false));
+        /* The external shortcut owns a material label and a colour ring;
+         * unlike CFS dots, those are built together by home_spool(). */
+        if (!B("status.k2_cfs.fitted") && !strcmp(jstr(record, "slot", ""), "E")) {
+            used = strlen(buffer);
+            if (used < size)
+                snprintf(buffer + used, size - used, "|%s:%s", jstr(record, "type", ""),
+                         jstr(record, "color", ""));
+        }
+    }
 }
 static void move_state(char *buffer, size_t size) {
     bool enabled = false;
@@ -907,10 +949,12 @@ void ui_data(cJSON *data) {
     ConnectionMode previous_connection = ui_connection_mode();
     bool previous_link = app.service_link;
     bool view_changed = ui_view_changed(app.data, data);
-    bool policy_changed = !json_equal(J("availability"), json_update_value(app.data, data, "availability"));
-    bool activity_changed = !json_equal(J("operations"), json_update_value(app.data, data, "operations")) ||
-                            !json_equal(J("operation"), json_update_value(app.data, data, "operation")) ||
-                            !json_equal(J("filament_activity"), json_update_value(app.data, data, "filament_activity"));
+    bool policy_changed =
+        !json_equal(J("availability"), json_update_value(app.data, data, "availability"));
+    bool activity_changed =
+        !json_equal(J("operations"), json_update_value(app.data, data, "operations")) ||
+        !json_equal(J("operation"), json_update_value(app.data, data, "operation")) ||
+        !json_equal(J("filament_activity"), json_update_value(app.data, data, "filament_activity"));
     bool session_changed = strcmp(S("session"), jstr(data, "session", "")) != 0;
     char previous_home[1024];
     home_state(previous_home, sizeof(previous_home));
@@ -1306,15 +1350,24 @@ static void connection_screen(ConnectionMode mode) {
 }
 
 void ui_render(void) {
+    bool tune_loading = !strcmp(app.route, "tune") && (app.printing || app.paused) &&
+                        !tune_values_ready() && ui_connection_mode() == CONNECTION_READY;
+    if (tune_loading && !tune_loading_visible)
+        tune_loading_at = lv_tick_get();
+    tune_loading_visible = tune_loading;
     save_scroll();
     current_scroll = NULL;
     snprintf(rendered_route, 48, "%s", app.route);
     app.dirty = false;
     rebuild = false;
+    printer_spools_reset();
+    memset(app.cfs_dots, 0, sizeof(app.cfs_dots));
     memset(app.current, 0, sizeof(app.current));
     memset(app.target, 0, sizeof(app.target));
     memset(app.temperature_arrow, 0, sizeof(app.temperature_arrow));
     memset(app.positions, 0, sizeof(app.positions));
+    memset(app.position_targets, 0, sizeof(app.position_targets));
+    memset(app.position_arrows, 0, sizeof(app.position_arrows));
     app.extrusion_temp = NULL;
     app.status_label = app.time_label = app.layer_label = app.progress = app.percent = NULL;
     lv_obj_clean(app.content);
@@ -1339,6 +1392,8 @@ void ui_render(void) {
     else
         views_render();
     restore_scroll();
+    if (current_scroll && !strcmp(app.route, "files"))
+        files_window_report(current_scroll);
     ui_update();
     app.rendered = true;
     views_overlay();
@@ -1360,7 +1415,7 @@ void ui_tick(void) {
         navigation();
         app.nav_dirty = false;
     }
-    if ((app.dirty || rebuild) && !pressing && !app.overlay)
+    if ((app.dirty || rebuild) && !pressing && !app.overlay && !defer_tune_render())
         ui_render();
 }
 

@@ -1,0 +1,7 @@
+{
+  "description": "Live estimated axis positions and destinations.",
+  "scenario": "moving",
+  "page": "move",
+  "printer_image": "assets/demo-printer-combo.png",
+  "actions": []
+}

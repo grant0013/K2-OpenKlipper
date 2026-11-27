@@ -238,3 +238,32 @@ def filament_activity(status, operations=()):
         }
     # Hardware operating modes and change_pending are not transaction lifetimes.
     return None
+
+
+def motion_state(status, use_live=True):
+    """Map interpolated machine coordinates into the displayed G-code frame.
+
+    Klipper's motion report estimates requested motion; it is not encoder
+    feedback. Anchor the transform at the commanded endpoint so offsets and
+    bed compensation do not shift the displayed destination.
+    """
+    def vector(value):
+        try:
+            result = [float(value[i]) for i in range(3)]
+            return result if all(map(math.isfinite, result)) else None
+        except (TypeError, ValueError, IndexError, KeyError):
+            return None
+
+    move = status.get("gcode_move", {})
+    target = vector(move.get("gcode_position"))
+    if target is None:
+        return {}
+    machine = vector(status.get("toolhead", {}).get("position")) or vector(move.get("position"))
+    live = vector(status.get("motion_report", {}).get("live_position")) if use_live else None
+    current = [target[i] + live[i] - machine[i] for i in range(3)] if live and machine else target[:]
+    homed = status.get("toolhead", {}).get("homed_axes", "")
+    return {
+        "current": current,
+        "target": target,
+        "moving": [axis in homed and abs(current[i] - target[i]) > .02 for i, axis in enumerate("xyz")],
+    }
