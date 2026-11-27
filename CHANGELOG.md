@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Screen shows the time left again, plus layer and print time.** With
+  Klipper on an external host the print files live on the host, so the
+  screen never found the file and its "time left / done about" was blank.
+  It now reads the slicer's time markers through Moonraker (once per print,
+  in the background); a file without them gets an estimate from the time
+  so far once the print is 3% in. Paused prints say how long is left when
+  resumed. A new row under the progress bar shows the layer, how long it
+  has been printing and the filament used.
 - **Home no longer brings the bed up into a finished print.** With Z already
   homed, `G28` (the screen's Home, Mainsail) raised the bed to 5 mm under
   the nozzle at the bed centre to tap again, into any part left on the bed.

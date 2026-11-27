@@ -42,7 +42,8 @@ DEFAULTS = {
 }
 
 OBJECTS = {
-    "print_stats": ["state", "filename", "message"],
+    "print_stats": ["state", "filename", "message", "print_duration",
+                    "filament_used", "info"],
     "virtual_sdcard": ["progress", "file_position", "is_active"],
     "display_status": ["progress", "message"],
     "extruder": ["temperature", "target"],
@@ -780,22 +781,72 @@ class Moonraker:
 
 
 class Eta:
-    """Slicer M73 remaining-time markers, indexed by file position."""
-    def __init__(self):
+    """Slicer M73 remaining-time markers, indexed by file position.
+
+    The file is read locally when Klipper runs on the K2; when Klipper runs
+    on an external host (k2-host) the files live there, so the markers are
+    streamed through Moonraker once per print in a background thread."""
+    MARK = re.compile(rb"^M73 P\d+ R(\d+)", re.M)
+
+    def __init__(self, base=None):
+        self.base = base              # callable -> Moonraker URL, or None
         self.filename = None
         self.marks = []
+        self.loading = False
+        self.failed_at = 0.
+
+    def _scan_local(self, filename):
+        with open(os.path.join(GCODE_DIR, filename), "rb") as f:
+            data = f.read()
+        return [(m.start(), int(m.group(1)))
+                for m in self.MARK.finditer(data)]
+
+    def _scan_remote(self, filename):
+        marks, pos, tail = [], 0, b""
+        url = (self.base().rstrip("/") + "/server/files/gcodes/"
+               + urllib.parse.quote(filename))
+        with urllib.request.urlopen(url, timeout=20) as r:
+            while True:
+                chunk = r.read(1 << 18)
+                if not chunk:
+                    break
+                buf = tail + chunk
+                start = pos - len(tail)
+                # Keep the last partial line for the next chunk
+                cut = buf.rfind(b"\n") + 1
+                for m in self.MARK.finditer(buf, 0, cut):
+                    marks.append((start + m.start(), int(m.group(1))))
+                tail = buf[cut:]
+                pos += len(chunk)
+        return marks
+
+    def _load(self, filename):
+        try:
+            marks = self._scan_remote(filename)
+            if self.filename == filename:
+                self.marks = marks
+            print("eta: %d M73 markers for %s via Moonraker"
+                  % (len(marks), filename), flush=True)
+        except Exception as e:
+            self.failed_at = time.time()
+            print("eta: could not read %s via Moonraker: %s"
+                  % (filename, e), flush=True)
+        finally:
+            self.loading = False
 
     def remaining_min(self, filename, file_position):
         if filename != self.filename:
-            self.filename, self.marks = filename, []
+            self.filename, self.marks, self.failed_at = filename, [], 0.
             try:
-                with open(os.path.join(GCODE_DIR, filename), "rb") as f:
-                    data = f.read()
-                self.marks = [(m.start(), int(m.group(1)))
-                              for m in re.finditer(rb"^M73 P\d+ R(\d+)",
-                                                   data, re.M)]
+                self.marks = self._scan_local(filename)
             except OSError:
-                pass
+                self.failed_at = -1.   # not local: fetch below
+        if (not self.marks and self.failed_at and not self.loading
+                and self.base and filename
+                and time.time() - self.failed_at > 60):
+            self.loading = True
+            threading.Thread(target=self._load, args=(filename,),
+                             daemon=True).start()
         best = None
         for pos, rem in self.marks:
             if pos > file_position:
@@ -1253,7 +1304,7 @@ class Screen:
             self.update_snooze = {}
         self.dirty = True
         self.ip = "?"
-        self.eta = Eta()
+        self.eta = Eta(lambda: self.cfg.get("screen", "moonraker"))
         self.fb = os.open(FB, os.O_RDWR)
         self.apply_config()
 
@@ -1721,10 +1772,12 @@ class Screen:
             return round(st.get(name, {}).get(key) or 0)
         ps = st.get("print_stats", {})
         vs = st.get("virtual_sdcard", {})
-        rem = None
-        if ps.get("state") == "printing":
-            rem = self.eta.remaining_min(ps.get("filename", ""),
-                                         vs.get("file_position", 0))
+        rem = self.print_eta(st) if ps.get("state") in (
+            "printing", "paused") else None
+        rem = rem and (round(rem[0]), rem[1])
+        rem = [rem, round((ps.get("print_duration") or 0) / 60),
+               (ps.get("info") or {}).get("current_layer"),
+               (ps.get("info") or {}).get("total_layer")]
         z = st.get("gcode_move", {}).get("gcode_position", [0, 0, 0])[2]
         return json.dumps([
             self.page, err, ps.get("state"), ps.get("filename"),
@@ -2367,6 +2420,45 @@ class Screen:
                                "rect": (cx - r - 8, cy - r - 8, cx + r + 8,
                                         cy + r + 8)})
 
+    @staticmethod
+    def dur(minutes):
+        minutes = max(0, int(round(minutes)))
+        if minutes >= 60:
+            return "%dh %02dm" % (minutes // 60, minutes % 60)
+        return "%d min" % minutes
+
+    def print_eta(self, st):
+        """(minutes left, guessed) for the print, or None. The slicer's M73
+        markers first; without them, the time so far scaled by how much of
+        the file is done (once it is far enough in to mean something)."""
+        ps = st.get("print_stats", {})
+        vs = st.get("virtual_sdcard", {})
+        rem = self.eta.remaining_min(ps.get("filename", ""),
+                                     vs.get("file_position", 0))
+        if rem is not None:
+            return rem, False
+        prog = vs.get("progress") or 0
+        spent = ps.get("print_duration") or 0
+        if prog >= 0.03 and spent >= 300:
+            return spent * (1 - prog) / prog / 60., True
+        return None
+
+    def print_facts(self, st):
+        """Layer, time printing and start time, as (label, value) pairs."""
+        ps = st.get("print_stats", {})
+        info = ps.get("info") or {}
+        out = []
+        cur, tot = info.get("current_layer"), info.get("total_layer")
+        if tot:
+            out.append(("Layer", "%d / %d" % (cur or 0, tot)))
+        spent = ps.get("print_duration") or 0
+        if spent > 0:
+            out.append(("Printing for", self.dur(spent / 60.)))
+        used = ps.get("filament_used") or 0
+        if used > 0:
+            out.append(("Filament", "%.1f m" % (used / 1000.)))
+        return out
+
     def page_status(self, d, body, st):
         x0, y0, x1, y1 = body
         pad = 14
@@ -2390,10 +2482,20 @@ class Screen:
             prog = st.get("display_status", {}).get("progress") or \
                 st.get("virtual_sdcard", {}).get("progress", 0)
             prog = max(0., min(1., prog))
-            rem = self.eta.remaining_min(
-                ps.get("filename", ""),
-                st.get("virtual_sdcard", {}).get("file_position", 0))
+            eta = self.print_eta(st) if state in ("printing",
+                                                    "paused") else None
             z = st.get("gcode_move", {}).get("gcode_position", [0, 0, 0])[2]
+
+            def left_text(eta):
+                if eta is None:
+                    return "Working out time left", None
+                rem, guess = eta
+                hrs = ("~" if guess else "") + self.dur(rem) + " left"
+                if state == "paused":
+                    return hrs, "when resumed"
+                done = time.strftime("%H:%M", local_time(
+                    time.time() + rem * 60, self.zone()))
+                return hrs, "done about " + done
             thumb = self.thumb if self.thumb and self.thumb[0] == ps.get(
                 "filename") else None
             if thumb and thumb[1] is not None:
@@ -2405,29 +2507,41 @@ class Screen:
                                   state == "printing")
                 tx = pbox[2] + 18
                 self.text(d, (tx, ly + 38), "%d%%" % round(prog * 100), "xl")
-                if state == "printing" and rem is not None:
-                    done = time.strftime("%H:%M", local_time(
-                        time.time() + rem * 60, self.zone()))
-                    hrs = "%dh %02dm" % (rem // 60, rem % 60) \
-                        if rem >= 60 else "%d min" % rem
-                    self.text(d, (tx, ly + 124), hrs + " left", "m",
+                if state in ("printing", "paused"):
+                    big, small = left_text(eta)
+                    self.text(d, (tx, ly + 116), big,
+                              "m" if eta else "xs",
+                              "text" if eta else "muted",
                               width=left[2] - 18 - tx)
-                    self.text(d, (tx, ly + 166), "done about " + done, "xs",
-                              "muted")
+                    if small:
+                        self.text(d, (tx, ly + 154), small, "xs", "muted")
+                    facts = dict(self.print_facts(st))
+                    if "Printing for" in facts:
+                        self.text(d, (tx, ly + 184),
+                                  facts["Printing for"] + " so far", "xs",
+                                  "muted")
                 bar = (lx, ly + 232, left[2] - 18, ly + 262)
             else:
                 self.text(d, (lx, ly + 44), "%d%%" % round(prog * 100),
                           "xl")
-                if state == "printing" and rem is not None:
-                    done = time.strftime("%H:%M", local_time(
-                        time.time() + rem * 60, self.zone()))
-                    hrs = "%dh %02dm" % (rem // 60, rem % 60) \
-                        if rem >= 60 else "%d min" % rem
-                    self.text(d, (left[2] - 18, ly + 58), hrs + " left",
-                              "m", anchor="ra")
-                    self.text(d, (left[2] - 18, ly + 98),
-                              "done about " + done, "xs", "muted",
-                              anchor="ra")
+                if state in ("printing", "paused"):
+                    big, small = left_text(eta)
+                    self.text(d, (left[2] - 18, ly + 58), big,
+                              "m" if eta else "xs",
+                              "text" if eta else "muted", anchor="ra")
+                    if small:
+                        self.text(d, (left[2] - 18, ly + 98), small, "xs",
+                                  "muted", anchor="ra")
+                    # Layer, time so far, filament: a row under the bar
+                    facts = self.print_facts(st)
+                    if facts:
+                        cw = (left[2] - 18 - lx) // len(facts)
+                        for i, (label, value) in enumerate(facts):
+                            fx = lx + i * cw
+                            self.text(d, (fx, ly + 200), label, "xxs",
+                                      "muted")
+                            self.text(d, (fx, ly + 222), value, "s",
+                                      width=cw - 8)
                 bar = (lx, ly + 150, left[2] - 18, ly + 180)
             d.rounded_rectangle(bar, radius=15, fill=self.c["background"],
                                 outline=self.c["panel_edge"], width=2)
@@ -2456,6 +2570,11 @@ class Screen:
                 ztxt = "Z %.2f mm" % z
                 if thumb and thumb[2] > 0:
                     ztxt += " of %.1f" % thumb[2]
+                    info = ps.get("info") or {}
+                    if info.get("total_layer") and thumb[1] is not None:
+                        ztxt = "Z %.1f / %.1f mm  ·  layer %d / %d" % (
+                            z, thumb[2], info.get("current_layer") or 0,
+                            info["total_layer"])
                 self.text(d, (lx, left[3] - 30), ztxt, "s", "muted",
                           anchor="lm")
         else:
