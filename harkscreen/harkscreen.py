@@ -66,6 +66,7 @@ OBJECTS = {
     "hark_cfs_slots": ["slots", "reel_flow", "tool_map_set", "tool_map_file",
                        "map_tools", "map_targets"],
     "hark_plr": ["available", "filename", "z"],
+    "exclude_object": ["objects", "excluded_objects", "current_object"],
     "filament_switch_sensor filament_sensor": ["filament_detected"],
     "k2_motor_bus": ["motors_ready"],
     "output_pin chamber_led": ["value"],
@@ -1019,6 +1020,7 @@ class DataThread(threading.Thread):
         sync_at = 0.
         was_ready = False
         storage_at = 0.
+        timelapse_at = 0.
         while True:
             mr = Moonraker(self.cfg.get("screen", "moonraker"))
             st, err = {}, None
@@ -1028,7 +1030,12 @@ class DataThread(threading.Thread):
                     err = "Klipper " + st.get("webhooks", {}).get("state",
                                                                    "?")
                 if time.time() - settings_at > 30:
-                    self.screen.timelapse = mr.timelapse()
+                    if time.time() >= timelapse_at:
+                        self.screen.timelapse = mr.timelapse()
+                        # Not installed (404): ask again in an hour, not
+                        # every 30 s
+                        timelapse_at = time.time() + (
+                            0 if self.screen.timelapse is not None else 3600)
                     self.screen.settings = mr.settings()
                     self.screen.filaments = mr.filaments()
                     settings_at = time.time()
@@ -1184,6 +1191,8 @@ class Screen:
         # None, "error"}; file_info caches each file's metadata/thumbnail
         self.files = None
         self.file_info = {}
+        # Objects on the bed while printing (exclude one): {"page"} or None
+        self.objects_view = None
         self.files_lock = threading.Lock()
         try:
             with open(PA_ACK_FILE) as f:
@@ -1760,6 +1769,7 @@ class Screen:
             # the Settings page shows the time
             time.strftime("%H:%M") if self.page == "settings" else "",
             self.files_key(),
+            self.objects_view, st.get("exclude_object"),
             # the stage timer ticks every 2 s while a stage runs
             int(time.time() / 2) if self.stage_log and self.stage_log[-1][0]
             else 0],
@@ -1801,6 +1811,9 @@ class Screen:
         if self.files is not None and st.get("print_stats", {}).get(
                 "state") in ("printing", "paused"):
             self.files = None
+        if self.objects_view is not None and st.get("print_stats", {}).get(
+                "state") not in ("printing", "paused"):
+            self.objects_view = None
         if err:
             self.draw_offline(d, body, err,
                               st.get("webhooks", {}).get("state_message", ""))
@@ -1808,6 +1821,8 @@ class Screen:
             self.draw_editor(d, body, st)
         elif self.files is not None:
             self.draw_files(d, body, st)
+        elif self.objects_view is not None:
+            self.draw_objects(d, body, st)
         else:
             getattr(self, "page_" + self.page)(d, body, st)
         self.draw_nav(d)
@@ -2753,7 +2768,12 @@ class Screen:
              busy, "play" if ps == "paused" else "pause"),
             ("Cancel", ("confirm", "Cancel the print?", "CANCEL_PRINT"),
              "error", busy, "stop"),
-            ("Home", ("gcode", "G28"), "accent", not busy, "home"),
+            # With Z unknown, homing brings the bed up to the nozzle at the
+            # centre (with Z homed, G28 keeps it and homes X and Y)
+            ("Home", ("gcode", "G28") if "z" in (st.get("toolhead") or {})
+             .get("homed_axes", "") else ("confirm", "Home the printer? The"
+             " bed comes up to the nozzle to measure Z: take any print off"
+             " the bed first.", "G28"), "accent", not busy, "home"),
             ("Deep clean", ("confirm", "Heat and deep-clean the nozzle?",
                             "NOZZLE_DEEP_CLEAN"), "accent", not busy,
              "clean"),
@@ -2790,14 +2810,17 @@ class Screen:
         saved = float(sp.get("z_offset") or 0.)
         offset = float((st.get("gcode_move") or {}).get(
             "homing_origin", [0, 0, 0])[2])
-        cols = 4
+        cols = 5
         bw = (x1 - x0 - (cols + 1) * pad) // cols
         bh = 150
+        objs = (st.get("exclude_object") or {}).get("objects") or []
         top = list(grid) + [
             ("Light off" if light else "Light on",
              ("gcode", "SET_PIN PIN=chamber_led VALUE=%d" % (0 if light
                                                              else 1)),
              "accent", True, "light_on" if light else "light"),
+            ("Objects (%d)" % len(objs) if objs else "Objects",
+             ("objects_open",), "accent", len(objs) > 0, "bed"),
             ("Save Z %+.3f" % (saved + self.z_adjust), ("z_save",),
              "ok", abs(self.z_adjust) > 1e-6, None)]
         for i, (label, action, color, enabled, icon) in enumerate(top):
@@ -3302,6 +3325,112 @@ class Screen:
                     fs["page"] < pages - 1, "s")
         self.button(d, (x0 + 3 * pad + 2 * bw, by, x1 - pad, by + 48),
                     "Close", ("files_close",), "muted", True, "s")
+
+    @staticmethod
+    def object_label(name):
+        """EXCLUDE_OBJECT names, tidied for the screen: the slicer's id and
+        copy suffix and file extension off, underscores as spaces."""
+        n = re.sub(r"_ID_\d+_COPY_\d+$", "", name.upper())
+        n = re.sub(r"\.(STL|3MF|STEP|STP|OBJ)", "", n)
+        return n.replace("_", " ").strip().lower() or name
+
+    def draw_objects(self, d, body, st):
+        x0, y0, x1, y1 = body
+        pad = 14
+        eo = st.get("exclude_object") or {}
+        objs = eo.get("objects") or []
+        excluded = set(eo.get("excluded_objects") or [])
+        current = eo.get("current_object")
+        active = [o for o in objs if o.get("name") not in excluded]
+        self.text(d, (x0 + pad, y0 + 8), "Objects on the bed", "s")
+        self.text(d, (x1 - pad, y0 + 12),
+                  "%d printing, %d excluded" % (len(active), len(excluded)),
+                  "xs", "muted", anchor="ra")
+        # Bed map (Y up), 260 mm square
+        top = y0 + 44
+        m = y1 - pad - top
+        mb = (x0 + pad, top, x0 + pad + m, top + m)
+        d.rounded_rectangle(mb, radius=12, fill=self.c["background"],
+                            outline=self.c["panel_edge"], width=2)
+        bed = 260.
+
+        def to_px(px, py):
+            return (mb[0] + 6 + px / bed * (m - 12),
+                    mb[3] - 6 - py / bed * (m - 12))
+        # Can't exclude the last object left: that's a cancel
+        can = len(active) > 1
+        # Excluded first, the one printing now last: overlapping markers
+        # show the ones that matter
+        order = sorted(range(len(objs)), key=lambda k: (
+            objs[k].get("name") not in excluded,
+            objs[k].get("name") == current))
+        for i in order:
+            o = objs[i]
+            name = o.get("name", "")
+            gone = name in excluded
+            now = name == current
+            col = (self.c["muted"] if gone else
+                   self.c["accent"] if now else self.c["text"])
+            poly = o.get("polygon") or []
+            if len(poly) >= 3:
+                pts = [to_px(px, py) for px, py in poly]
+                d.polygon(pts, fill=mix(self.c["background"], col,
+                                        0.10 if gone else 0.28),
+                          outline=col)
+            c = o.get("center")
+            if not c and poly:
+                c = (sum(p[0] for p in poly) / len(poly),
+                     sum(p[1] for p in poly) / len(poly))
+            if c:
+                cx, cy = to_px(c[0], c[1])
+                r = 15
+                d.ellipse((cx - r, cy - r, cx + r, cy + r),
+                          fill=self.c["background"], outline=col, width=2)
+                self.text(d, (cx, cy), str(i + 1), "xs", col, anchor="mm")
+                if gone:
+                    d.line((cx - r, cy + r, cx + r, cy - r), fill=col,
+                           width=2)
+                elif can:
+                    self.buttons.append((int(cx - 24), int(cy - 24),
+                                         int(cx + 24), int(cy + 24),
+                                         ("objects_pick", name, i + 1)))
+        # List
+        lx = mb[2] + pad
+        rh, gap = 52, 6
+        per = max(1, (y1 - pad - 56 - top) // (rh + gap))
+        pages = max(1, (len(objs) + per - 1) // per)
+        page = min(self.objects_view.get("page", 0), pages - 1)
+        self.objects_view["page"] = page
+        for j, o in enumerate(objs[page * per:(page + 1) * per]):
+            i = page * per + j
+            name = o.get("name", "")
+            gone = name in excluded
+            now = name == current
+            by = top + j * (rh + gap)
+            box = (lx, by, x1 - pad, by + rh)
+            col = self.c["accent"] if now else None
+            self.panel(d, box, col, fill=self.c["background"] if gone
+                       else None)
+            tc = "muted" if gone else "text"
+            self.text(d, (box[0] + 12, by + rh // 2), "%d" % (i + 1), "s",
+                      "accent" if now else tc, anchor="lm")
+            self.text(d, (box[0] + 44, by + 17), self.object_label(name),
+                      "xs", tc, anchor="lm", width=box[2] - box[0] - 54)
+            sub = ("excluded" if gone else "printing now" if now else
+                   "tap to exclude" if can else "last object left")
+            self.text(d, (box[0] + 44, by + 38), sub, "xxs",
+                      "accent" if now and not gone else "muted", anchor="lm",
+                      width=box[2] - box[0] - 54)
+            if not gone and can:
+                self.buttons.append((*box, ("objects_pick", name, i + 1)))
+        by = y1 - pad - 48
+        bw = (x1 - pad - lx - 2 * 8) // 3
+        self.button(d, (lx, by, lx + bw, by + 48), "Prev",
+                    ("objects_page", -1), "muted", page > 0, "xs")
+        self.button(d, (lx + bw + 8, by, lx + 2 * bw + 8, by + 48), "Next",
+                    ("objects_page", 1), "muted", page < pages - 1, "xs")
+        self.button(d, (lx + 2 * bw + 16, by, x1 - pad, by + 48), "Close",
+                    ("objects_close",), "muted", True, "xs")
 
     def draw_file_detail(self, d, body, st):
         fs = self.files
@@ -4484,6 +4613,7 @@ class Screen:
                 self.editor = None
                 self.kb = None
                 self.files = None
+                self.objects_view = None
             elif kind == "gcode":
                 if action[1] in label:
                     self.running = (label[action[1]], time.time())
@@ -4505,6 +4635,23 @@ class Screen:
                 self.want_file_info(mr)
             elif kind == "files_close":
                 self.files = None
+            elif kind == "objects_open":
+                self.objects_view = {"page": 0}
+            elif kind == "objects_close":
+                self.objects_view = None
+            elif kind == "objects_page" and self.objects_view is not None:
+                self.objects_view["page"] = max(
+                    0, self.objects_view.get("page", 0) + action[1])
+            elif kind == "objects_pick":
+                name, num = action[1], action[2]
+                arg = ('"%s"' % name) if " " in name else name
+                self.confirm = (
+                    "Exclude object %d (%s)? It is skipped for the rest of "
+                    "this print; this can't be undone."
+                    % (num, (lambda t: t if len(t) <= 34 else
+                             t[:33].rstrip() + "\u2026")(
+                                 self.object_label(name))),
+                    "EXCLUDE_OBJECT NAME=%s" % arg)
             elif kind == "files_print":
                 self.start_print(mr, action[1])
             elif kind == "files_pa_first" and self.files:

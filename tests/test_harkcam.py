@@ -96,6 +96,9 @@ class FakeCamera(threading.Thread):
     def fresh(self):
         return self.frame is not None
 
+    def no_frames_why(self):
+        return "No frames from the camera"
+
     def run(self):
         while True:
             with self.cond:
@@ -151,6 +154,11 @@ class CameraStateTest(unittest.TestCase):
         self.now = 100.0
         return hc.Camera("/dev/video0", "1280x720", 10,
                          clock=lambda: self.now)
+
+    def test_unplugged_camera_is_reported(self):
+        cam = hc.Camera("/dev/no-such-video9", "1280x720", 10)
+        self.assertTrue(cam.missing())
+        self.assertIn("not detected", cam.no_frames_why())
 
     def test_no_frame_is_not_fresh(self):
         self.assertFalse(self.camera().fresh())

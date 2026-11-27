@@ -91,12 +91,25 @@ class FakeSD:
         self.path = os.path.join(root, name)
         self.next_file_position = 0
         self.gcode = None
+        self.active = True
 
     def is_active(self):
-        return True
+        return self.active
 
     def file_path(self):
         return self.path
+
+
+class FakeExcludeObject:
+    def __init__(self):
+        self.objects = []
+        self.excluded_objects = []
+        self.current_object = None
+
+    def get_status(self, eventtime=None):
+        return {'objects': self.objects,
+                'excluded_objects': self.excluded_objects,
+                'current_object': self.current_object}
 
 
 class FakeGcode:
@@ -176,6 +189,7 @@ def make(steppers=None, bottom=None):
         'heater_bed': Obj({'target': 60.}),
         'fan': Obj({'speed': .5}),
         'k2_z_align': FakeZAlign(bottom or {'stepper_z': 26000}),
+        'exclude_object': FakeExcludeObject(),
     }
     printer = FakePrinter(objects, reactor, root)
     plr = plr_mod.HarkPLR(FakeConfig(printer))
@@ -283,6 +297,8 @@ class HarkPLRTest(unittest.TestCase):
         gcode = objects['gcode']
         gcode.scripts[:] = []
         plr.journal = plr._read_journal()
+        plr.printer.shutdown = False
+        objects['virtual_sdcard'].active = False
 
         class Cmd(FakeGcode):
             def get_int(self, name, default=None, **kw):
@@ -293,21 +309,24 @@ class HarkPLRTest(unittest.TestCase):
         plr.cmd_PLR_RESUME(Cmd())
         text = "\n".join(gcode.scripts)
         order = [text.index(k) for k in (
-            "M190 S60.0", "M109 S220.0", "KZ_ALIGN_BOTTOM", "G28 X Y",
+            "M190 S60.0", "MINIMUM=217.0", "KZ_ALIGN_BOTTOM", "G28 X Y",
             "CFS_PURGE_POSITION", "SET_PRESSURE_ADVANCE",
             "G1 X100.000 Y120.000", "RESTORE_GCODE_STATE NAME=_HARK_PLR",
             "M23 part.gcode", "M26 S300", "M24")]
         self.assertEqual(order, sorted(order))
         # the nozzle is stuck in the part until it is at print temperature,
         # so nothing moves before that wait
-        hot = text.index("M109 S220.0")
+        # M104 + TEMPERATURE_WAIT within 3 C (M109 also waits for the PID
+        # to settle, which a nozzle resting on the part may never do)
+        hot = text.index("TEMPERATURE_WAIT SENSOR=extruder MINIMUM=217.0")
         for move in ("KZ_ALIGN_BOTTOM", "G28", "G1 "):
             self.assertGreater(text.index(move), hot, move)
         # off the part it waits at standby, then heats again to prime
         self.assertLess(text.index("KZ_ALIGN_BOTTOM"),
                         text.index("M104 S140.0"))
         self.assertLess(text.index("M104 S140.0"), text.index("G28 X Y"))
-        self.assertGreater(text.index("M109 S220.0", hot + 1),
+        self.assertGreater(text.index("MINIMUM=217.0", text.index(
+            "MINIMUM=217.0", hot) + 1),
                            text.index("CFS_PURGE_POSITION"))
         # the bed goes up clear of the part before anything moves over it
         self.assertIn("G1 Z5.400", text)
@@ -347,6 +366,8 @@ class HarkPLRTest(unittest.TestCase):
         # M23 clears the excluded list
         plr, objects, journal = self.interrupted(excluded=['CUBE_1'])
         plr.journal = journal
+        plr.printer.shutdown = False
+        objects['virtual_sdcard'].active = False
         gcode = objects['gcode']
         gcode.scripts[:] = []
 
@@ -363,6 +384,67 @@ class HarkPLRTest(unittest.TestCase):
                         text.index("EXCLUDE_OBJECT NAME=CUBE_1"))
         self.assertLess(text.index("EXCLUDE_OBJECT NAME=CUBE_1"),
                         text.index("M24"))
+
+    def resume_cmd(self):
+        class Cmd(FakeGcode):
+            def get_int(self, name, default=None, **kw):
+                return 1
+
+            def error(self, msg):
+                return RuntimeError(msg)
+        return Cmd()
+
+    def test_a_second_resume_is_refused_while_a_print_runs(self):
+        # 27 Nov: the touchscreen's PLR_RESUME queued behind the console's
+        # and started a second recovery right after the first one's M24
+        plr, objects, journal = self.interrupted()
+        plr.journal = journal
+        plr.printer.shutdown = False
+        objects['virtual_sdcard'].active = True
+        objects['gcode'].scripts[:] = []
+        with self.assertRaisesRegex(RuntimeError, "already running"):
+            plr.cmd_PLR_RESUME(self.resume_cmd())
+        self.assertEqual(objects['gcode'].scripts, [])
+        objects['virtual_sdcard'].active = False
+        plr.resume_busy = True
+        with self.assertRaisesRegex(RuntimeError, "already running"):
+            plr.cmd_PLR_RESUME(self.resume_cmd())
+
+    def test_objects_and_the_current_object_come_back(self):
+        # M23 clears the object list, which the file only defines at its
+        # start, and the file carries on inside the current object
+        plr, objects, reactor = make()
+        excl = objects['exclude_object']
+        excl.objects = [{'name': 'CUBE_1', 'center': [50, 50]},
+                        {'name': 'CUBE_2', 'center': [150, 50]}]
+        excl.current_object = 'CUBE_2'
+        self.start_print(plr, objects, reactor)
+        objects['virtual_sdcard'].next_file_position = 300
+        plr.after_line("G1 X1")
+        objects['toolhead'].est = 99.
+        reactor.now += 20
+        plr._tick(reactor.now)
+        objects['print_stats'].status['state'] = 'error'
+        plr.printer.shutdown = True
+        plr._tick(reactor.now + 1)
+        journal = plr._read_journal()
+        self.assertEqual(journal['current_object'], 'CUBE_2')
+        self.assertEqual([o['name'] for o in journal['objects']],
+                         ['CUBE_1', 'CUBE_2'])
+        # restart: exclude_object starts empty
+        excl.objects, excl.current_object = [], None
+        plr.journal = journal
+        plr.printer.shutdown = False
+        objects['virtual_sdcard'].active = False
+        gcode = objects['gcode']
+        gcode.scripts[:] = []
+        plr.cmd_PLR_RESUME(self.resume_cmd())
+        self.assertEqual([o['name'] for o in excl.objects],
+                         ['CUBE_1', 'CUBE_2'])
+        text = "\n".join(gcode.scripts)
+        start = text.index("EXCLUDE_OBJECT_START NAME=CUBE_2")
+        self.assertLess(text.index("M26 S300"), start)
+        self.assertLess(start, text.index("M24"))
 
     def test_resume_needs_confirm(self):
         plr, objects, reactor = make()

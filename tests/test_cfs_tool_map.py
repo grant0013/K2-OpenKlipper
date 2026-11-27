@@ -604,7 +604,10 @@ class MacroTest(unittest.TestCase):
         self.assertIn('_STAGE TEXT="Loading the external spool"', out)
         out = self.render('LOAD_FILAMENT', self.printer(state='standby'),
                           SLOT='B')
-        self.assertEqual(out, ['CFS_LOAD_SLOT SLOT=B'])
+        # and the slot loaded clears a hand reload after a runout
+        self.assertEqual(out, ['CFS_LOAD_SLOT SLOT=B',
+                               'SET_GCODE_VARIABLE MACRO=_RUNOUT_REFILL'
+                               ' VARIABLE=hand_load VALUE=0'])
 
     def test_unload_rear_spool_with_a_cfs(self):
         out = self.render('UNLOAD_FILAMENT', self.printer(state='standby'),

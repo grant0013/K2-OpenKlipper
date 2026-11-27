@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+- **Home no longer brings the bed up into a finished print.** With Z already
+  homed, `G28` (the screen's Home, Mainsail) raised the bed to 5 mm under
+  the nozzle at the bed centre to tap again, into any part left on the bed.
+  Outside a print it now keeps Z and homes X and Y; `G28 Z FORCE=1` measures
+  Z again with the bed clear, and every print still measures it. Z homing is
+  refused while a print is paused, and so is `NOZZLE_CLEAR`. K2 and K2 Plus
+  configs (K2 Plus not yet tried on a printer). The screen asks before Home
+  only when Z really is measured.
+- **Rear spool runout: the new spool is actually loaded.** The old tail was
+  left in the extruder gears, so filament pushed in by hand stopped against
+  it and the insert grip turned the tail; RESUME then saw filament at the
+  sensor and printed with nothing feeding (27 Nov: a 20 h print lost). Now
+  the runout pushes the tail out at the chute while the nozzle is hot (like
+  stock's E30), the insert grip turns 10 mm, and the first RESUME after a
+  hand reload loads and purges, then waits for you to check plastic came out;
+  the next RESUME wipes and carries on. If the filament slips back out
+  during the load, it stays paused.
+- **RESUME goes back over the part, not through it.** PAUSE notes where the
+  print was; RESUME rises to 2 mm above that height, moves over, then drops
+  in, instead of one straight X/Y/Z line from wherever the head was.
+- **Power-loss recovery:** a second `PLR_RESUME` (the screen's offer and the
+  console) is refused while one runs; the object list and the object being
+  printed come back, so objects can still be excluded after a resume; the
+  material's PID profile, flow cap and filament profile are restored; the
+  heat waits are within 3 C instead of M109's settle, which a nozzle resting
+  on the part may never reach.
+- **Exclude objects from the touchscreen.** While printing, Controls has an
+  Objects button: a bed map with every object, the one printing now and the
+  ones excluded; tap one and confirm to skip it for the rest of the print.
+- `_HEAT_FAST` no longer hangs when a filament profile maps the temperature;
+  the first-layer temperature stops after layer 1 even when it equals the
+  file's body temperature.
+- harkcam says "Camera not detected: check its USB plug" and waits quietly
+  instead of restarting ffmpeg every few seconds when the camera is gone.
+  The screen asks Moonraker for timelapse settings hourly, not every 30 s,
+  when the add-on isn't installed.
+
 - **Pressure advance sweep from the Creality Hi (`PA_SWEEP_CAL`).** Creality's
   own strain-gauge test, as the Hi port runs it: over the chute, 31 rounds
   of one PA each, a slow stroke, a fast stroke back and a slow stroke home,

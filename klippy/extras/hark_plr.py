@@ -105,6 +105,9 @@ class HarkPLR:
         self.max_z = 0.
         self.was_state = None
         self.resuming = False
+        # A PLR_RESUME is running (its restore takes minutes): a second
+        # one, e.g. from the touchscreen, must not start
+        self.resume_busy = False
         self.journal = None
         self.timer = None
         self.status = {'enabled': self.enabled, 'available': False,
@@ -164,6 +167,8 @@ class HarkPLR:
         self.v_sd = self.printer.lookup_object('virtual_sdcard')
         self.gcode_move = self.printer.lookup_object('gcode_move')
         self.toolhead = self.printer.lookup_object('toolhead')
+        self.excl = self.printer.lookup_object('exclude_object', None)
+        self.pid = self.printer.lookup_object('hark_pid_profiles', None)
         journal = self._read_journal()
         if journal is not None:
             self._offer(journal)
@@ -244,6 +249,8 @@ class HarkPLR:
         status = self.toolhead.get_status(eventtime)
         candidate = {
             'file_position': self.v_sd.next_file_position,
+            'object': (self.excl.current_object if self.excl is not None
+                       else None),
             'done_by': status['print_time'] + self.mature_margin,
             'gcode': {
                 'absolute_coord': gm.absolute_coord,
@@ -278,6 +285,7 @@ class HarkPLR:
                      'position': safe['file_position']},
             'gcode': safe['gcode'],
             'max_z': self.max_z,
+            'current_object': safe.get('object'),
         }
         data.update(self._machine_state(eventtime))
         self._write_journal(data)
@@ -327,6 +335,22 @@ class HarkPLR:
             cs = cfs.get_status(eventtime)
             slot = cs.get('feed_slot') or cs.get('active_slot')
         out['cfs_slot'] = slot
+        # M23 on resume clears the file's object list (defined only at
+        # its start): keep it, so objects can still be excluded
+        out['objects'] = ([dict(o) for o in self.excl.objects]
+                          if self.excl is not None else [])
+        out['pid_profile'] = (self.pid.active.get('extruder')
+                              if self.pid is not None else None)
+        out['max_flow'] = ext.get('max_flow', 0.) or 0.
+        macros = {}
+        for m in ('_FILAMENT_PROFILE',):
+            obj = self.printer.lookup_object('gcode_macro ' + m, None)
+            if obj is not None:
+                try:
+                    macros[m] = json.loads(json.dumps(obj.variables))
+                except (TypeError, ValueError):
+                    pass
+        out['macro_vars'] = macros
         out['z_frame'] = self._z_frame()
         return out
 
@@ -429,6 +453,9 @@ class HarkPLR:
                 "PLR_RESUME moves the bed and heats up: check the part is"
                 " still stuck down and nothing is on the bed around it,"
                 " then PLR_RESUME CONFIRM=1")
+        if self.resume_busy or self.resuming or self.v_sd.is_active():
+            raise gcmd.error("Cannot resume: a resume or a print is already"
+                             " running")
         journal = self.journal or self._read_journal()
         if journal is None:
             raise gcmd.error("No interrupted print to resume")
@@ -436,6 +463,20 @@ class HarkPLR:
             path = self._validate(journal)
         except ValueError as exc:
             raise gcmd.error("Cannot resume: %s" % exc)
+        self.resume_busy = True
+        # The touchscreen stops offering it while this runs
+        self.status['available'] = False
+        try:
+            self._resume(gcmd, journal, path)
+        except Exception:
+            self.resuming = False
+            if self._read_journal() is not None:
+                self.status['available'] = True
+            raise
+        finally:
+            self.resume_busy = False
+
+    def _resume(self, gcmd, journal, path):
         try:
             self._restore(gcmd, journal)
         except Exception as exc:
@@ -457,9 +498,19 @@ class HarkPLR:
         self.last_written = None
         self._run("M23 %s" % (path,))
         self._run("M26 S%d" % (journal['file']['position'],))
-        # After M23, which clears the excluded list along with the file
+        # After M23, which clears the objects and the excluded list along
+        # with the file
+        if self.excl is not None and journal.get('objects'):
+            self.excl.objects = sorted(
+                (dict(o) for o in journal['objects']),
+                key=lambda o: o['name'])
         for name in journal.get('excluded') or []:
             self._run("EXCLUDE_OBJECT NAME=%s" % name)
+        if journal.get('current_object'):
+            # The file carries on inside this object: its END would not
+            # match otherwise
+            self._run("EXCLUDE_OBJECT_START NAME=%s"
+                      % journal['current_object'])
         self.status['available'] = False
         gcmd.respond_info("Power-loss recovery: carrying on with %s" % path)
         self._run("M24")
@@ -479,6 +530,15 @@ class HarkPLR:
         # Everything a resume needs from the slicer's start is in the
         # journal; start from plain defaults
         self._run("M107\nM220 S100\nM221 S100\nG90\nM83")
+        # The material's hotend PID (START_PRINT loaded it; a restart
+        # forgets it): the default gains swing +-1.5C at PETG/ASA heat
+        prof = journal.get('pid_profile')
+        if self.pid is not None and prof and prof != 'default':
+            try:
+                self.pid.load('extruder', prof)
+            except Exception as exc:
+                gcmd.respond_info("Power-loss recovery: PID profile %s not"
+                                  " loaded (%s)" % (prof, exc))
         if chamber > 40. and self.printer.lookup_object(
                 'heater_generic chamber_heater', None) is not None:
             self._run("CHAMBER_HEAT TARGET=%.1f" % chamber)
@@ -490,7 +550,7 @@ class HarkPLR:
             self._run("M190 S%.1f" % bed)
         gcmd.respond_info("Power-loss recovery: heating the nozzle to %.0fC"
                           " to free it from the part" % nozzle)
-        self._run("M109 S%.1f" % nozzle)
+        self._wait_nozzle(nozzle)
         # Z from the bottom switches (the bed goes away from the nozzle),
         # then into the frame the print used. Off the part now, so it can
         # wait at standby for the moves that follow
@@ -511,7 +571,7 @@ class HarkPLR:
         # Heat and prime: the print's filament fresh at the nozzle
         gcmd.respond_info("Power-loss recovery: heating the nozzle to %.0fC"
                           % nozzle)
-        self._run("M109 S%.1f" % nozzle)
+        self._wait_nozzle(nozzle)
         slot = journal.get('cfs_slot')
         if cfs is not None and cfs.fitted and slot:
             self._run("CFS_CHANGE_SLOT SLOT=%s CONFIRM=1" % slot)
@@ -534,12 +594,46 @@ class HarkPLR:
                   % (saved[0], saved[1], self.travel_speed * 60.,
                      saved[2], self.z_speed * 60.))
         self._restore_gcode_state(g)
+        self._restore_print_values(gcmd, journal)
         for name, speed in (journal.get('fans') or {}).items():
             if name == 'fan':
                 self._run("M106 S%d" % round(float(speed) * 255.))
             else:
                 self._run("SET_FAN_SPEED FAN=%s SPEED=%.3f"
                           % (name.split()[-1], float(speed)))
+
+    def _restore_print_values(self, gcmd, journal):
+        # Set by START_PRINT for this print and lost on a restart: the
+        # flow cap, the filament profile (slot temperatures and fan cap the
+        # file's own M104/M106 are mapped to) and the chamber fan loop
+        try:
+            flow = float(journal.get('max_flow') or 0.)
+            if flow > 0.:
+                self._run("SET_MAX_FLOW FLOW=%.2f" % flow)
+            for m, v in (journal.get('macro_vars') or {}).items():
+                obj = self.printer.lookup_object('gcode_macro ' + m, None)
+                if obj is not None and isinstance(v, dict):
+                    keep = dict(obj.variables)
+                    keep.update((k, val) for k, val in v.items()
+                                if k in keep)
+                    obj.variables = keep
+            if self.printer.lookup_object(
+                    'delayed_gcode _CHAMBER_FAN_LOOP', None) is not None:
+                self._run("UPDATE_DELAYED_GCODE ID=_CHAMBER_FAN_LOOP"
+                          " DURATION=10")
+        except Exception as exc:
+            logging.exception("hark_plr: print values not restored")
+            gcmd.respond_info("Power-loss recovery: some print settings not"
+                              " restored (%s)" % exc)
+
+    def _wait_nozzle(self, nozzle):
+        # M109 also waits for the temperature to stop moving (PID settle),
+        # and a nozzle resting on the part can swing +-1.5C for minutes:
+        # within 3C is enough here
+        self._run("M104 S%.1f\nTEMPERATURE_WAIT SENSOR=extruder MINIMUM=%.1f"
+                  % (nozzle, nozzle - 3.))
+        if self.printer.is_shutdown():
+            raise self.printer.command_error("the printer shut down")
 
     def _apply_z_frame(self, gcmd, frame):
         motors = frame['motors']

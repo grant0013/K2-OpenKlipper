@@ -413,9 +413,30 @@ class Camera(threading.Thread):
                       flush=True)
                 self.proc.kill()
 
+    def missing(self):
+        """True when the camera's device node is gone (unplugged)."""
+        return not os.path.exists(self.device)
+
+    def no_frames_why(self):
+        return ("Camera not detected: check its USB plug" if self.missing()
+                else "No frames from the camera")
+
     def run(self):
         threading.Thread(target=self.watch, daemon=True).start()
+        gone = False
         while True:
+            # Unplugged: wait quietly for it instead of starting ffmpeg
+            # every few seconds, and say so once
+            if self.missing():
+                if not gone:
+                    print("harkcam: %s not found (camera unplugged?),"
+                          " waiting for it" % self.device, flush=True)
+                    gone = True
+                time.sleep(10)
+                continue
+            if gone:
+                print("harkcam: %s is back" % self.device, flush=True)
+                gone = False
             self.started = self.clock()
             self.proc = proc = subprocess.Popen(
                 self.cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
@@ -699,7 +720,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         with CAM.cond:
             CAM.cond.wait_for(CAM.fresh, timeout=NO_FRAME_WAIT)
         if not CAM.fresh():
-            self.send_error(503, "No frames from the camera")
+            self.send_error(503, CAM.no_frames_why())
             return
         self.send_response(200)
         self.send_header("Content-Type",
@@ -745,7 +766,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         time.sleep(wait)
         frame = CAM.frame
         if not CAM.fresh():
-            self.send_error(503, "No frames from the camera")
+            self.send_error(503, CAM.no_frames_why())
             return
         self.send_response(200)
         self.send_header("Content-Type", "image/jpeg")
