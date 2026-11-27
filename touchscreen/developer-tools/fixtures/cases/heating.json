@@ -1,0 +1,7 @@
+{
+  "description": "Heating toward nozzle, bed and chamber targets.",
+  "scenario": "heating",
+  "page": "home",
+  "printer_image": "assets/demo-printer-combo.png",
+  "actions": []
+}

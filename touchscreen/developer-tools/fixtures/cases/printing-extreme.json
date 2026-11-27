@@ -1,0 +1,7 @@
+{
+  "description": "Very long print and high layer counts.",
+  "scenario": "printing-extreme",
+  "page": "home",
+  "printer_image": "assets/demo-printer-combo.png",
+  "actions": []
+}

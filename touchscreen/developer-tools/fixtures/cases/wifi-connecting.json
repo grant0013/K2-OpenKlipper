@@ -1,0 +1,7 @@
+{
+  "description": "Connection progress with network name.",
+  "scenario": "wifi-connecting",
+  "page": "wifi",
+  "printer_image": "assets/demo-printer-combo.png",
+  "actions": []
+}

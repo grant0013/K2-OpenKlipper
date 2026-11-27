@@ -1,0 +1,42 @@
+{
+  "canvas": [
+    400,
+    286
+  ],
+  "spools": [
+    {
+      "name": "printer-spool-1",
+      "x": 151,
+      "y": 41,
+      "width": 25,
+      "height": 33
+    },
+    {
+      "name": "printer-spool-2",
+      "x": 174,
+      "y": 41,
+      "width": 25,
+      "height": 33
+    },
+    {
+      "name": "printer-spool-3",
+      "x": 197,
+      "y": 41,
+      "width": 24,
+      "height": 33
+    },
+    {
+      "name": "printer-spool-4",
+      "x": 219,
+      "y": 41,
+      "width": 23,
+      "height": 33
+    }
+  ],
+  "neutral_region": [
+    149,
+    39,
+    99,
+    37
+  ]
+}

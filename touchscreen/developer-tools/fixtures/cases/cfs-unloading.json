@@ -1,0 +1,7 @@
+{
+  "description": "Cfs unloading with shared filament activity state.",
+  "scenario": "unload",
+  "page": "filament",
+  "printer_image": "assets/demo-printer-combo.png",
+  "actions": []
+}

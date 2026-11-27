@@ -1,0 +1,7 @@
+{
+  "description": "CFS spools present but no filament in the extruder.",
+  "scenario": "empty-extruder",
+  "page": "filament",
+  "printer_image": "assets/demo-printer-combo.png",
+  "actions": []
+}

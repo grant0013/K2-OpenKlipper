@@ -65,7 +65,7 @@ fi
 
 if [ "$PURGE" = 1 ]; then
     say "Deleting the open-stack files and settings"
-    rm -rf "$BUILD" "$PDATA" /mnt/UDISK/mainsail-mainline /mnt/UDISK/harkscreen /mnt/UDISK/harkcam
+    rm -rf "$BUILD" "$PDATA" /mnt/UDISK/mainsail-mainline /mnt/UDISK/openklipper-screen /mnt/UDISK/harkcam
 fi
 
 cat <<EOF

@@ -1,0 +1,7 @@
+{
+  "description": "Centered Wi-Fi network scan feedback.",
+  "scenario": "wifi-scanning",
+  "page": "networks",
+  "printer_image": "assets/demo-printer-combo.png",
+  "actions": []
+}

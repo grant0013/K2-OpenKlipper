@@ -1,7 +1,7 @@
 #!/bin/sh
 # Point the G-code, time-lapse and log folders at the storage chosen on the
 # touchscreen's Settings page ("gcode_storage": "usb" in
-# harkscreen-settings.json): a USB drive in the K2's USB port (the K2 mounts
+# native-screen-settings.json): a USB drive in the K2's USB port (the K2 mounts
 # it at /mnt/exUDISK), or the printer's own eMMC when there is none. Keeps
 # frequent writes (uploads, prints, time-lapse videos, Klipper's log) off
 # the eMMC. Run by switch-to-mainline.sh before Klipper starts; prints the
@@ -10,7 +10,7 @@
 PDATA=${OKL_PDATA:-/mnt/UDISK/printer_data_mainline}
 DATA=${OKL_DATA:-/mnt/UDISK/printer_data}
 MOUNTS=${OKL_MOUNTS:-/proc/mounts}
-PREFS=$PDATA/config/harkscreen-settings.json
+PREFS=$PDATA/config/native-screen-settings.json
 USB=${OKL_USB:-/mnt/exUDISK}
 
 where=internal

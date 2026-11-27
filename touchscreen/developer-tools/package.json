@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "name": "openklipper-screen-assets",
+  "version": "0.1.0",
+  "description": "Pinned build-only dependencies for the native screen assets",
+  "dependencies": {
+    "lucide-static": "0.468.0",
+    "lv_font_conv": "1.5.3"
+  }
+}

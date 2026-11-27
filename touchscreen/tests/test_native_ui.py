@@ -1,0 +1,917 @@
+"""Exercise the real LVGL tree, events and native geometry without hardware."""
+import copy
+import json
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+import unittest
+from unittest import mock
+
+from test_service import Service, status, settings
+
+ROOT=Path(__file__).resolve().parents[1]
+BINARY=Path(os.environ.get('SCREEN_BINARY',ROOT/'out/host/openklipper-screen'))
+ASSETS=ROOT/'assets/generated'
+
+
+@unittest.skipUnless(BINARY.exists(),'Build the native application before UI tests')
+class NativeUI(unittest.TestCase):
+ def setUp(self):
+  self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
+  self.path=Path(self.tmp.name)
+  config=self.path/'native.cfg';config.write_text('[brand]\nmodel: Test printer\n[screen]\n')
+  service=Service(config,mock.Mock());service.connected=True;service.status=status();service.settings=settings()
+  service.status.update({'extruder':{'temperature':29,'target':0},'heater_bed':{'temperature':29,'target':0},
+                         'temperature_sensor chamber_temperature':{'temperature':27},'hark_chamber':{'requested':0},
+                         'gcode_move':{'position':[225,345,179.97],'gcode_position':[225,345,179.97],
+                                       'speed_factor':1,'extrude_factor':1,'homing_origin':[0,0,0]},
+                         'stepper_enable':{'steppers':{'stepper_x':True}},
+                         'output_pin chamber_led':{'value':1},'fan':{'speed':0}})
+  for letter in 'CD':service.status['hark_cfs_slots']['slots'][letter]={'loaded':True,'type':'PLA','name':'Generic PLA','color':'5035CE','nozzle_temp':220}
+  service.status['hark_cfs_slots']['map_targets']=['A','B','C','D','E']
+  service.status['k2_cfs'].update(active_slot='D',temperature=24,humidity=25)
+  service.settings.update({'bed_mesh':{'mesh_min':[0,0],'mesh_max':[350,350]},'fan_generic auxiliary_fan':{},'fan_generic exhaust_fan':{},'resonance_tester':{},'k2_cfs':{},'k2_belt_tension':{}})
+  service.materials=[{'name':'Generic PLA','type':'PLA','nozzle_temp':220},{'name':'Generic PETG','type':'PETG','nozzle_temp':250}]
+  service.selected_file='part.gcode';service.metadata['part.gcode']={'estimated_time':7680,'filament_weight_total':64,'layer_count':500,'filaments':[{'tool':0,'type':'PLA','colour':'5035CE'}],'suggested_mapping':{'0':'D'}}
+  service.files=[{'path':'part.gcode','modified':1700000000,'size':12345}]
+  service.platform={'wifi':{},'timelapse':{'enabled':False},'free':'12 GB free','serial':'TEST','timezone':'America/Detroit'}
+  self.data=service.snapshot()
+
+ def render(self,page='home',actions=None,data=None,timeout=20):
+  fixture=self.path/'fixture.json';fixture.write_text(json.dumps(data or self.data))
+  action_file=self.path/'actions.json';action_file.write_text(json.dumps(actions or []))
+  output=self.path/'screen.ppm';geometry=self.path/'geometry.json';record=self.path/'commands.jsonl'
+  if record.exists():record.unlink()
+  result=subprocess.run([str(BINARY),'--assets',str(ASSETS),'--fixture',str(fixture),'--page',page,
+                         '--actions',str(action_file),'--record-commands',str(record),
+                         '--snapshot',str(output),'--geometry',str(geometry)],capture_output=True,timeout=timeout)
+  self.assertEqual(result.returncode,0,result.stderr.decode()+result.stdout.decode())
+  commands=[json.loads(line) for line in record.read_text().splitlines()] if record.exists() else []
+  return json.loads(geometry.read_text()),commands
+
+ def assert_rect(self,items,action,expected):
+  actual=next(item['rect'] for item in items if item['action']==action)
+  for got,want in zip(actual,expected):self.assertLessEqual(abs(got-want),1,(action,actual,expected))
+
+ def test_all_pages_build_without_issuing_commands(self):
+  pages=['home','move','heat','fans','filament','tune','calibration','files','file','mapping','mapping_pick',
+         'settings','display','timers','refill','refill_sequence','network','ethernet','wifi','networks',
+         'timelapse','recordings','storage','usb','system','machine','software','timezone','restart','save',
+         'history','errors','help','language','objects','edit','materials','colors']
+  for page in pages:
+   with self.subTest(page=page):
+    _,commands=self.render(page);self.assertTrue(all(c['action']=='files' for c in commands))
+
+ def test_idle_home_has_no_history_button_and_right_column_cfs(self):
+  items,_=self.render()
+  self.assertFalse(any(i['action']=='route:history' for i in items))
+  self.assert_rect(items,'home_filament_strip',[591,289,190,80])
+  self.assert_rect(items,'open_files',[103,391,470,70])
+  self.assert_rect(items,'home_fans',[691,391,90,70])
+  self.assert_rect(items,'{"action":"light"}',[591,391,90,70])
+
+ def test_cfs_shortcut_is_tappable_across_its_height(self):
+  for point in ([600,300],[650,325],[700,325],[772,350],[750,360]):
+   with self.subTest(point=point):
+    items,commands=self.render(actions=[{'tap':point}])
+    self.assertTrue(any(item['action']=='edit_slot' for item in items))
+    self.assertEqual(commands,[])
+
+ def test_filament_slots_and_footer_use_current_native_geometry(self):
+  items,_=self.render('filament')
+  expected={'slot:A':[103,88,123,240],'slot:D':[502,88,123,240],
+            'slot:E':[651,88,126,240],'edit_slot':[147,398,110,68],
+            'load':[269,398,190,68],'unload':[471,398,190,68],
+            'route:refill':[673,398,64,68]}
+  for action,rect in expected.items():self.assert_rect(items,action,rect)
+
+ def test_actual_tab_touch_does_not_issue_commands_or_create_stray_controls(self):
+  items,commands=self.render('move',[{'tap':[490,48]}])
+  self.assertEqual(commands,[])
+  self.assertTrue(any(item['action']=='edit_slot' for item in items))
+  self.assertFalse(any(item['action'].startswith('jog:') for item in items))
+
+ def test_subpage_buttons_have_touch_sized_targets(self):
+  for page in ('move','heat','fans','filament','tune','calibration','files','file','mapping',
+               'mapping_pick','settings','display','timers','refill','network','wifi',
+               'storage','system','timezone','edit','materials','colors'):
+   items,_=self.render(page)
+   for item in items:
+    with self.subTest(page=page,action=item['action']):
+     self.assertGreaterEqual(min(item['rect'][2:]),52)
+
+ def test_section_roots_use_sidebar_and_taller_tabs(self):
+  for page in ('move','heat','fans','filament','tune','calibration','files','settings','network','timelapse','storage','system'):
+   items,_=self.render(page)
+   with self.subTest(page=page):
+    self.assertFalse(any(i['action']=='back' for i in items))
+    if page!='files':
+     tabs=[i for i in items if i['action'].startswith('route:') and i['rect'][0]>=103 and i['rect'][1]==16]
+     self.assertEqual(len(tabs),5 if page in ('settings','network','timelapse','storage','system') else 6)
+     for item in tabs:self.assertEqual(item['rect'][3],64)
+
+ def test_subpage_back_returns_to_previous_tab(self):
+  for root,page in (('network','wifi'),('settings','display'),('files','file')):
+   items,_=self.render(root,['route:'+page])
+   self.assertTrue(any(i['action']=='back' for i in items))
+   items,commands=self.render(root,['route:'+page,'back'])
+   self.assertFalse(any(i['action']=='back' for i in items))
+   self.assertTrue(all(c['action']=='files' for c in commands))
+
+ def test_error_popup_has_one_centered_acknowledgment_without_restart(self):
+  data=copy.deepcopy(self.data);data['error']='Example printer fault'
+  items,commands=self.render(data=data)
+  self.assertFalse(any(i['action'] in ('error_details','restart:firmware') for i in items))
+  rect=next(i['rect'] for i in items if i['action']=='error_ack')
+  self.assertLessEqual(abs(rect[0]+rect[2]/2-400),1)
+  items,commands=self.render('move',['error_ack'],data=data)
+  self.assertEqual(commands,[])
+  self.assertTrue(any(i['action'].startswith('jog:') for i in items))
+
+ def test_startup_hides_all_pages_until_a_complete_ready_snapshot(self):
+  for mutation in ('disconnected','starting','settings','heaters','motors'):
+   data=copy.deepcopy(self.data)
+   if mutation=='disconnected':data['connected']=False
+   elif mutation=='starting':data['status']['webhooks']['state']='startup'
+   elif mutation=='settings':data['settings']={}
+   elif mutation=='heaters':data['heaters']=[]
+   else:data['status']['k2_motor_bus']={'motors_ready':False}
+   items,commands=self.render('move',data=data)
+   self.assertEqual(items,[])
+   self.assertEqual(commands,[])
+   items,_=self.render('move',[{'snapshot':self.data}],data)
+   self.assertTrue(any(i['action'].startswith('jog:') for i in items))
+
+ def test_connection_recovery_cancels_touch_with_missing_release(self):
+  lost=copy.deepcopy(self.data);lost['connected']=False
+  items,commands=self.render(data=lost,actions=[{'queue_touch':[200,380,True]},{'snapshot':self.data},{'queue_touch':[200,380,False]}])
+  self.assertTrue(any(i['action']=='open_files' for i in items))
+  self.assertFalse(any(c['action'] in ('restart','firmware_restart') for c in commands))
+
+ def test_settings_refresh_is_not_offered_as_printer_restart(self):
+  data=copy.deepcopy(self.data);data['settings']={};data['heaters']=[]
+  items,commands=self.render(data=data)
+  self.assertFalse(any(i['action'].startswith('restart:') for i in items))
+  self.assertEqual(commands,[])
+
+ def test_notice_after_startup_opens_over_complete_home_page(self):
+  starting=copy.deepcopy(self.data);starting['connected']=False
+  ready=copy.deepcopy(self.data)
+  ready['notices']=[{'id':1,'title':'Ready','detail':'Example notice','fault':False}]
+  items,_=self.render(actions=[{'snapshot':ready}],data=starting)
+  self.assertTrue(any(i['action']=='open_files' for i in items))
+  self.assertTrue(any(i['action']=='notice_ack:1' for i in items))
+
+ def test_connection_loss_replaces_the_page_and_blocks_non_restart_actions(self):
+  lost=copy.deepcopy(self.data);lost['connected']=False
+  items,commands=self.render('filament',[{'snapshot':lost},'route:move','load','edit_slot'])
+  self.assertEqual({i['action'] for i in items},{'restart:klipper','restart:firmware'})
+  self.assertEqual(commands,[])
+  items,_=self.render('filament',[{'snapshot':lost},{'snapshot':self.data}])
+  self.assertTrue(any(i['action']=='edit_slot' for i in items))
+
+ def test_loss_dismisses_open_dialog_and_restart_requires_confirmation(self):
+  lost=copy.deepcopy(self.data);lost['connected']=False
+  items,commands=self.render(actions=['temperature:extruder',{'snapshot':lost},'temp_set'])
+  self.assertEqual({i['action'] for i in items},{'restart:klipper','restart:firmware'})
+  self.assertEqual(commands,[])
+  for choice,key in [('klipper','restart'),('firmware','firmware_restart')]:
+   items,commands=self.render(actions=[{'snapshot':lost},'restart:'+choice,'close'])
+   self.assertEqual(commands,[])
+   items,commands=self.render(actions=[{'snapshot':lost},'restart:'+choice,'confirmed'])
+   self.assertEqual(commands,[{'action':key,'confirm':True}])
+
+ def test_restart_waits_for_reconnection_and_hides_retry_buttons(self):
+  for action in ('restart','firmware_restart'):
+   choice='klipper' if action=='restart' else 'firmware'
+   steps=['restart:'+choice,'confirmed']
+   items,commands=self.render(actions=steps)
+   self.assertEqual(items,[])
+   self.assertEqual(commands,[{'action':action,'confirm':True}])
+   # The pre-restart ready snapshot must not expose controls again.
+   items,_=self.render(actions=steps+[{'snapshot':self.data}])
+   self.assertEqual(items,[])
+   lost=copy.deepcopy(self.data);lost['connected']=False
+   items,_=self.render(actions=steps+[{'snapshot':lost},{'snapshot':self.data}])
+   self.assertTrue(any(i['action']=='open_files' for i in items))
+   # A new Klipper generation also covers a disconnect between snapshots.
+   ready=copy.deepcopy(self.data);ready['printer_generation']=1
+   items,_=self.render(actions=steps+[{'snapshot':ready}])
+   self.assertTrue(any(i['action']=='open_files' for i in items))
+
+ def test_restart_does_not_recover_before_motor_initialization(self):
+  for action in ('klipper','firmware'):
+   steps=['restart:'+action,'confirmed']
+   lost=copy.deepcopy(self.data);lost['connected']=False
+   initializing=copy.deepcopy(self.data)
+   initializing['printer_generation']=1
+   initializing['status']['k2_motor_bus']={'motors_ready':False}
+   items,_=self.render(actions=steps+[{'snapshot':lost},{'snapshot':initializing}])
+   self.assertEqual(items,[])
+   initialized=copy.deepcopy(initializing)
+   initialized['status']['k2_motor_bus']['motors_ready']=True
+   items,_=self.render(actions=steps+[{'snapshot':lost},{'snapshot':initializing},
+                                    {'snapshot':initialized}])
+   self.assertTrue(any(i['action']=='open_files' for i in items))
+
+ def test_restart_timeout_offers_retry_and_still_recovers(self):
+  steps=['restart:klipper','confirmed',{'advance_ms':60001}]
+  items,_=self.render(actions=steps)
+  self.assertEqual({i['action'] for i in items},{'restart:klipper','restart:firmware'})
+  items,commands=self.render(actions=steps+['restart:firmware','confirmed'])
+  self.assertEqual(items,[])
+  self.assertEqual([c['action'] for c in commands],['restart','firmware_restart'])
+  lost=copy.deepcopy(self.data);lost['connected']=False
+  items,_=self.render(actions=steps+[{'snapshot':lost},{'snapshot':self.data}])
+  self.assertTrue(any(i['action']=='open_files' for i in items))
+
+ def test_initial_startup_timeout_allows_restart(self):
+  starting=copy.deepcopy(self.data);starting['connected']=False
+  items,commands=self.render(data=starting,actions=[{'advance_ms':60001},'restart:klipper','confirmed'])
+  self.assertEqual(commands,[{'action':'restart','confirm':True}])
+  self.assertEqual(items,[])
+
+ def test_restart_failure_restores_controls_immediately(self):
+  failed=copy.deepcopy(self.data)
+  failed['results']=[{'id':1,'action':'restart','success':False,'error':'Request failed'}]
+  items,_=self.render(actions=['restart:klipper','confirmed',{'snapshot':failed}])
+  self.assertTrue(any(i['action']=='open_files' for i in items))
+
+ def test_dismissed_confirmation_cannot_replay_its_command(self):
+  _,commands=self.render('move',['motor_toggle','confirmed','confirmed'])
+  self.assertEqual(len([c for c in commands if c['action']=='motors']),1)
+
+ def test_cfs_activity_blocks_mutations_but_keeps_unit_and_page_navigation(self):
+  import sys
+  sys.path.insert(0,str(ROOT/'developer-tools'))
+  import demo_snapshot
+  busy=demo_snapshot.preview_case('multi-cfs-loading')
+  items,commands=self.render('filament',['unit:3'],busy)
+  self.assertTrue(any(i['action']=='slot:3A' and i['enabled'] for i in items))
+  for action in ('edit_slot','load','unload'):
+   self.assertFalse(next(i['enabled'] for i in items if i['action']==action))
+  self.assertEqual(commands,[])
+  ready=demo_snapshot.preview_scenario('multi-cfs')
+  items,commands=self.render('filament',[{'snapshot':ready}],busy)
+  self.assertTrue(next(i['enabled'] for i in items if i['action']=='edit_slot'))
+  self.assertEqual(commands,[])
+
+ def test_cfs_telemetry_does_not_restart_the_busy_animation(self):
+  import sys
+  sys.path.insert(0,str(ROOT/'developer-tools'))
+  import demo_snapshot
+  busy=demo_snapshot.preview_case('cfs-loading')
+  self.render('filament',[{'snapshot':busy}],busy)
+  original=(self.path/'screen.ppm').read_bytes()
+  wheel=copy.deepcopy(busy);wheel['status']['k2_cfs']['wheel_mm']=123.4
+  self.render('filament',[{'snapshot':wheel}],busy)
+  self.assertEqual((self.path/'screen.ppm').read_bytes(),original)
+
+ def test_filament_activity_sidebar_is_hidden_only_on_filament_page(self):
+  import sys
+  sys.path.insert(0,str(ROOT/'developer-tools'))
+  import demo_snapshot
+  for scenario in ('load','unload'):
+   data=demo_snapshot.preview_scenario(scenario)
+   for page in ('filament','home','files'):
+    with self.subTest(scenario=scenario,page=page):
+     items,commands=self.render(page,data=data)
+     badge=any(i['action']=='route:history' and i['rect'][0]<10 for i in items)
+     self.assertEqual(badge,page!='filament')
+     self.assertEqual(commands,[])
+
+ def test_home_cfs_loading_uses_ring_without_extra_caption_and_keeps_sidebar_status(self):
+  import sys
+  sys.path.insert(0,str(ROOT/'developer-tools'))
+  import demo_snapshot
+  from PIL import Image
+  idle=demo_snapshot.preview_scenario('idle')
+  items,_=self.render('home',data=idle)
+  tile=next(i['rect'] for i in items if i['action']=='home_filament_strip')
+  x,y,w,h=tile
+  with Image.open(self.path/'screen.ppm') as picture:
+   header=picture.crop((x+50,y+2,x+w-3,y+23)).tobytes()
+   sidebar=picture.crop((0,370,84,480)).tobytes()
+  busy=demo_snapshot.preview_case('cfs-loading-home')
+  self.render('home',data=busy)
+  with Image.open(self.path/'screen.ppm') as picture:
+   self.assertEqual(picture.crop((x+50,y+2,x+w-3,y+23)).tobytes(),header)
+   self.assertNotEqual(picture.crop((0,370,84,480)).tobytes(),sidebar)
+
+ def test_mesh_profile_flow_uses_confirmed_backend_action_and_printing_is_read_only(self):
+  import sys
+  sys.path.insert(0,str(ROOT/'developer-tools'))
+  import demo_snapshot
+  data=demo_snapshot.preview_case('mesh')
+  items,commands=self.render('mesh',['mesh:load:1'],data)
+  self.assertEqual(commands,[{'action':'mesh_profile','operation':'load','name':'PLA 60C','confirm':True}])
+  self.assertTrue(any(i['action']=='mesh:rename:1' for i in items))
+  self.assertFalse(any(i['action']=='mesh:load:1' for i in items))
+  items,commands=self.render('mesh',['mesh:delete:1','close'],data)
+  self.assertEqual(commands,[])
+  items,commands=self.render('mesh',['mesh:delete:1','confirmed'],data)
+  self.assertEqual(commands,[{'action':'mesh_profile','operation':'delete','name':'PLA 60C','confirm':True}])
+  self.assertEqual(len([i for i in items if i['action'].startswith('mesh:delete:')]),2)
+  data=demo_snapshot.preview_case('mesh-printing')
+  items,commands=self.render('mesh',['mesh:save','mesh:load:1','mesh:delete:1','confirmed'],data)
+  self.assertEqual(commands,[])
+  self.assertTrue(all(not i['enabled'] for i in items if i['action'].startswith('mesh:') and not i['action'].startswith('mesh:preview:')))
+
+ def test_saved_mesh_preview_is_local_and_rename_is_available_for_every_profile(self):
+  import sys
+  sys.path.insert(0,str(ROOT/'developer-tools'))
+  import demo_snapshot
+  for case in ('mesh-unloaded','mesh-printing'):
+   items,commands=self.render('mesh',['mesh:preview:1'],demo_snapshot.preview_case(case))
+   self.assertEqual(commands,[])
+   self.assertTrue(any(i['action']=='mesh_reset' for i in items))
+   self.assertTrue(any(i['action']=='mesh:rename:1' for i in items))
+
+ def test_mesh_profile_name_selects_preview_and_moves_rename_to_header(self):
+  import sys
+  sys.path.insert(0,str(ROOT/'developer-tools'))
+  import demo_snapshot
+  items,commands=self.render('mesh',[{'tap':[580,350]}],demo_snapshot.preview_case('mesh'))
+  self.assertEqual(commands,[])
+  edits=[i for i in items if i['action'].startswith('mesh:rename:')]
+  self.assertEqual(len(edits),1)
+  self.assertEqual(edits[0]['action'],'mesh:rename:1')
+  self.assertLess(edits[0]['rect'][1],150)
+  self.assert_rect(items,'mesh:preview:1',[530,327,128,64])
+  loads=[i for i in items if i['action']=='mesh:load:1']
+  self.assertEqual(len(loads),2)
+  for item,want in zip(loads,[[717,90,52,52],[658,327,52,64]]):
+   for got,expected in zip(item['rect'],want): self.assertLessEqual(abs(got-expected),1)
+  self.assertEqual(edits[0]['rect'][1:],[loads[0]['rect'][1],52,52])
+  self.assert_rect(items,'mesh:delete:1',[710,327,52,64])
+
+ def test_mesh_selection_changes_rendered_surface_without_loading(self):
+  import sys
+  from PIL import Image
+  sys.path.insert(0,str(ROOT/'developer-tools'))
+  import demo_snapshot
+  data=demo_snapshot.preview_case('mesh')
+  pictures=[]
+  for index,y in enumerate((290,350,420)):
+   items,commands=self.render('mesh',[{'tap':[580,y]}],data)
+   self.assertEqual(commands,[])
+   self.assertFalse(any(i['action']=='mesh:save' for i in items))
+   self.assertEqual([i['action'] for i in items if i['action'].startswith('mesh:rename:')],['mesh:rename:'+str(index)])
+   with Image.open(self.path/'screen.ppm') as picture:
+    pictures.append(picture.crop((110,96,500,366)).tobytes())
+   rows=[i['rect'] for i in items if i['action'].startswith('mesh:preview:')]
+   self.assertEqual(len(rows),3)
+   self.assertTrue(all(y>=250 and y+h<=466 for x,y,w,h in rows))
+  self.assertEqual(len(set(pictures)),3)
+
+ def test_long_mesh_names_only_scroll_while_held(self):
+  import sys
+  from PIL import Image
+  sys.path.insert(0,str(ROOT/'developer-tools'))
+  import demo_snapshot
+  data=demo_snapshot.preview_case('mesh')
+  long_name='A very long mesh name for the installed textured build plate'
+  profiles=data['status']['bed_mesh']['profiles']
+  profiles[long_name]=profiles.pop('Demo bed')
+  data['status']['bed_mesh']['profile_name']=long_name
+  # This name is the third row and also appears in the preview header.
+  for point,region in (([580,420],(538,408,650,449)),([580,120],(533,103,707,137))):
+   self.render('mesh',data=data)
+   with Image.open(self.path/'screen.ppm') as image: idle=image.crop(region).tobytes()
+   self.render('mesh',[{'advance_ms':1800}],data)
+   with Image.open(self.path/'screen.ppm') as image: self.assertEqual(image.crop(region).tobytes(),idle)
+   hold=[{'queue_touch':point+[True]},{'advance_ms':700},{'advance_ms':1200}]
+   _,commands=self.render('mesh',hold,data)
+   self.assertEqual(commands,[])
+   with Image.open(self.path/'screen.ppm') as image: self.assertNotEqual(image.crop(region).tobytes(),idle)
+   _,commands=self.render('mesh',hold+[{'queue_touch':point+[False]}],data)
+   self.assertEqual(commands,[])
+   with Image.open(self.path/'screen.ppm') as image: self.assertEqual(image.crop(region).tobytes(),idle)
+
+ def test_holding_an_unselected_mesh_name_does_not_select_or_load_it(self):
+  import sys
+  sys.path.insert(0,str(ROOT/'developer-tools'))
+  import demo_snapshot
+  point=[580,350]
+  actions=[{'queue_touch':point+[True]},{'advance_ms':700},
+           {'advance_ms':1000},{'queue_touch':point+[False]}]
+  items,commands=self.render('mesh',actions,demo_snapshot.preview_case('mesh'))
+  self.assertEqual(commands,[])
+  self.assertEqual([i['action'] for i in items if i['action'].startswith('mesh:rename:')],['mesh:rename:0'])
+
+ def test_mesh_rotation_stops_at_upright_limits(self):
+  import sys
+  sys.path.insert(0,str(ROOT/'developer-tools'))
+  import demo_snapshot
+  data=demo_snapshot.preview_case('mesh')
+  drag=[{'queue_touch':[300,180,True]},{'queue_touch':[490,350,True]},
+        {'queue_touch':[490,350,False]}]
+  self.render('mesh',drag,data)
+  limited=(self.path/'screen.ppm').read_bytes()
+  _,commands=self.render('mesh',drag+drag,data)
+  self.assertEqual(commands,[])
+  self.assertEqual((self.path/'screen.ppm').read_bytes(),limited)
+
+ def test_profile_scroll_survives_preview_and_loading(self):
+  import sys
+  sys.path.insert(0,str(ROOT/'developer-tools'))
+  import demo_snapshot
+  data=demo_snapshot.preview_case('mesh')
+  profile=next(iter(data['status']['bed_mesh']['profiles'].values()))
+  data['status']['bed_mesh']['profiles']={str(n):profile for n in range(20)}
+  drag=[{'queue_touch':[650,y,True]} for y in (430,410,390,370,350)]
+  drag.append({'queue_touch':[650,350,False]})
+  items,_=self.render('mesh',drag,data)
+  before=next(i['rect'][1] for i in items if i['action']=='mesh:delete:0')
+  for action in ('mesh:preview:3','mesh:load:3','mesh:rename:3'):
+   items,_=self.render('mesh',drag+[action],data)
+   after=next(i['rect'][1] for i in items if i['action']=='mesh:delete:0')
+   self.assertEqual(after,before)
+
+ def test_empty_mesh_has_one_probe_action_or_idle_instruction(self):
+  import sys
+  sys.path.insert(0,str(ROOT/'developer-tools'))
+  import demo_snapshot
+  for case,probe in [('mesh-empty',True),('mesh-empty-printing',False),('mesh-empty-busy',False)]:
+   with self.subTest(case=case):
+    items,commands=self.render('mesh',data=demo_snapshot.preview_case(case))
+    self.assertEqual(any(i['action']=='calibrate:mesh' for i in items),probe)
+    self.assertFalse(any(i['action']=='mesh:save' for i in items))
+    self.assertEqual(commands,[])
+
+ def test_mesh_saved_profiles_remain_accessible_without_active_mesh(self):
+  import sys
+  sys.path.insert(0,str(ROOT/'developer-tools'))
+  import demo_snapshot
+  for case,count in [('mesh-unloaded',3),('mesh-empty',0)]:
+   with self.subTest(case=case):
+    data=demo_snapshot.preview_case(case)
+    items,commands=self.render('mesh',data=data)
+    self.assertEqual(len([i for i in items if i['action'].startswith('mesh:delete:')]),count)
+    self.assertFalse(any(i['action']=='mesh_reset' for i in items))
+    self.assertEqual(commands,[])
+  data=demo_snapshot.preview_case('mesh')
+  profile=next(iter(data['status']['bed_mesh']['profiles'].values()))
+  data['status']['bed_mesh']['profiles']={str(n):profile for n in range(20)}
+  items,_=self.render('mesh',data=data)
+  self.assertEqual(len([i for i in items if i['action'].startswith('mesh:delete:')]),20)
+  self.assertTrue(any(i['action']=='mesh:delete:19' for i in items))
+  before=next(i['rect'][1] for i in items if i['action']=='mesh:delete:0')
+  drag=[{'queue_touch':[650,y,True]} for y in (430,410,390,370,350)]
+  drag.append({'queue_touch':[650,350,False]})
+  items,commands=self.render('mesh',drag,data)
+  after=next(i['rect'][1] for i in items if i['action']=='mesh:delete:0')
+  self.assertLess(after,before)
+  self.assertEqual(commands,[])
+
+ def test_mesh_rotation_does_not_hang_on_concave_or_edge_on_cells(self):
+  import sys
+  sys.path.insert(0,str(ROOT/'developer-tools'))
+  import demo_snapshot
+  data=demo_snapshot.preview_case('mesh')
+  for dx,dy in ((75,0),(100,100),(-300,-100),(350,100),(0,-100),(300,0),(-150,100)):
+   with self.subTest(dx=dx,dy=dy):
+    drag=[{'queue_touch':[300,240,True]}]
+    drag += [{'queue_touch':[300+int(dx*i/10),240+int(dy*i/10),True]} for i in range(1,11)]
+    drag += [{'queue_touch':[300+dx,240+dy,False]},'route:move']
+    items,commands=self.render('mesh',drag,data,timeout=5)
+    self.assertEqual(commands,[])
+    self.assertTrue(any(i['action']=='position:X' for i in items))
+
+ def test_mesh_demo_drag_rotates_and_reset_restores_view_without_commands(self):
+  import sys
+  sys.path.insert(0,str(ROOT/'developer-tools'))
+  import demo_snapshot
+  data=demo_snapshot.preview_case('mesh')
+  self.render('mesh',data=data)
+  original=(self.path/'screen.ppm').read_bytes()
+  drag=[{'queue_touch':[350,245,True]},{'queue_touch':[410,260,True]},
+        {'queue_touch':[450,280,True]},{'queue_touch':[450,280,False]}]
+  _,commands=self.render('mesh',drag,data)
+  self.assertEqual(commands,[])
+  self.assertNotEqual((self.path/'screen.ppm').read_bytes(),original)
+  _,commands=self.render('mesh',drag+['mesh_reset'],data)
+  self.assertEqual(commands,[])
+  self.assertEqual((self.path/'screen.ppm').read_bytes(),original)
+
+ def test_move_bottom_icons_align_with_step_selector(self):
+  items,_=self.render('move')
+  self.assert_rect(items,'route:mesh',[555,398,105,64])
+  self.assert_rect(items,'motor_toggle',[672,398,105,64])
+  self.assert_rect(items,'position:X',[555,108,222,76])
+  self.assert_rect(items,'position:Y',[555,192,222,76])
+  self.assert_rect(items,'position:Z',[555,276,222,76])
+
+ def test_mesh_view_hides_previous_mesh_and_actions_during_measurement(self):
+  data=copy.deepcopy(self.data)
+  data['status']['bed_mesh']={'probed_matrix':[[0,.1],[.2,.3]],'mesh_min':[0,0],'mesh_max':[350,350]}
+  items,commands=self.render('mesh',data=data)
+  self.assertTrue(any(i['action']=='calibrate:mesh' for i in items))
+  self.assertEqual(commands,[])
+  data['operations']=[{'id':1,'action':'calibrate','kind':'mesh','label':'Meshing','resources':['motion']}]
+  items,commands=self.render('mesh',data=data)
+  self.assertFalse(any(i['action'] in ('calibrate:mesh','mesh_reset') for i in items))
+  self.assertEqual(commands,[])
+
+ def test_socket_loss_has_its_own_screen_without_restart_actions(self):
+  items,commands=self.render('move',[{'transport_lost':True},'restart:klipper','confirmed'])
+  self.assertEqual(items,[])
+  self.assertEqual(commands,[])
+  items,_=self.render('move',[{'transport_lost':True},{'snapshot':self.data}])
+  self.assertTrue(any(i['action'].startswith('jog:') for i in items))
+
+ def test_service_loss_during_startup_is_distinct_from_waiting_for_klipper(self):
+  from PIL import Image
+  data=copy.deepcopy(self.data);data['connected']=False
+  self.render(data=data)
+  starting=Image.open(self.path/'screen.ppm').crop((60,230,740,290)).tobytes()
+  items,commands=self.render(actions=[{'transport_lost':True}],data=data)
+  lost=Image.open(self.path/'screen.ppm').crop((60,230,740,290)).tobytes()
+  self.assertTrue(starting != lost)
+  self.assertEqual(items,[])
+  self.assertEqual(commands,[])
+
+ def test_unloading_keeps_sidebar_and_tabs_when_connection_is_healthy(self):
+  data=copy.deepcopy(self.data)
+  op={'id':1,'action':'unload','label':'Unloading filament'}
+  data['operation']=op;data['operations']=[op]
+  items,_=self.render('filament',data=data)
+  for action in ('route:home','route:files','route:settings','route:fans'):
+   self.assertTrue(any(i['action']==action for i in items))
+
+ def test_display_options_and_highlights_use_available_space(self):
+  items,_=self.render('display')
+  preferences=[i for i in items if i['action'].startswith('{') and json.loads(i['action']).get('action')=='preference']
+  self.assertEqual(len(preferences),10)
+  for item in preferences:
+   payload=json.loads(item['action']);r=item['rect']
+   self.assertGreaterEqual(r[3],76 if payload['key']=='accent' else 64)
+   self.assertGreaterEqual(r[0],103);self.assertLessEqual(r[0]+r[2],781)
+  for n,a in enumerate(preferences):
+   for b in preferences[n+1:]:
+    ar,br=a['rect'],b['rect']
+    self.assertFalse(ar[0]<br[0]+br[2] and br[0]<ar[0]+ar[2] and ar[1]<br[1]+br[3] and br[1]<ar[1]+ar[3])
+
+ def test_slider_knobs_fit_at_both_endpoints(self):
+  from PIL import Image
+  for speed in (0,1):
+   data=copy.deepcopy(self.data);data['status']['fan']['speed']=speed
+   self.render('fans',data=data);image=Image.open(self.path/'screen.ppm').convert('RGB')
+   bright=[x for x in range(103,781) if min(image.getpixel((x,150)))>200]
+   self.assertTrue(bright);self.assertGreater(min(bright),103);self.assertLess(max(bright),780)
+   self.assertGreaterEqual(max(bright)-min(bright),28)
+
+ def test_transient_preview_scenarios_render_actual_dialogs(self):
+  import importlib.util
+  spec=importlib.util.spec_from_file_location('demo_snapshot',ROOT/'developer-tools/demo_snapshot.py')
+  demo=importlib.util.module_from_spec(spec);spec.loader.exec_module(demo)
+  for name,action in [('error','error_ack'),('notice','notice_ack:1'),('recovery','plr:discard')]:
+   items,commands=self.render(data=demo.preview_scenario(name))
+   self.assertTrue(any(i['action']==action for i in items));self.assertEqual(commands,[])
+  for name in ('loading','homing','meshing','load','unload'):
+   data=demo.preview_scenario(name)
+   self.assertIsInstance(data['operation'],dict)
+   _,commands=self.render(data=data);self.assertEqual(commands,[])
+
+ def test_move_targets_are_large_and_aligned(self):
+  items,_=self.render('move')
+  for action in ('jog:X:1','jog:Y:1','jog:Z:1','position:X','position:Y','position:Z'):
+   r=next(i['rect'] for i in items if i['action']==action)
+   self.assertGreaterEqual(r[2],72);self.assertEqual(r[3],76)
+  step=next(i['rect'] for i in items if i['action']=='step:1')
+  motors=next(i['rect'] for i in items if i['action']=='motor_toggle')
+  self.assertEqual(step[1],motors[1]);self.assertEqual(step[3],motors[3])
+
+ def test_outer_corners_are_opaque_dark_and_spinner_animates(self):
+  from PIL import Image
+  self.render()
+  image=Image.open(self.path/'screen.ppm')
+  for point in ((0,0),(799,0),(0,479),(799,479)):
+   self.assertEqual(image.getpixel(point)[:3],(7,9,12))
+  data=copy.deepcopy(self.data);data['operation']={'id':1,'action':'home','label':'Homing','detail':'Homing axes'}
+  self.render(data=data)
+  initial=Image.open(self.path/'screen.ppm').crop((20,400,68,435)).copy()
+  self.render(data=data,actions=[{}]*15)
+  later=Image.open(self.path/'screen.ppm').crop((20,400,68,435))
+  self.assertGreater(len(set(initial.tobytes()[i:i+3] for i in range(0,len(initial.tobytes()),3))),5)
+  self.assertNotEqual(initial.tobytes(),later.tobytes())
+
+ def test_wake_touch_is_consumed_before_navigation(self):
+  data=copy.deepcopy(self.data);data['platform']['asleep']=True
+  items,commands=self.render(data=data,actions=[{'tap':[43,281]}])
+  self.assertTrue(any(i['action']=='open_files' for i in items));self.assertEqual(commands,[])
+  awake=copy.deepcopy(data);awake['platform']['asleep']=False
+  items,commands=self.render(data=data,actions=[{'tap':[43,281]},{'snapshot':awake},{'tap':[43,281]}])
+  self.assertTrue(any(i['action'].startswith('file_open:') for i in items))
+  self.assertEqual(commands,[{'action':'files','source':'gcodes','automatic':True}])
+
+ def test_temperature_layout_is_aligned_for_off_and_numeric_targets(self):
+  for heater in ('extruder','heater_bed','chamber'):
+   off,_=self.render(actions=['temperature:'+heater])
+   on,_=self.render(actions=['temperature:'+heater,'temp_delta:5'])
+   for action in ('temp_delta:-5','temp_input','temp_delta:5','temp_set','close'):
+    before=next(i['rect'] for i in off if i['action']==action)
+    after=next(i['rect'] for i in on if i['action']==action)
+    self.assertEqual(before,after)
+   left=next(i['rect'] for i in off if i['action']=='temp_delta:-5')
+   middle=next(i['rect'] for i in off if i['action']=='temp_input')
+   right=next(i['rect'] for i in off if i['action']=='temp_delta:5')
+   self.assertEqual(left[1:],right[1:])
+   self.assertEqual(left[1],middle[1]);self.assertEqual(left[3],middle[3])
+
+ def test_manual_extrusion_uses_distance_without_cfs_load(self):
+  data=copy.deepcopy(self.data);data['status']['extruder'].update(temperature=210,can_extrude=True)
+  _,commands=self.render('move',['step:1',{'tap':[483,314]}],data=data)
+  self.assertEqual(commands,[{'action':'extrude','value':1}])
+  _,commands=self.render('move',['step:1',{'tap':[483,146]}],data=data)
+  self.assertEqual(commands,[{'action':'extrude','value':-1}])
+  items,_=self.render('move',data=data)
+  self.assertTrue(any(i['action']=='{"action":"home","axis":"XY"}' for i in items))
+  self.assertTrue(any(i['action']=='{"action":"home","axis":"Z"}' for i in items))
+
+ def test_manual_extrusion_controls_refresh_when_nozzle_becomes_ready(self):
+  cold=copy.deepcopy(self.data);cold['status']['extruder'].update(temperature=29,can_extrude=False)
+  items,_=self.render('move',data=cold)
+  self.assertFalse(any(i['action'].startswith('extrude:') for i in items))
+  hot=copy.deepcopy(cold);hot['status']['extruder'].update(temperature=210,can_extrude=True)
+  items,commands=self.render('move',[{'snapshot':hot}],data=cold)
+  self.assertTrue(any(i['action']=='extrude:1' for i in items));self.assertEqual(commands,[])
+  items,_=self.render('move',['step:100'],data=hot)
+  self.assertFalse(any(i['action'].startswith('extrude:') for i in items))
+
+ def test_temperature_cancel_and_valid_command(self):
+  _,commands=self.render(actions=['temperature:extruder','number:Cancel'])
+  # Direct close and the real Cancel button both dismiss without actuation.
+  _,commands=self.render(actions=['temperature:extruder','close'])
+  self.assertEqual(commands,[])
+  _,commands=self.render(actions=['temperature:extruder','temp_input','number:3','number:5','number:0','number:Set'])
+  self.assertEqual(commands,[{'action':'temperature','heater':'extruder','value':350}])
+
+ def test_numeric_limits_reject_out_of_range_and_nan_text(self):
+  _,commands=self.render(actions=['temperature:extruder','temp_input','number:3','number:5','number:1','number:Set'])
+  self.assertEqual(commands,[])
+
+ def test_unsaved_material_navigation_preserves_draft_until_discard(self):
+  items,_=self.render('filament',['edit_slot','route:colors','color:5035ce','route:home'])
+  self.assertTrue(any(item['action']=='confirmed' for item in items))
+  items,commands=self.render('filament',['edit_slot','route:colors','color:5035ce','route:home','confirmed'])
+  self.assertEqual(commands,[])
+  self.assertTrue(any(item['action']=='open_files' for item in items))
+
+ def test_mapping_uses_header_space_and_retains_footer_navigation(self):
+  items,_=self.render('file',['review_mapping'])
+  self.assertFalse(any(item['action']=='back' and item['rect'][1]<80 for item in items))
+  pick=next(item for item in items if item['action']=='mapping_pick:0')
+  self.assertLess(pick['rect'][1],40)
+  self.assertTrue(any(item['action']=='start_print' for item in items))
+  self.assertTrue(any(item['action']=='back' and item['rect'][1]>380 for item in items))
+
+ def test_mapping_defaults_and_back_preserve_selection(self):
+  _,commands=self.render('file',['review_mapping','mapping_pick:0','mapping_set:A','back','review_mapping','start_print'])
+  self.assertEqual(commands,[{'action':'start','path':'part.gcode','mapping':{'0':'A'},'calibrate':False}])
+
+ def test_no_cfs_and_multiple_cfs_use_correct_layout_variants(self):
+  data=copy.deepcopy(self.data);data['status']['k2_cfs'].update(fitted=False,active_slot=None)
+  data['cfs_units']=0
+  items,_=self.render('filament',data=data)
+  self.assert_rect(items,'edit_slot',[103,110,673,247])
+  self.assertFalse(any(item['action'] in ('load','unload') for item in items))
+  edited,commands=self.render('filament',['edit_slot'],data)
+  self.assertTrue(any(item['action']=='draft_temperature' for item in edited))
+  self.assertEqual(commands,[])
+  self.assertFalse(any(item['action']=='units' for item in items))
+  self.assertFalse(any(item['action']=='route:refill' for item in items))
+  data=copy.deepcopy(self.data)
+  for unit in (2,3):
+   for letter in 'ABCD':data['slots'].append(dict(data['slots'][0],slot=str(unit)+letter))
+  data['cfs_units']=3
+  items,_=self.render('filament',data=data)
+  self.assertFalse(any(item['action']=='units' for item in items))
+  self.assert_rect(items,'unit:1',[103,86,169,60])
+  self.assert_rect(items,'unit:3',[457,86,169,60])
+  items,commands=self.render('filament',['unit:2'],data)
+  self.assertTrue(any(item['action']=='slot:2A' for item in items))
+  self.assertFalse(any(item['action']=='slot:A' for item in items))
+  self.assert_rect(items,'slot:E',[651,88,126,292])
+  self.assertEqual(commands,[])
+  items,commands=self.render('filament',['unit:2','edit_slot'],data)
+  self.assertTrue(any(item.get('text')=='Slot CFS 2 · A' for item in items) or
+                  any(item['action']=='draft_temperature' for item in items))
+
+ def test_cfs_selector_count_tracks_connected_units(self):
+  for count in (1,2,3,4):
+   data=copy.deepcopy(self.data)
+   for unit in range(2,count+1):
+    for letter in 'ABCD':data['slots'].append(dict(data['slots'][0],slot=str(unit)+letter))
+   data['cfs_units']=count
+   items,commands=self.render('filament',data=data)
+   selectors=[item for item in items if item['action'].startswith('unit:')]
+   self.assertEqual(len(selectors),count if count>1 else 0)
+   self.assertEqual(commands,[])
+   if count>1:
+    selector_bottom=max(item['rect'][1]+item['rect'][3] for item in selectors)
+    spool=next(item for item in items if item['action']=='slot:A')
+    self.assertGreaterEqual(spool['rect'][1]-selector_bottom,16)
+
+ def test_sidebar_files_refreshes_printer_storage(self):
+  data=copy.deepcopy(self.data);data['source']='usb';data['platform']['usb']={'mounted':True}
+  items,commands=self.render('home',['route:files'],data)
+  self.assertEqual(commands,[{'action':'files','source':'gcodes','automatic':True}])
+  self.assertFalse(any(item['action'].startswith('files:') for item in items))
+
+ def test_calibration_grid_never_overlaps_save(self):
+  items,_=self.render('calibration')
+  rects=[i['rect'] for i in items if i['action'].startswith('calibrate:')]
+  for n,a in enumerate(rects):
+   for b in rects[n+1:]:
+    self.assertFalse(a[0]<b[0]+b[2] and b[0]<a[0]+a[2] and a[1]<b[1]+b[3] and b[1]<a[1]+a[3])
+
+ def test_fan_slider_touch_sends_one_channel_request(self):
+  _,commands=self.render('fans',[{'tap':[500,150]},'route:home'])
+  self.assertEqual(len(commands),1)
+  self.assertEqual(commands[0]['action'],'fan')
+  self.assertEqual(commands[0]['fan'],'part')
+  self.assertGreater(commands[0]['value'],0)
+  self.assertLessEqual(commands[0]['value'],100)
+
+ def test_timezone_offset_list_has_no_keyboard_or_overlapping_rows(self):
+  data=copy.deepcopy(self.data);data['platform']['timezone']='Etc/GMT+5'
+  items,commands=self.render('timezone',data=data)
+  zones=[i for i in items if i['action'].startswith('timezone_pick:')]
+  self.assertEqual(len(zones),37)
+  self.assertFalse(any(i['action'].startswith(('timezone_search','region:')) for i in items))
+  for a,b in zip(zones,zones[1:]):self.assertGreaterEqual(b['rect'][1],a['rect'][1]+a['rect'][3])
+  selected=next(i for i in zones if i['action']=='timezone_pick:Etc/GMT+5')
+  self.assertGreaterEqual(selected['rect'][1],114)
+  self.assertLessEqual(selected['rect'][1]+selected['rect'][3],470)
+  self.assertEqual(commands,[])
+
+ def test_timezone_selection_waits_for_inline_apply_and_back_discards(self):
+  data=copy.deepcopy(self.data);data['platform']['timezone']='Etc/GMT+5'
+  items,commands=self.render('timezone',['timezone_pick:Europe/Athens'],data=data)
+  self.assertEqual(commands,[])
+  self.assertTrue(any(i['action']=='timezone_apply' for i in items))
+  _,commands=self.render('timezone',['timezone_pick:Europe/Athens','timezone_apply'],data=data)
+  self.assertEqual(commands,[{'action':'timezone','name':'Europe/Athens'}])
+  _,commands=self.render('system',['route:timezone','timezone_pick:Europe/Athens','back'],data=data)
+  self.assertEqual(commands,[])
+  items,_=self.render('system',['route:timezone','timezone_pick:Europe/Athens','back','route:timezone'],data=data)
+  self.assertFalse(any(i['action']=='timezone_apply' for i in items))
+
+ def test_timezone_inline_apply_is_inside_selected_row_and_preserves_list_space(self):
+  data=copy.deepcopy(self.data);data['platform']['timezone']='Etc/GMT+5'
+  items,commands=self.render('timezone',['timezone_pick:Europe/Athens'],data=data)
+  apply=next(i['rect'] for i in items if i['action']=='timezone_apply')
+  selected=next(i['rect'] for i in items if i['action']=='timezone_pick:Europe/Athens')
+  self.assertGreaterEqual(apply[0],selected[0]);self.assertLessEqual(apply[0]+apply[2],selected[0]+selected[2])
+  self.assertGreaterEqual(apply[1],selected[1]);self.assertLessEqual(apply[1]+apply[3],selected[1]+selected[3])
+  self.assertEqual(len([i for i in items if i['action']=='back']),1)
+  fully_visible=[i for i in items if i['action'].startswith('timezone_pick:') and i['rect'][1]>=114 and i['rect'][1]+i['rect'][3]<=470]
+  self.assertGreaterEqual(len(fully_visible),4)
+  center=[apply[0]+apply[2]//2,apply[1]+apply[3]//2]
+  _,commands=self.render('timezone',['timezone_pick:Europe/Athens',{'tap':center}],data=data)
+  self.assertEqual(commands,[{'action':'timezone','name':'Europe/Athens'}])
+
+ def test_timezone_drag_does_not_select_or_apply(self):
+  data=copy.deepcopy(self.data);data['platform']['timezone']='Etc/GMT+5'
+  gesture=[{'queue_touch':[300,y,True]} for y in (220,205,190,175,160)]
+  gesture.append({'queue_touch':[300,160,False]})
+  items,commands=self.render('timezone',gesture,data=data)
+  self.assertEqual(commands,[])
+  self.assertFalse(any(i['action']=='timezone_apply' for i in items))
+  items,_=self.render('timezone',['timezone_pick:Europe/Athens'],data=data)
+  r=next(i['rect'] for i in items if i['action']=='timezone_apply')
+  x,y=r[0]+r[2]//2,r[1]+r[3]//2
+  drag=[{'queue_touch':[x,y-offset,True]} for offset in (0,15,30,45,60)]
+  drag.append({'queue_touch':[x,y-60,False]})
+  _,commands=self.render('timezone',['timezone_pick:Europe/Athens']+drag,data=data)
+  self.assertEqual(commands,[])
+
+ def test_file_list_refreshes_on_entry_but_not_on_backtracking(self):
+  _,commands=self.render('home',['route:files','route:file','back'])
+  refreshes=[c for c in commands if c['action']=='files']
+  self.assertEqual(len(refreshes),1)
+  self.assertTrue(refreshes[0]['automatic'])
+  _,commands=self.render('home',['route:files','route:home','route:files'])
+  self.assertEqual(len([c for c in commands if c['action']=='files']),2)
+  _,commands=self.render('files',['route:file','route:files'])
+  self.assertFalse(any(c['action']=='files' for c in commands))
+
+ def test_files_refresh_keeps_list_visible_and_navigation_available(self):
+  from PIL import Image
+  self.render('files');before=Image.open(self.path/'screen.ppm').crop((103,77,781,390)).copy()
+  data=copy.deepcopy(self.data);data['files_refresh']={'busy':True,'error':''}
+  data['operation']={'id':1,'action':'files','label':'Reading files'}
+  self.render('files',data=data)
+  after=Image.open(self.path/'screen.ppm').crop((103,77,781,390))
+  self.assertEqual(before.tobytes(),after.tobytes())
+  data['operation']=None
+  items,commands=self.render('files',[{'snapshot':data},{'tap':[43,117]}],data=self.data)
+  self.assertTrue(any(i['action']=='open_files' for i in items))
+  self.assertTrue(all(c['action']=='files' for c in commands))
+
+ def test_long_file_list_does_not_wrap_coordinates(self):
+  data=copy.deepcopy(self.data);data['files']=[{'path':str(i)+'.gcode','modified':1} for i in range(150)]
+  items,_=self.render('files',data=data)
+  files=[i for i in items if i['action'].startswith('file_open:')]
+  self.assertEqual(len(files),150)
+  for a,b in zip(files,files[1:]):self.assertGreaterEqual(b['rect'][1],a['rect'][1]+a['rect'][3])
+
+ def test_initial_printer_fault_is_visible_and_resolves_after_restart(self):
+  fault=copy.deepcopy(self.data);fault['error']='Test shutdown';fault['status']['webhooks']['state']='shutdown'
+  items,_=self.render(data=fault)
+  self.assertEqual({item['action'] for item in items},{'restart:klipper','restart:firmware'})
+  items,_=self.render(actions=[{'snapshot':fault},{'snapshot':self.data}])
+  self.assertFalse(any(item['action']=='error_ack' for item in items))
+  self.assertTrue(any(item['action']=='open_files' for item in items))
+
+ def test_home_swatch_and_light_widgets_update_from_live_snapshots(self):
+  from PIL import Image
+  self.render()
+  before=Image.open(self.path/'screen.ppm').copy()
+  changed=copy.deepcopy(self.data)
+  changed['slots'][0]['color']='E34C55'
+  changed['status']['output_pin chamber_led']['value']=0
+  self.render(actions=[{'snapshot':changed}])
+  after=Image.open(self.path/'screen.ppm')
+  self.assertNotEqual(before.crop((591,289,781,369)).tobytes(),after.crop((591,289,781,369)).tobytes())
+  self.assertNotEqual(before.crop((591,391,681,461)).tobytes(),after.crop((591,391,681,461)).tobytes())
+
+ def test_snapshot_between_press_and_queued_release_does_not_lose_navigation(self):
+  items,commands=self.render('files',[{'queue_touch':[43,117,True]},
+     {'queue_touch':[43,117,False],'snapshot':self.data}])
+  self.assertTrue(any(item['action']=='open_files' for item in items))
+  self.assertTrue(all(c['action']=='files' for c in commands))
+
+ def test_restart_requires_confirmation_even_during_print(self):
+  data=copy.deepcopy(self.data);data['status']['print_stats']['state']='printing'
+  for choice,action in (('klipper','restart'),('firmware','firmware_restart')):
+   _,commands=self.render('restart',['restart:'+choice,'close'],data)
+   self.assertEqual(commands,[])
+   _,commands=self.render('restart',['restart:'+choice,'confirmed'],data)
+   self.assertEqual(commands,[{'action':action,'confirm':True}])
+
+ def test_unacknowledged_notice_reappears_after_connection_recovery(self):
+  for filament in (False,True):
+   with self.subTest(filament=filament):
+    data=copy.deepcopy(self.data)
+    notice={'id':1,'title':'Filament changed' if filament else 'Operation failed','detail':'Test notice','fault':not filament}
+    if filament:notice['filament_slot']='A'
+    data['notices']=[notice,{'id':2,'title':'Next notice','detail':'Still queued'}]
+    lost=copy.deepcopy(data);lost['connected']=False
+    items,_=self.render(actions=[{'snapshot':lost},{'snapshot':data}],data=data)
+    expected='filament_notice:' if filament else 'notice_ack:1'
+    self.assertTrue(any(item['action'].startswith(expected) for item in items))
+    acknowledged=copy.deepcopy(data);acknowledged['notices']=data['notices'][1:]
+    action=next(item['action'] for item in items if item['action'].startswith(expected))
+    items,commands=self.render(actions=[{'snapshot':lost},{'snapshot':data},action,{'snapshot':acknowledged}],data=data)
+    self.assertTrue(any(item['action']=='notice_ack:2' for item in items))
+    self.assertTrue(any(command=={'action':'ack','id':1} for command in commands))
+
+ def test_failed_unload_notice_acknowledges_only_once(self):
+  data=copy.deepcopy(self.data)
+  data['notices']=[{'id':1,'title':'Unloading failed','detail':'Test failure','fault':True}]
+  items,commands=self.render(actions=['notice_ack:1',{'snapshot':data}],data=data)
+  self.assertEqual(commands,[{'action':'ack','id':1}])
+  self.assertFalse(any(item['action']=='notice_ack:1' for item in items))
+
+ def test_larger_object_plate_preserves_touch_selection_and_confirmation(self):
+  import importlib.util
+  spec=importlib.util.spec_from_file_location('demo_snapshot',ROOT/'developer-tools/demo_snapshot.py')
+  demo=importlib.util.module_from_spec(spec);spec.loader.exec_module(demo)
+  data=demo.preview_scenario('printing')
+  items,commands=self.render('objects',[{'tap':[310,190]},'exclude','confirmed'],data=data)
+  self.assertIn({'action':'exclude','names':['Part_1'],'confirm':True},commands)
+  self.assertFalse(any(i['action']=='back' and i['rect'][1]<100 for i in items))
+
+
+
+ def test_tune_loading_grace_skips_indicator_for_fast_reply(self):
+  waiting=copy.deepcopy(self.data);waiting['status']['print_stats']['state']='printing'
+  ready=copy.deepcopy(waiting);waiting['status'].pop('gcode_move')
+  items,commands=self.render(data=waiting,actions=['route:tune',{'advance_ms':40}])
+  self.assertTrue(any(i['action']=='route:objects' for i in items))
+  items,commands=self.render(data=waiting,actions=['route:tune',{'advance_ms':40},{'snapshot':ready}])
+  self.assertTrue(any(i['action']=='tune_input:speed' for i in items))
+
+ def test_tune_loading_indicator_has_minimum_visible_time(self):
+  waiting=copy.deepcopy(self.data);waiting['status']['print_stats']['state']='printing'
+  ready=copy.deepcopy(waiting);waiting['status'].pop('gcode_move')
+  actions=['route:tune',{'advance_ms':180}]
+  items,_=self.render(data=waiting,actions=actions)
+  self.assertFalse(any(i['action'] in ('route:objects','tune_input:speed') for i in items))
+  items,_=self.render(data=waiting,actions=actions+[{'snapshot':ready}])
+  self.assertFalse(any(i['action']=='tune_input:speed' for i in items))
+  items,_=self.render(data=waiting,actions=actions+[{'snapshot':ready},{'advance_ms':220}])
+  self.assertTrue(any(i['action']=='tune_input:speed' for i in items))
+
+ def test_tune_loading_grace_blocks_old_controls_and_allows_navigation(self):
+  waiting=copy.deepcopy(self.data);waiting['status']['print_stats']['state']='printing'
+  waiting['status'].pop('gcode_move')
+  _,commands=self.render(data=waiting,actions=['route:tune','{"action":"pause"}'])
+  self.assertFalse(any(c['action']=='pause' for c in commands))
+  items,_=self.render(data=waiting,actions=['route:tune',{'advance_ms':180},'route:home'])
+  self.assertTrue(any(i['action']=='route:objects' for i in items))
+
+if __name__=='__main__':unittest.main()

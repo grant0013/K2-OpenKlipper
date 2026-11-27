@@ -1,0 +1,7 @@
+{
+  "description": "Printer fault dialog.",
+  "scenario": "error",
+  "page": "home",
+  "printer_image": "assets/demo-printer-combo.png",
+  "actions": []
+}

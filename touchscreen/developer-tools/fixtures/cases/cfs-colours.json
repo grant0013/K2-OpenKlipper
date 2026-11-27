@@ -1,0 +1,7 @@
+{
+  "description": "Home artwork follows four contrasting slot colours.",
+  "scenario": "cfs-colours",
+  "page": "home",
+  "printer_image": "assets/demo-printer-combo.png",
+  "actions": []
+}

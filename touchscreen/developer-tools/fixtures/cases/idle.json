@@ -1,0 +1,7 @@
+{
+  "description": "Idle printer with one CFS and four spools.",
+  "scenario": "idle",
+  "page": "home",
+  "printer_image": "assets/demo-printer-combo.png",
+  "actions": []
+}

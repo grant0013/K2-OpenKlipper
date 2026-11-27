@@ -1,8 +1,15 @@
 # Installing K2 OpenKlipper (step by step)
 
+> Native touchscreen development branch: use the complete precompiled bundle
+> and [its installation commands](../touchscreen/README.md#install-the-precompiled-full-bundle).
+> The raw-source download commands below describe upstream installation and do
+> not fetch the generated native package. The full bundle uses the same project
+> installer, with matching compiled files included.
+
+
 This puts open-source Klipper, an open strain-gauge probe driver, the CFS and
 the closed-loop motors on a Creality K2, with Mainsail as the web interface and
-Hark Screen on the touchscreen. It installs **next to** Creality's firmware:
+a native LVGL touchscreen. It installs **next to** Creality's firmware:
 nothing of Creality's is deleted, every system file it changes is backed up
 first, and one command puts the printer back to stock.
 
@@ -86,7 +93,7 @@ advance, run it as `OKL_EXTRUDER=stock sh /tmp/install.sh` (`dxc2` for a
 DXC2).
 
 It downloads the open stack (about 5 MB), backs up the files it changes to
-`/mnt/UDISK/openklipper-backups/<date>`, installs, and starts it. It takes a minute or two. The touchscreen switches to Hark Screen, and the last lines show the
+`/mnt/UDISK/openklipper-backups/<date>`, installs, and starts it. It takes a minute or two. The touchscreen switches to the native touchscreen, and the last lines show the
 Mainsail address:
 
 ```
@@ -200,7 +207,7 @@ connection).
    (negative = nozzle closer to the bed, positive = further away; keep it to
    hundredths of a mm), save and restart. See "Your settings" below.
 4. Optional: make the touchscreen your own (name, logo, colours):
-   [customising the screen](SCREEN-CUSTOMISE.md).
+   [native touchscreen](../touchscreen/README.md).
 5. Optional, per filament slot: pressure advance measured by the nozzle strain
    gauge, `PA_CAL_RUN SLOT=A` (see [PA calibration](PA-CALIBRATION.md)), and
    input shaping with `SHAPER_CALIBRATE`.
@@ -325,7 +332,7 @@ restores your settings.
 | --- | --- |
 | `/mnt/UDISK/k2-mainline-20260729-v62` | The open stack (Klipper, K2 modules, configs, scripts) |
 | `/mnt/UDISK/printer_data_mainline` | Its settings and logs (shares the stock G-code folder) |
-| `/mnt/UDISK/mainsail-mainline`, `harkscreen`, `harkcam` | Web interface, touchscreen app, camera stream |
+| `/mnt/UDISK/mainsail-mainline`, `openklipper-screen`, `harkcam` | Web interface, touchscreen app, camera stream |
 | `/etc/init.d/app` | Edited in place: master-server, Monitor and upgrade-server are removed from its start list (they would fight Klipper for the printer, and allow an OTA). Nothing else in Creality's file changes |
 | `/etc/rc.local` | One line: start the open stack 30 s after boot while `/mnt/UDISK/.system/boot-mainline` exists |
 | `/etc/nginx/nginx.conf` | Adds Mainsail on port 4409; Creality's Fluidd page on 4408 now talks to the open stack too. No access logs (they live in RAM) |

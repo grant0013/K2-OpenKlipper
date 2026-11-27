@@ -1,0 +1,7 @@
+{
+  "description": "Printing at target temperatures, with three selectable objects.",
+  "scenario": "printing",
+  "page": "home",
+  "printer_image": "assets/demo-printer-combo.png",
+  "actions": []
+}

@@ -10,11 +10,6 @@ The `klippy/` host tree is based on Klipper commit
 Klipper is licensed under GNU GPLv3. See `COPYING` and
 <https://www.klipper3d.org/>.
 
-`harkscreen/klipper-logo.png` is the Klipper logo from the Klipper
-repository (`docs/img/klipper-logo.png`), with its grey recoloured light grey
-so it shows on a dark screen. It identifies the Klipper software the screen
-runs on; this project is not affiliated with the Klipper project.
-
 `klippy/chelper/c_helper.so` was cross-built from the included Klipper C
 sources for the K2 platform. It is not intended to be a proprietary binary.
 
@@ -50,3 +45,17 @@ the result), the control-centre dashboard, appearance settings and
 movable cards. Source: https://github.com/grant0013/mainsail (branch
 `hark-cfs-panel`, commit `42f0333`; revision 1 is tag `v2.18.2-hark.1`). Upstream:
 https://github.com/mainsail-crew/mainsail.
+
+## Native touchscreen
+
+The C application builds against LVGL 8.4.0 (MIT) and cJSON 1.7.19 (MIT),
+with pinned archive hashes in `touchscreen/build/CMakeLists.txt`. Their licence
+files are copied into the printer package by `touchscreen/developer-tools/build.sh`.
+Lucide icons use ISC with the retained Feather notices in
+`touchscreen/assets/Lucide-LICENSE`. Liberation Sans and Noto Sans source
+fonts retain their distribution notices, including the SIL Open Font License,
+in `touchscreen/assets/Liberation-LICENSE` and `Noto-LICENSE`.
+
+The Python service adapts platform and printer integration code from this
+project, under its existing GPLv3 licence. Optional locally supplied vendor
+artwork is not included in the shared native assets.

@@ -1,0 +1,7 @@
+{
+  "description": "File reading.",
+  "scenario": "file-reading",
+  "page": "file",
+  "printer_image": "assets/demo-printer-combo.png",
+  "actions": []
+}

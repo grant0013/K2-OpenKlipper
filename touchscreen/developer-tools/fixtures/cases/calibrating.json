@@ -1,0 +1,7 @@
+{
+  "description": "Home shortcut disabled while calibration runs.",
+  "scenario": "calibrating",
+  "page": "home",
+  "printer_image": "assets/demo-printer-combo.png",
+  "actions": []
+}

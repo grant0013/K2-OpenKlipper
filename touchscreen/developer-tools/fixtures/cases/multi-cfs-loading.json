@@ -1,0 +1,7 @@
+{
+  "description": "Multi cfs loading with shared filament activity state.",
+  "scenario": "multi-cfs-loading",
+  "page": "filament",
+  "printer_image": "assets/demo-printer-combo.png",
+  "actions": []
+}

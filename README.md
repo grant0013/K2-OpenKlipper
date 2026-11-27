@@ -1,5 +1,9 @@
 # K2 OpenKlipper
 
+This branch integrates the native touchscreen from
+[carmanspb/K2-OpenKlipper-Touchscreen](https://github.com/carmanspb/K2-OpenKlipper-Touchscreen).
+The vendored source revision is recorded in [TOUCHSCREEN-SOURCE](TOUCHSCREEN-SOURCE).
+
 **Open-source mainline Klipper for the Creality K2: strain-gauge probe, CFS
 multi-filament box, closed-loop motors and touchscreen, without Creality's
 closed control stack.**
@@ -17,12 +21,14 @@ needed, and the stock firmware stays installed for a one-command rollback.
 Optionally, Klipper can run on a separate PC over one USB cable
 ([external host](docs/EXTERNAL-HOST.md)).
 
-**Install: [step-by-step guide](docs/INSTALL.md)**, about 15 minutes.
+**Install: [step-by-step guide](docs/INSTALL.md)**.
 
-<p>
-<img src="docs/img/photos/k2-screen-klipper-theme.jpg" alt="K2 printing on K2 OpenKlipper, touchscreen in the default Klipper theme" width="49%">
-<img src="docs/img/screen/klipper-cfs.png" alt="Touchscreen CFS page: four slots with material, temperature and pressure advance" width="49%">
-</p>
+**Native touchscreen development branch.** The normal installer includes the
+ready-built touchscreen supplied with this version; there is no separate UI
+bundle or printer-side compilation. See [touchscreen features](touchscreen/README.md).
+When testing this fork, use its installer and select the matching repository/ref
+with `OKL_REPO` and `OKL_REF` instead of installing the upstream default version.
+The replacement UI remains under hardware validation.
 
 > **Status: alpha (v0.4.2-alpha.1).** It is in daily use on one K2 (F021,
 > K2 / K2 Combo) and has completed full prints, CFS loads and multi-slot jobs.
@@ -42,14 +48,14 @@ Optionally, Klipper can run on a separate PC over one USB cable
 | CFS | Load, purge, unload, tool changes, steady feed, take-up tension, per-slot filament records, error retry ([CFS protocol](docs/CFS-PROTOCOL.md)) |
 | Pressure advance | **Measured with the nozzle strain gauge**: `PA_CAL_RUN SLOT=x` picks PA per CFS slot ([PA calibration](docs/PA-CALIBRATION.md)) |
 | Input shaping | Head accelerometer (LIS2DW on the nozzle board) via `[lis2dw_k2]`, standard `SHAPER_CALIBRATE` |
-| Touchscreen | Hark Screen: themeable landscape UI, CFS slots, load/purge, PA calibration, Wi-Fi ([screen and camera](docs/SCREEN-AND-CAMERA.md)) |
+| Touchscreen | Native LVGL UI (development branch) ([screen and camera](docs/SCREEN-AND-CAMERA.md)) |
 | Camera | Chamber camera as a plain MJPEG stream in Mainsail (and usable by AI failure detection) |
 | Klipper extras | Ideas from Kalico as add-on modules: `RELOAD_GCODE_MACROS`, `PID_PROFILE` per CFS slot material, `BED_MESH_CHECK` |
 | Klipper on a separate PC | Optional: Klipper and Moonraker on any Linux PC over one USB cable; the K2 board only relays its serial ports ([external host](docs/EXTERNAL-HOST.md)) |
 | Print safety | `[hark_safety]`: pauses on a dead hotend or part fan, cancels on an X/Y motor fault, pauses on an extruder fault (clog or jam) |
 | Runout refill | When a reel runs out, another CFS slot with the same material and colour takes over and the print carries on, like stock. With no match it pauses, and `RESUME` loads and purges the new spool before carrying on. A warning names the next slot as soon as the reel's end passes the CFS |
 | Chamber fan | The exhaust fan vents the chamber above 35C while printing, like stock; the slicer's chamber target (M141/M191) raises it |
-| Updates | Tested releases from GitHub: an Update button in Mainsail and on the touchscreen; your settings live in `printer-overrides.cfg` and are kept |
+| Updates | Printer settings remain in `printer-overrides.cfg`; the installer uses the matching precompiled native screen included with each version |
 | AI failure detection | Optional, on the host PC: Obico model every 10 s plus a local vision model (Qwen3-VL) as a second opinion ([ai-detect](tools/ai-detect/)) |
 | Web UI | [Mainsail Hark K2 edition](https://github.com/grant0013/mainsail) (CFS panel, control centre, appearance presets) on port 4409, Moonraker on 7126 |
 
@@ -131,7 +137,7 @@ The full explanation is in `config/ORCA-K2-PROFILE.cfg`.
   accelerometer), `pa_pressure_log.py` + `pa_analysis.py` (PA calibration)
 - `config/mainline_stage2.cfg` - the full working printer configuration and
   macros (start sequence, CFS, nozzle cleaning, purge line, PA calibration)
-- `harkscreen/` - touchscreen app; `harkcam/` - camera streamer
+- `touchscreen/` - native LVGL touchscreen app (development branch); `harkcam/` - camera streamer
 - `host/` - running Klipper on a separate Linux PC: the K2-side USB relay
   and boot script, host udev rule, systemd units, nginx site and config overrides
 - `tools/` - deployment helper, PA plotting and simulation, motor parameter

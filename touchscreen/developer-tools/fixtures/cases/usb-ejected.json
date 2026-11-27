@@ -1,0 +1,7 @@
+{
+  "description": "Ejected drive remains unavailable until reconnected.",
+  "scenario": "usb-ejected",
+  "page": "storage",
+  "printer_image": "assets/demo-printer-combo.png",
+  "actions": []
+}

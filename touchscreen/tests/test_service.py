@@ -1,0 +1,1020 @@
+"""Native service behavior: guard actual printer actions and retire operation state."""
+
+import copy
+import time
+from pathlib import Path
+import sys
+import tempfile
+import unittest
+from unittest import mock
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "backend"))
+from service import Service, WebSocket
+import platform_services
+
+
+def status():
+    return {
+        "webhooks": {"state": "ready"},
+        "print_stats": {"state": "standby"},
+        "toolhead": {"homed_axes": "xyz"},
+        "idle_timeout": {"state": "Idle"},
+        "gcode_move": {"position": [100, 100, 10], "gcode_position": [100, 100, 10]},
+        "k2_cfs": {"fitted": True, "online": True, "active_slot": "A"},
+        "filament_switch_sensor filament_sensor": {"filament_detected": True},
+        "hark_cfs_slots": {
+            "map_tools": ["T0", "T1", "T2", "T3"],
+            "map_targets": ["A", "B", "C", "D", "E"],
+            "slots": {
+                "A": {"loaded": True, "type": "PLA", "color": "123456", "name": "PLA"},
+                "B": {"loaded": True, "type": "PLA", "color": "123456", "name": "PLA"},
+                "E": {
+                    "loaded": True,
+                    "type": "PETG",
+                    "color": "FFFFFF",
+                    "name": "PETG",
+                },
+            },
+        },
+    }
+
+
+def settings():
+    return {
+        "extruder": {"min_temp": -30, "max_temp": 350, "min_extrude_temp": 170},
+        "heater_bed": {"min_temp": 0, "max_temp": 120},
+        "heater_generic chamber_heater": {"min_temp": 0, "max_temp": 80},
+        "hark_chamber": {"enable": True, "max_target": 60},
+        "stepper_x": {"position_min": -9, "position_max": 352.5},
+        "stepper_y": {"position_min": 0, "position_max": 350},
+        "stepper_z": {"position_min": -10, "position_max": 360},
+        "gcode_macro START_PRINT": {"variable_screen_full_mesh": 0},
+        "gcode_macro _RUNOUT_REFILL": {"variable_enabled": 1},
+        "fan": {},
+        "heater_fan hotend_fan": {},
+        "output_pin chamber_led": {},
+        "z_tilt": {},
+    }
+
+
+class ServiceTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        config = Path(self.tmp.name) / "native.cfg"
+        config.write_text("[brand]\nmodel: Test model\n[screen]\n")
+        self.mr = mock.Mock()
+        self.state = status()
+        self.config = settings()
+        self.mr.query.side_effect = lambda: copy.deepcopy(self.state)
+        self.mr.status_snapshot.side_effect = lambda **kwargs: {
+            "status": self.mr.query(),
+            "eventtime": time.monotonic(),
+        }
+        self.mr.settings.side_effect = lambda: copy.deepcopy(self.config)
+        self.s = Service(config, self.mr)
+        self.s.status = copy.deepcopy(self.state)
+        self.s.settings = copy.deepcopy(self.config)
+        self.s.connected = True
+        self.s.materials = [{"name": "PLA", "type": "PLA", "nozzle_temp": 220}]
+
+    def run_action(self, action, **kw):
+        return self.s.execute(dict(action=action, **kw))
+
+    def test_bundled_printer_artwork_switches_with_cfs_presence(self):
+        self.s.prepare_artwork()
+        with_cfs = self.s.platform["printer_image"]
+        self.assertTrue(Path(with_cfs).is_file())
+        self.assertEqual(Path(self.s.artwork_key[0]).name, "printer-with-cfs.png")
+        self.s.status["k2_cfs"]["fitted"] = False
+        self.s.prepare_artwork()
+        self.assertNotEqual(self.s.platform["printer_image"], with_cfs)
+        self.assertEqual(Path(self.s.artwork_key[0]).name, "printer-without-cfs.png")
+        self.s.status["k2_cfs"]["fitted"] = True
+        self.s.prepare_artwork()
+        self.assertEqual(self.s.platform["printer_image"], with_cfs)
+
+    def test_layered_spool_flag_survives_repeated_platform_refreshes(self):
+        with (
+            mock.patch("service.storage.system_identity", return_value={}),
+            mock.patch("service.platform.usb_disk", return_value=None),
+            mock.patch("service.storage.free_space", return_value="1 GB"),
+            mock.patch("service.platform.system_zone", return_value="UTC"),
+            mock.patch("service.subprocess.check_output", return_value=b"version=test"),
+            mock.patch.object(self.s.wifi, "status", return_value={}),
+        ):
+            self.s.refresh_platform()
+            signature = self.s.artwork_key
+            self.assertTrue(self.s.platform["printer_spools"])
+            for _ in range(3):
+                self.s.refresh_platform()
+                self.assertEqual(self.s.artwork_key, signature)
+                self.assertTrue(self.s.snapshot()["platform"]["printer_spools"])
+            self.s.status["k2_cfs"]["fitted"] = False
+            self.s.refresh_platform()
+            self.assertFalse(self.s.platform["printer_spools"])
+
+    def test_legacy_image_override_does_not_change_automatic_artwork(self):
+        self.s.config.set("brand", "status_image", "/missing/obsolete-printer.png")
+        self.s.prepare_artwork()
+        self.assertEqual(Path(self.s.artwork_key[0]).name, "printer-with-cfs.png")
+
+    def test_timelapse_can_be_toggled_during_print(self):
+        self.state["print_stats"]["state"] = "printing"
+        self.s.platform["timelapse"] = {"enabled": False}
+        for value in (True, False):
+            self.run_action("timelapse", enabled=value)
+            self.mr.request.assert_called_with(
+                "/machine/timelapse/settings", {"enabled": value}
+            )
+            self.assertEqual(self.s.platform["timelapse"]["enabled"], value)
+
+    def test_limits_change_without_model_assumptions(self):
+        self.run_action("temperature", heater="extruder", value=350)
+        self.mr.run_gcode.assert_called_with("M104 S350")
+        self.config["extruder"]["max_temp"] = 285
+        with self.assertRaises(ValueError):
+            self.run_action("temperature", heater="extruder", value=300)
+        self.run_action("temperature", heater="chamber", value=60)
+        with self.assertRaises(ValueError):
+            self.run_action("temperature", heater="chamber", value=61)
+        self.config.pop("extruder")
+        with self.assertRaises(ValueError):
+            self.run_action("temperature", heater="extruder", value=200)
+
+    def test_transparent_thumbnail_padding_is_trimmed_without_stretching(self):
+        import io
+        import storage
+        from PIL import Image
+
+        image = Image.new("RGBA", (100, 100), (0, 0, 0, 0))
+        image.paste((255, 0, 0, 255), (20, 40, 80, 60))
+        source = io.BytesIO()
+        image.save(source, format="PNG")
+        ready = storage.prepare_image(
+            source, Path(self.tmp.name) / "images", "test", (120, 60), trim=True
+        )
+        with Image.open(ready) as fitted:
+            self.assertEqual(fitted.size, (120, 60))
+            self.assertEqual(fitted.getchannel("A").getbbox(), (0, 10, 120, 50))
+
+    def test_unreadable_changed_thumbnail_clears_old_preview_and_can_retry(self):
+        self.s.platform["file_thumbnails"] = {"part.gcode": "/tmp/old.png"}
+        self.s.prepare_thumbnail = mock.Mock(side_effect=OSError("Unreadable preview"))
+        self.mr.metadata.return_value = {}
+        self.s.file_thumbnails([{"path": "part.gcode", "modified": 2, "size": 100}])
+        self.assertNotIn("part.gcode", self.s.platform["file_thumbnails"])
+        self.assertNotIn("part.gcode", self.s.file_signatures)
+
+    def test_changed_file_without_thumbnail_clears_stale_preview(self):
+        self.s.platform["file_thumbnails"] = {"part.gcode": "/tmp/old.png"}
+        self.s.prepare_thumbnail = mock.Mock(return_value=None)
+        self.mr.metadata.return_value = {}
+        self.s.file_thumbnails([{"path": "part.gcode", "modified": 2, "size": 100}])
+        self.assertNotIn("part.gcode", self.s.platform["file_thumbnails"])
+
+    def test_old_thumbnail_worker_cannot_overwrite_new_generation(self):
+        self.s.file_generation = 1
+        self.s.platform["file_thumbnails"] = {"part.gcode": "/tmp/new.png"}
+
+        def metadata(path):
+            self.s.file_generation = 2
+            return {}
+
+        self.mr.metadata.side_effect = metadata
+        self.s.prepare_thumbnail = mock.Mock(return_value="/tmp/old.png")
+        self.s.file_thumbnails([{"path": "part.gcode", "modified": 1, "size": 100}], 1)
+        self.assertEqual(
+            self.s.platform["file_thumbnails"]["part.gcode"], "/tmp/new.png"
+        )
+        self.assertNotIn("part.gcode", self.s.file_signatures)
+
+    def test_nan_and_unknown_heaters_never_reach_gcode(self):
+        for heater, value in [
+            ("extruder", float("nan")),
+            ("extruder", float("inf")),
+            ("unknown", 100),
+        ]:
+            with self.assertRaises(ValueError):
+                self.run_action("temperature", heater=heater, value=value)
+        self.mr.run_gcode.assert_not_called()
+
+    def test_move_uses_fresh_limits_offsets_and_homing(self):
+        self.state["gcode_move"]["position"][2] = 9.95
+        self.run_action("position", axis="Z", value=360.05)
+        self.assertIn("G1 Z360.0500", self.mr.run_gcode.call_args.args[0])
+        with self.assertRaises(ValueError):
+            self.run_action("position", axis="X", value=-10)
+        self.state["toolhead"]["homed_axes"] = "xy"
+        with self.assertRaises(ValueError):
+            self.run_action("jog", axis="Z", value=1)
+
+    def test_xy_homing_does_not_request_z(self):
+        self.run_action("home", axis="XY")
+        self.mr.run_gcode.assert_called_once_with("G28 X Y")
+        with self.assertRaises(ValueError):
+            self.run_action("home", axis="E")
+
+    def test_z_homing_requests_full_sequence_when_xy_is_unknown(self):
+        for axes in ("", "x", "y", "z", "xz", "yz", "xy", "xyz"):
+            with self.subTest(homed_axes=axes):
+                self.state["toolhead"]["homed_axes"] = axes
+                self.run_action("home", axis="Z")
+                expected = "G28 Z" if set("xy") <= set(axes) else "G28"
+                self.mr.run_gcode.assert_called_with(expected)
+
+    def test_manual_extrusion_preserves_gcode_state_and_configured_speed(self):
+        self.state["extruder"] = {"temperature": 220, "can_extrude": True}
+        self.config["extruder"].update(
+            max_extrude_only_distance=20, max_extrude_only_velocity=2
+        )
+        self.run_action("extrude", value=-10)
+        command = self.mr.run_gcode.call_args.args[0]
+        self.assertIn("M83\nG1 E-10.0000 F120.0", command)
+        self.assertTrue(command.endswith("RESTORE_GCODE_STATE NAME=NATIVE_EXTRUDE"))
+        self.assertNotIn("CFS_", command)
+
+    def test_manual_extrusion_rechecks_cold_and_configured_distance_limits(self):
+        self.config["extruder"].update(
+            min_extrude_temp=230, max_extrude_only_distance=8
+        )
+        self.state["extruder"] = {"temperature": 220, "can_extrude": True}
+        with self.assertRaises(ValueError):
+            self.run_action("extrude", value=1)
+        self.state["extruder"]["temperature"] = 240
+        for value in (9, -9, 0, float("nan"), float("inf")):
+            with self.assertRaises(ValueError):
+                self.run_action("extrude", value=value)
+        self.state["extruder"]["can_extrude"] = False
+        with self.assertRaises(ValueError):
+            self.run_action("extrude", value=1)
+        self.mr.run_gcode.assert_not_called()
+
+    def test_manual_extrusion_waits_for_cfs_filament_change(self):
+        self.state["extruder"] = {"temperature": 220, "can_extrude": True}
+        self.state["k2_cfs"]["change_pending"] = True
+        with self.assertRaises(RuntimeError):
+            self.run_action("extrude", value=1)
+        self.mr.run_gcode.assert_not_called()
+
+    def test_unavailable_during_printing_and_paused(self):
+        for state in ("printing", "paused"):
+            self.state["print_stats"]["state"] = state
+            for action, kw in [
+                ("home", {}),
+                ("motors", {}),
+                ("extrude", {"value": 1}),
+                ("load", {"slot": "A"}),
+                ("unload", {}),
+                ("heaters_off", {}),
+                ("calibrate", {"kind": "home", "confirm": True}),
+            ]:
+                with (
+                    self.subTest(state=state, action=action),
+                    self.assertRaises(RuntimeError),
+                ):
+                    self.run_action(action, **kw)
+        self.mr.run_gcode.assert_not_called()
+
+    def test_no_automatic_heater_fan_mutation(self):
+        with self.assertRaises(KeyError):
+            self.run_action("fan", fan="hotend", value=50)
+        with self.assertRaises(ValueError):
+            self.run_action("fan", fan="part", value=101)
+        self.run_action("fan", fan="part", value=50)
+        self.mr.run_gcode.assert_called_with("M106 P0 S127")
+
+    def test_load_unload_delegate_to_existing_firmware_macros(self):
+        self.run_action("load", slot="B")
+        self.mr.run_gcode.assert_called_with("CFS_LOAD_SLOT SLOT=B CONFIRM=1")
+        self.run_action("unload")
+        self.mr.run_gcode.assert_called_with("CFS_UNLOAD_ACTIVE CONFIRM=1")
+        self.state["k2_cfs"]["active_slot"] = None
+        self.run_action("load", slot="E")
+        self.mr.run_gcode.assert_called_with("LOAD_FILAMENT")
+        self.run_action("unload")
+        self.mr.run_gcode.assert_called_with("UNLOAD_FILAMENT")
+
+    def prepare_mesh(self):
+        self.config["bed_mesh"] = {}
+        self.state["bed_mesh"] = {
+            "profile_name": "PLA 60C",
+            "probed_matrix": [[0, 0.1], [0.2, 0.3]],
+            "profiles": {
+                "PLA 60C": {"points": [[0, 0.1], [0.2, 0.3]]},
+                "PETG 80C": {"points": [[0.1, 0.2], [0.2, 0.4]]},
+            },
+        }
+
+    def test_mesh_profile_commands_require_confirmation_and_do_not_restart(self):
+        self.prepare_mesh()
+        with self.assertRaises(ValueError):
+            self.run_action("mesh_profile", operation="load", name="PETG 80C")
+        self.run_action("mesh_profile", operation="load", name="PETG 80C", confirm=True)
+        self.mr.run_gcode.assert_called_once_with('BED_MESH_PROFILE LOAD="PETG 80C"')
+        self.mr.run_gcode.reset_mock()
+        self.run_action(
+            "mesh_profile",
+            operation="rename",
+            name="PLA 60C",
+            new_name="PLA warm",
+            confirm=True,
+        )
+        self.mr.run_gcode.assert_called_once_with(
+            'BED_MESH_PROFILE SAVE="PLA warm"\nBED_MESH_PROFILE LOAD="PLA warm"\nBED_MESH_PROFILE REMOVE="PLA 60C"'
+        )
+        self.assertNotIn("SAVE_CONFIG", self.mr.run_gcode.call_args.args[0])
+
+    def test_standalone_mesh_save_is_removed(self):
+        self.prepare_mesh()
+        with self.assertRaisesRegex(ValueError, "Unknown mesh profile operation"):
+            self.run_action("mesh_profile", operation="save", name="New mesh", confirm=True)
+        self.mr.run_gcode.assert_not_called()
+
+    def test_rename_unloaded_mesh_restores_current_profile(self):
+        self.prepare_mesh()
+        self.run_action("mesh_profile", operation="rename", name="PETG 80C", new_name="PETG warm", confirm=True)
+        self.mr.run_gcode.assert_called_once_with(
+            'BED_MESH_PROFILE LOAD="PETG 80C"\nBED_MESH_PROFILE SAVE="PETG warm"\nBED_MESH_PROFILE LOAD="PETG warm"\nBED_MESH_PROFILE REMOVE="PETG 80C"\nBED_MESH_PROFILE LOAD="PLA 60C"')
+
+    def test_rename_with_no_loaded_mesh_restores_empty_state(self):
+        for points in ([], [[]], [[], []]):
+            with self.subTest(points=points):
+                self.prepare_mesh()
+                self.mr.run_gcode.reset_mock()
+                self.state["bed_mesh"].update(profile_name="", probed_matrix=points)
+                self.run_action(
+                    "mesh_profile", operation="rename", name="PETG 80C",
+                    new_name="PETG warm", confirm=True,
+                )
+                self.mr.run_gcode.assert_called_once()
+                command = self.mr.run_gcode.call_args.args[0]
+                self.assertTrue(command.startswith('BED_MESH_PROFILE LOAD="PETG 80C"\n'))
+                self.assertIn('BED_MESH_PROFILE SAVE="PETG warm"', command)
+                self.assertIn('BED_MESH_PROFILE REMOVE="PETG 80C"', command)
+                self.assertTrue(command.endswith("\nBED_MESH_CLEAR"))
+                self.assertNotIn("SAVE_CONFIG", command)
+
+    def test_rename_unloaded_mesh_preserves_unsaved_mesh(self):
+        self.prepare_mesh()
+        self.state["bed_mesh"].update(profile_name="", probed_matrix=[[0, 0], [0, 0]])
+        with self.assertRaisesRegex(ValueError, "current mesh is unsaved"):
+            self.run_action("mesh_profile", operation="rename", name="PETG 80C", new_name="PETG warm", confirm=True)
+        self.mr.run_gcode.assert_not_called()
+
+    def test_mesh_profile_changes_reject_printing_stale_names_and_command_injection(
+        self,
+    ):
+        self.prepare_mesh()
+        for operation, name, new_name in (
+            ("load", "missing", ""),
+            ("save", "bad\nM112", ""),
+            ("save", "default", ""),
+            ("save", "PLA 60C", ""),
+            ("rename", "PLA 60C", 'name";M112'),
+        ):
+            with self.subTest(operation=operation, name=name):
+                with self.assertRaises((ValueError, RuntimeError)):
+                    self.run_action(
+                        "mesh_profile",
+                        operation=operation,
+                        name=name,
+                        new_name=new_name,
+                        confirm=True,
+                    )
+        self.state["print_stats"]["state"] = "printing"
+        with self.assertRaises(RuntimeError):
+            self.run_action(
+                "mesh_profile", operation="delete", name="PLA 60C", confirm=True
+            )
+        self.mr.run_gcode.assert_not_called()
+
+    def test_automatic_file_refresh_uses_recent_cache_manual_refresh_does_not(self):
+        self.s.files_refreshed_at = 100
+        with (
+            mock.patch("service.time.monotonic", return_value=110),
+            mock.patch("service.threading.Thread") as thread,
+        ):
+            self.s.submit({"action": "files", "automatic": True})
+            thread.assert_not_called()
+            self.s.submit({"action": "files"})
+            thread.assert_called_once()
+        self.s.files_refreshing = False
+        with (
+            mock.patch("service.time.monotonic", return_value=116),
+            mock.patch("service.threading.Thread") as thread,
+        ):
+            self.s.submit({"action": "files", "automatic": True})
+            thread.assert_called_once()
+
+    def test_startup_file_preload_retries_failed_reads_without_looping(self):
+        self.s.files_error = "Unavailable"
+        with (
+            mock.patch("service.time.monotonic", return_value=100),
+            mock.patch.object(self.s, "submit") as submit,
+        ):
+            self.s.preload_files()
+            self.s.preload_files()
+            submit.assert_called_once_with(
+                {"action": "files", "source": "gcodes", "automatic": True}
+            )
+        with (
+            mock.patch("service.time.monotonic", return_value=131),
+            mock.patch.object(self.s, "submit") as submit,
+        ):
+            self.s.preload_files()
+            submit.assert_called_once()
+        self.s.files_preloaded = True
+        with mock.patch.object(self.s, "submit") as submit:
+            self.s.preload_files()
+            submit.assert_not_called()
+
+    def test_files_always_use_configured_printer_root(self):
+        self.mr.files.return_value = [
+            {"path": "folder/old.gcode", "modified": 1},
+            {"path": "new.gcode", "modified": 2},
+        ]
+        with mock.patch("service.threading.Thread"):
+            self.run_action("files", source="usb")
+        self.mr.files.assert_called_once_with()
+        self.assertEqual(self.s.files_source, "gcodes")
+        self.assertEqual(self.s.files[0]["path"], "new.gcode")
+
+    def test_file_refresh_is_background_coalesced_and_preserves_foreground_operation(
+        self,
+    ):
+        self.s.files = [{"path": "cached.gcode"}]
+        self.mr.files.return_value = [{"path": "new.gcode", "modified": 2}]
+        with mock.patch("service.threading.Thread") as thread:
+            self.s.submit({"action": "files"})
+            self.s.submit({"action": "files"})
+            self.assertEqual(thread.call_count, 1)
+            self.assertTrue(self.s.files_refreshing)
+            self.assertIsNone(self.s.operation)
+            self.assertEqual(self.s.files[0]["path"], "cached.gcode")
+            self.s.submit({"action": "home"})
+            operation = self.s.operation
+            self.s.refresh_files()
+            self.assertIs(self.s.operation, operation)
+        self.assertFalse(self.s.files_refreshing)
+        self.assertEqual(self.s.files[0]["path"], "new.gcode")
+        self.assertIsNone(self.s.result)
+        self.mr.run_gcode.assert_not_called()
+
+    def test_failed_background_refresh_retains_cache_without_modal_notice(self):
+        self.s.files = [{"path": "cached.gcode"}]
+        self.mr.files.side_effect = RuntimeError("Storage is unavailable")
+        self.s.files_refreshing = True
+        self.s.refresh_files()
+        self.assertFalse(self.s.files_refreshing)
+        self.assertEqual(self.s.files[0]["path"], "cached.gcode")
+        self.assertEqual(
+            self.s.snapshot()["files_refresh"]["error"], "Storage is unavailable"
+        )
+        self.assertEqual(self.s.notices, [])
+        self.assertIsNone(self.s.operation)
+
+    def test_previews_cover_all_files_and_cache_unchanged_entries(self):
+        files = [
+            {"path": "part%d.gcode" % i, "modified": i, "size": 10} for i in range(17)
+        ]
+        self.s.prepare_thumbnail = mock.Mock(return_value="/tmp/test-preview.png")
+        self.s.file_thumbnails(files)
+        self.assertEqual(self.mr.metadata.call_count, 17)
+        self.assertEqual(len(self.s.platform["file_thumbnails"]), 17)
+        self.s.file_thumbnails(files)
+        self.assertEqual(self.mr.metadata.call_count, 17)
+
+    def test_closed_websocket_handshake_exits_and_closes_socket(self):
+        sock = mock.Mock()
+        sock.recv.side_effect = [b"", AssertionError("must not spin on EOF")]
+        with mock.patch("service.socket.create_connection", return_value=sock):
+            with self.assertRaises(EOFError):
+                WebSocket("http://127.0.0.1:7126")
+        sock.close.assert_called_once_with()
+
+    def test_reconnect_keeps_settings_until_refreshed_on_same_host_boot(self):
+        self.s.merge_status(self.state, 100, full=True)
+        self.s.stream_message({"result": {"eventtime": 101, "status": self.state}})
+        snap = self.s.snapshot()
+        self.assertTrue(snap["connected"])
+        self.assertTrue(snap["heaters"])
+        self.assertEqual(snap["settings"]["extruder"]["max_temp"], 350)
+        self.assertTrue(self.s.settings_refresh_needed)
+
+    def test_screen_restart_never_replays_printer_preferences(self):
+        for state in ("standby", "printing", "paused"):
+            with self.subTest(state=state):
+                self.state["print_stats"]["state"] = state
+                self.s.stream_connected = True
+                self.s.prefs.update(idle=1800, light_off=300, cfs_auto_refill=True)
+                self.s.preference = mock.Mock()
+                self.s.update_screen_idle = mock.Mock()
+                self.s.preload_files = mock.Mock()
+                self.s.refresh_platform = mock.Mock()
+                self.s.read_policy.update = mock.Mock()
+                with mock.patch("service.time.sleep", side_effect=StopIteration):
+                    with self.assertRaises(StopIteration):
+                        self.s.poll()
+                self.s.preference.assert_not_called()
+                self.mr.run_gcode.assert_not_called()
+
+    def test_live_printer_preferences_override_saved_screen_values(self):
+        self.s.prefs.update(idle=900, light_off=300, cfs_auto_refill=True)
+        self.s.status.update(
+            {
+                "idle_timeout": {"idle_timeout": 3600},
+                "gcode_macro _LIGHT_IDLE": {"off_after": 0},
+                "gcode_macro _RUNOUT_REFILL": {"enabled": 0},
+            }
+        )
+        prefs = self.s.current_preferences()
+        self.assertEqual(prefs["idle"], 3600)
+        self.assertEqual(prefs["light_off"], 0)
+        self.assertFalse(prefs["cfs_auto_refill"])
+        self.s.status["gcode_macro _RUNOUT_REFILL"]["enabled"] = 1
+        self.assertTrue(self.s.current_preferences()["cfs_auto_refill"])
+        self.s.status.pop("gcode_macro _RUNOUT_REFILL")
+        self.s.settings["gcode_macro _RUNOUT_REFILL"]["variable_enabled"] = 0
+        self.assertFalse(self.s.current_preferences()["cfs_auto_refill"])
+
+    def test_background_refresh_failure_does_not_disconnect_live_printer(self):
+        self.s.merge_status(self.state, 10)
+        self.s.stream_connected = True
+        self.s.update_screen_idle = mock.Mock()
+        self.s.preload_files = mock.Mock()
+        self.s.refresh_platform = mock.Mock(side_effect=OSError("USB query failed"))
+        self.s.refresh_network = mock.Mock()
+        with mock.patch("service.time.sleep", side_effect=StopIteration):
+            with self.assertRaises(StopIteration):
+                self.s.poll()
+        self.assertTrue(self.s.connected)
+        self.assertEqual(self.s.platform["background_error"], "USB query failed")
+        self.assertNotIn("connection_error", self.s.platform)
+
+    def test_http_failure_uses_live_stream_but_detects_real_disconnect(self):
+        for live in (True, False):
+            with self.subTest(live=live):
+                self.s.merge_status(self.state, 10)
+                self.s.stream_connected = live
+                self.mr.status_snapshot.side_effect = OSError("HTTP unavailable")
+                with mock.patch("service.time.sleep", side_effect=StopIteration):
+                    with self.assertRaises(StopIteration):
+                        self.s.poll()
+                self.assertEqual(self.s.connected, live)
+
+    def test_timezone_auto_uses_live_system_zone_without_rewriting_preference(self):
+        self.s.prefs["timezone"] = "auto"
+        for zone in ("EET", "EST"):
+            self.s.platform["timezone"] = zone
+            self.assertEqual(self.s.current_preferences()["timezone"], zone)
+            self.assertEqual(self.s.prefs["timezone"], "auto")
+        self.s.prefs["timezone"] = "America/Detroit"
+        self.assertEqual(self.s.current_preferences()["timezone"], "America/Detroit")
+
+    def test_timezone_setting_updates_uci_and_runtime_zonefile(self):
+        zone_root = Path(self.tmp.name) / "zoneinfo"
+        zone = zone_root / "America" / "Detroit"
+        zone.parent.mkdir(parents=True)
+        zone.write_bytes(b"TZif")
+        with (
+            mock.patch.object(platform_services, "ZONEINFO", str(zone_root)),
+            mock.patch("platform_services.subprocess.call") as command,
+            mock.patch("platform_services.os.symlink") as link,
+            mock.patch("platform_services.os.replace") as replace,
+            mock.patch("platform_services.os.path.lexists", return_value=False),
+            mock.patch("platform_services.time.tzset") as refresh,
+        ):
+            platform_services.set_system_zone("America/Detroit")
+        self.assertEqual(
+            command.call_args_list[0].args[0],
+            ["uci", "set", "system.@system[0].zonename=America/Detroit"],
+        )
+        self.assertEqual(command.call_args_list[1].args[0], ["uci", "commit", "system"])
+        link.assert_called_once_with(str(zone), "/tmp/localtime.new")
+        replace.assert_called_once_with("/tmp/localtime.new", "/tmp/localtime")
+        refresh.assert_called_once_with()
+
+    def test_timezone_setting_without_tzset(self):
+        # The printer's Python has no time.tzset. Applying a zone must still
+        # complete after persisting UCI and replacing the runtime zonefile.
+        zone_root = Path(self.tmp.name) / "zoneinfo"
+        zone_root.mkdir()
+        (zone_root / "EET").write_bytes(b"TZif")
+        with (
+            mock.patch.object(platform_services, "ZONEINFO", str(zone_root)),
+            mock.patch("platform_services.subprocess.call") as command,
+            mock.patch("platform_services.os.symlink") as link,
+            mock.patch("platform_services.os.replace") as replace,
+            mock.patch("platform_services.os.path.lexists", return_value=False),
+            mock.patch.object(platform_services, "time", spec=["time"]),
+        ):
+            platform_services.time.time.return_value = 0
+            platform_services.set_system_zone("EET")
+        self.assertEqual(command.call_count, 2)
+        link.assert_called_once_with(str(zone_root / "EET"), "/tmp/localtime.new")
+        replace.assert_called_once_with("/tmp/localtime.new", "/tmp/localtime")
+
+    def test_timezone_presets_read_retained_firmware_mapping(self):
+        import storage
+
+        source = Path(self.tmp.name) / "timezone.sh"
+        source.write_text("#!/bin/sh\nUTC-05:00;EST\nUTC+05:30;Asia/Kolkata\n")
+        with mock.patch("storage.timezones", return_value=["EST", "Asia/Kolkata"]):
+            choices = storage.timezone_presets(str(source))
+        self.assertEqual([item["id"] for item in choices], ["EST", "Asia/Kolkata"])
+        self.assertEqual(choices[0]["name"], "Eastern Standard Time (EST)")
+        self.assertEqual(choices[1]["cities"], "Kolkata")
+        self.assertEqual(choices[1]["label"], "UTC+05:30")
+
+    def test_new_subscription_resets_remote_clock_and_rejects_old_http_response(self):
+        self.s.merge_status(
+            {"extruder": {"temperature": 240}, "toolhead": {"homed_axes": "xyz"}}, 9000
+        )
+        old_epoch = self.s.status_epoch
+        self.s.stream_message(
+            {
+                "result": {
+                    "eventtime": 5,
+                    "status": {
+                        "webhooks": {"state": "ready"},
+                        "extruder": {"temperature": 25},
+                        "toolhead": {"homed_axes": ""},
+                        "print_stats": {"state": "standby"},
+                    },
+                }
+            }
+        )
+        self.assertEqual(self.s.status["extruder"]["temperature"], 25)
+        self.assertEqual(self.s.status["toolhead"]["homed_axes"], "")
+        self.assertFalse(
+            self.s.merge_status(
+                {"extruder": {"temperature": 240}}, 9001, epoch=old_epoch
+            )
+        )
+        self.assertEqual(self.s.status["extruder"]["temperature"], 25)
+
+    def test_action_query_from_previous_connection_is_rejected(self):
+        def settings_after_reconnect():
+            self.s.stream_message(
+                {
+                    "result": {
+                        "eventtime": 5,
+                        "status": {
+                            "webhooks": {"state": "ready"},
+                            "print_stats": {"state": "standby"},
+                            "toolhead": {"homed_axes": ""},
+                        },
+                    }
+                }
+            )
+            return self.config
+
+        self.mr.settings.side_effect = settings_after_reconnect
+        with self.assertRaisesRegex(RuntimeError, "connection changed"):
+            self.run_action("jog", axis="X", value=1)
+        self.mr.run_gcode.assert_not_called()
+        self.assertEqual(self.s.status["toolhead"]["homed_axes"], "")
+
+    def test_http_fallback_recovers_after_remote_monotonic_clock_resets(self):
+        self.s.merge_status(
+            {"extruder": {"temperature": 240}, "toolhead": {"homed_axes": "xyz"}}, 9000
+        )
+        self.s.stream_connected = False
+        self.s.merge_status(
+            {"webhooks": {"state": "ready"}, "extruder": {"temperature": 25}},
+            5,
+            full=True,
+            clock_baseline=9000,
+        )
+        self.assertEqual(self.s.status["extruder"]["temperature"], 25)
+        self.assertNotIn("toolhead", self.s.status)
+
+    def test_ready_notification_advances_printer_generation(self):
+        self.assertEqual(self.s.snapshot()["printer_generation"], 0)
+        with self.assertRaises(EOFError):
+            self.s.stream_message({"method": "notify_klippy_ready"})
+        self.assertEqual(self.s.snapshot()["printer_generation"], 1)
+        self.assertFalse(self.s.connected)
+
+    def test_restart_invalidates_subscription_and_accepts_fresh_status(self):
+        self.s.stream_connected = True
+        with self.assertRaises(EOFError):
+            self.s.stream_message({"method": "notify_klippy_disconnected"})
+        self.assertFalse(self.s.stream_connected)
+        self.assertFalse(self.s.connected)
+        self.s.stream_message(
+            {
+                "result": {
+                    "eventtime": 12,
+                    "status": {
+                        "k2_cfs": {"online": True, "temperature": 24, "humidity": 25}
+                    },
+                }
+            }
+        )
+        self.assertTrue(self.s.connected)
+        self.assertTrue(self.s.stream_connected)
+        self.assertEqual(self.s.status["k2_cfs"]["temperature"], 24)
+
+    def test_full_refresh_fills_dynamic_cfs_fields_without_rewinding_status(self):
+        self.s.merge_status({"k2_cfs": {"online": None}}, 10, full=True)
+        self.s.merge_status(
+            {"k2_cfs": {"online": True, "temperature": 24, "humidity": 25}},
+            12,
+            full=True,
+        )
+        self.s.merge_status({"k2_cfs": {"online": None}}, 11, full=True)
+        self.assertTrue(self.s.status["k2_cfs"]["online"])
+        self.assertEqual(self.s.status["k2_cfs"]["humidity"], 25)
+        with self.assertRaises(RuntimeError):
+            self.s.stream_message({"error": {"message": "Klipper not ready"}})
+
+    def test_startup_is_not_presented_as_a_printer_fault(self):
+        self.s.status["webhooks"] = {
+            "state": "startup",
+            "state_message": "Printer is not ready",
+        }
+        self.assertEqual(self.s.snapshot()["error"], "")
+        self.s.status["webhooks"]["state"] = "error"
+        self.assertEqual(self.s.snapshot()["error"], "Printer is not ready")
+
+    def test_external_handoff_interlocks(self):
+        with self.assertRaises(RuntimeError):
+            self.run_action("load", slot="E", inserted=True)
+        self.state["k2_cfs"]["active_slot"] = None
+        with self.assertRaises(RuntimeError):
+            self.run_action("load", slot="A")
+        self.run_action("load", slot="E")
+        self.mr.run_gcode.assert_called_with("LOAD_FILAMENT")
+
+    def test_slot_temperature_uses_driver_parameter_and_limits(self):
+        self.run_action(
+            "slot_save",
+            slot="A",
+            record={"name": "PLA", "color": "ABCDEF", "nozzle_temp": 250},
+        )
+        self.assertIn("NOZZLE=250", self.mr.run_gcode.call_args.args[0])
+        with self.assertRaises(ValueError):
+            self.run_action(
+                "slot_save",
+                slot="A",
+                record={"name": "PLA", "color": "ABCDEF", "nozzle_temp": 351},
+            )
+
+    def test_starting_survives_previous_terminal_job_telemetry(self):
+        for previous in ("cancelled", "error"):
+            with self.subTest(previous=previous):
+                self.s.status["print_stats"] = {
+                    "state": previous,
+                    "filename": "old.gcode",
+                }
+                self.s.platform["starting_file"] = "next.gcode"
+                self.s.merge_status({"extruder": {"temperature": 25}})
+                self.s.merge_status({"print_stats": {"state": previous}}, full=True)
+                self.assertEqual(self.s.platform["starting_file"], "next.gcode")
+                self.s.merge_status(
+                    {"print_stats": {"state": "printing", "filename": "next.gcode"}}
+                )
+                self.assertNotIn("starting_file", self.s.platform)
+
+    def test_start_reuses_selected_preview_until_klipper_reports_printing(self):
+        self.s.metadata["part.gcode"] = {
+            "filaments": [{"tool": 0}],
+            "estimated_time": 1200,
+            "layer_count": 250,
+        }
+        self.s.selected_file = "part.gcode"
+        self.s.platform["file_thumbnail"] = "selected.png"
+
+        def accepted(*args):
+            self.assertEqual(self.s.platform["starting_file"], "part.gcode")
+            self.assertEqual(self.s.platform["thumbnail"], "selected.png")
+
+        self.mr.request.side_effect = accepted
+        self.run_action("start", path="part.gcode", mapping={"0": "A"})
+        self.assertEqual(self.s.platform["layer_count"], 250)
+        self.s.merge_status(
+            {"print_stats": {"filename": "part.gcode", "state": "printing"}}
+        )
+        self.assertNotIn("starting_file", self.s.platform)
+        self.assertEqual(self.s.platform["thumbnail"], "selected.png")
+        self.assertEqual(self.s.platform["estimated_time"], 1200)
+
+    def test_print_start_validates_mapping_and_rolls_back(self):
+        self.s.metadata["part.gcode"] = {"filaments": [{"tool": 0}]}
+        self.mr.request.side_effect = RuntimeError("cannot start")
+        with self.assertRaises(RuntimeError):
+            self.run_action(
+                "start", path="part.gcode", mapping={"0": "A"}, calibrate=True
+            )
+        self.assertNotIn("starting_file", self.s.platform)
+        calls = [c.args[0] for c in self.mr.run_gcode.call_args_list]
+        self.assertIn("CFS_TOOL_MAP RESET=1 QUIET=1", calls)
+        self.assertIn(
+            "SET_GCODE_VARIABLE MACRO=START_PRINT VARIABLE=screen_full_mesh VALUE=0",
+            calls,
+        )
+
+    def test_multifilament_external_and_unloaded_mapping_refused(self):
+        self.s.metadata["part.gcode"] = {"filaments": [{"tool": 0}, {"tool": 1}]}
+        with self.assertRaises(ValueError):
+            self.run_action("start", path="part.gcode", mapping={"0": "E", "1": "E"})
+        self.state["hark_cfs_slots"]["slots"]["A"]["loaded"] = False
+        with self.assertRaises(ValueError):
+            self.run_action("start", path="part.gcode", mapping={"0": "A", "1": "B"})
+        self.mr.run_gcode.assert_not_called()
+
+    def test_stop_restart_exclude_require_confirmation(self):
+        self.state["print_stats"]["state"] = "printing"
+        for action in ("cancel", "restart", "firmware_restart"):
+            with self.assertRaises(ValueError):
+                self.run_action(action)
+        self.state["exclude_object"] = {"objects": [{"name": "part"}]}
+        with self.assertRaises(ValueError):
+            self.run_action("exclude", names=["other"], confirm=True)
+        self.run_action("exclude", names=["part"], confirm=True)
+        self.mr.run_gcode.assert_called_with('EXCLUDE_OBJECT NAME="part"')
+
+    def test_unknown_action_cannot_execute_arbitrary_gcode(self):
+        with self.assertRaises(ValueError):
+            self.run_action("gcode", script="G28")
+        self.mr.run_gcode.assert_not_called()
+
+    def test_ack_does_not_resume_and_old_notice_stays_acknowledged(self):
+        e = self.s.event("Unloading failed", "test", fault=True)
+        self.s.submit({"action": "ack", "id": e["id"]})
+        self.assertEqual(self.s.notices, [])
+        self.assertEqual(len(self.s.events), 1)
+        self.s.merge_status({"gcode_macro _STAGE": {"text": "Unloading filament"}})
+        self.assertEqual(self.s.notices, [])
+        self.mr.run_gcode.assert_not_called()
+
+    def test_failed_operation_retires_before_next_home(self):
+        self.mr.run_gcode.side_effect = RuntimeError("unload failed")
+        with mock.patch("service.threading.Thread"):
+            self.s.submit({"action": "unload"})
+            token = self.s.operation["id"]
+            self.s.run_operation({"action": "unload"}, token)
+            self.assertIsNone(self.s.operation)
+            self.assertEqual(self.s.result["action"], "unload")
+            self.assertFalse(self.s.result["success"])
+            self.s.submit({"action": "home"})
+            self.assertEqual(self.s.operation["label"], "Homing")
+
+    def test_shutdown_can_restart_but_cannot_move(self):
+        self.state["webhooks"]["state"] = "shutdown"
+        with self.assertRaises(RuntimeError):
+            self.run_action("home")
+        self.run_action("restart", confirm=True)
+        self.mr.request.assert_called_with("/printer/restart", {})
+
+    def test_refill_and_rfid_preferences_independent(self):
+        self.run_action("preference", key="cfs_startup_read", value=True)
+        self.mr.run_gcode.assert_not_called()
+        self.run_action("preference", key="cfs_auto_refill", value=False)
+        self.mr.run_gcode.assert_called_with(
+            "SET_GCODE_VARIABLE MACRO=_RUNOUT_REFILL VARIABLE=enabled VALUE=0"
+        )
+        self.assertTrue(self.s.prefs["cfs_startup_read"])
+        self.assertFalse(self.s.prefs["cfs_auto_refill"])
+
+    def test_missing_hardware_capabilities_do_not_invent_heaters(self):
+        self.s.status = {"print_stats": {"state": "standby"}}
+        self.s.settings = {}
+        snap = self.s.snapshot()
+        self.assertEqual(snap["model"], "Test model")
+        self.assertEqual(snap["heaters"], [])
+
+
+    def test_stream_updates_and_reconnect_baselines(self):
+        import json
+        import socket
+        import threading
+
+        def connection():
+            server, client = socket.socketpair()
+            client.settimeout(3)
+            thread = threading.Thread(target=self.s.client, args=(server,), daemon=True)
+            thread.start()
+            reader = client.makefile("rb")
+            try:
+                baseline = json.loads(reader.readline())
+                self.assertNotIn("settings", baseline)
+                self.assertIn("resources", baseline)
+                self.assertNotIn("_screen_patch", baseline)
+                with self.s.lock:
+                    self.s.changed()
+                    self.s.status["extruder"] = {
+                        "temperature": self.s.status.get("extruder", {}).get("temperature", 20) + 1
+                    }
+                update = json.loads(reader.readline())
+                self.assertTrue(update["_screen_patch"])
+                self.assertNotIn("settings", update["set"])
+                self.assertIn("extruder", update["status_set"])
+            finally:
+                reader.close()
+                client.close()
+                thread.join(timeout=3)
+                self.assertFalse(thread.is_alive())
+
+        connection()
+        connection()
+        connection()
+
+
+    def test_status_objects_remain_immutable_across_deltas_and_presented_targets(self):
+        self.s.status["extruder"] = {"temperature": 29, "target": 0}
+        before = self.s.snapshot()
+        original = before["status"]["extruder"]
+        self.s.merge_status({"extruder": {"temperature": 30}}, 20)
+        after = self.s.snapshot()
+        self.assertEqual(original, {"temperature": 29, "target": 0})
+        self.assertEqual(after["status"]["extruder"]["temperature"], 30)
+        self.assertIs(before["status"]["hark_cfs_slots"], after["status"]["hark_cfs_slots"])
+        self.s.requested_values[("temperature", "extruder")] = (180, time.monotonic() + 8)
+        presented = self.s.snapshot()
+        self.assertEqual(presented["status"]["extruder"]["target"], 180)
+        self.assertEqual(self.s.status["extruder"]["target"], 0)
+        self.assertEqual(after["status"]["extruder"]["target"], 0)
+
+
+    def test_catalogue_is_separate_and_refreshed_only_for_source_revisions(self):
+        import json
+        self.s.status["hark_cfs_slots"]["revision"] = 1
+        self.mr.request.return_value = {"status": {"hark_cfs_slots": {
+            "revision": 1, "materials": [{"name": "PLA"}], "library": []}}}
+        self.s.refresh_catalogue()
+        descriptor = self.s.catalogue.descriptor
+        self.assertEqual(json.loads(Path(descriptor["path"]).read_text()), [{"name": "PLA"}])
+        self.s.refresh_catalogue()
+        self.assertEqual(self.mr.request.call_count, 1)
+        self.s.merge_status({"hark_cfs_slots": {"revision": 2,
+                            "materials": [{"name": "not live"}]}}, 21)
+        self.assertNotIn("materials", self.s.status["hark_cfs_slots"])
+        self.mr.request.return_value = {"status": {"hark_cfs_slots": {
+            "revision": 2, "materials": [{"name": "PETG"}], "library": []}}}
+        self.s.refresh_catalogue()
+        self.assertEqual(self.mr.request.call_count, 2)
+        self.assertNotEqual(descriptor["revision"], self.s.catalogue.descriptor["revision"])
+        self.assertEqual(self.s.materials, [{"name": "PETG"}])
+
+
+    def test_cfs_polling_is_scoped_to_idle_visible_tab(self):
+        self.s.cfs_initializing = False
+        self.s.cfs_query_at = 10
+        self.s.visible_page = "home"
+        self.assertFalse(self.s.cfs_refresh_due(20))
+        self.s.visible_page = "filament"
+        self.assertTrue(self.s.cfs_refresh_due(20))
+        self.assertFalse(self.s.cfs_refresh_due(12))
+        for state in ("printing", "paused"):
+            self.s.status["print_stats"]["state"] = state
+            self.assertFalse(self.s.cfs_refresh_due(20))
+        self.s.cfs_initializing = True
+        self.assertTrue(self.s.cfs_refresh_due(20))
+        self.s.status["k2_cfs"]["fitted"] = False
+        self.assertFalse(self.s.cfs_refresh_due(20))
+        self.s.refresh_cfs()
+        self.mr.request.assert_not_called()
+
+    def test_cfs_refresh_discovers_late_fields_and_renews_subscription(self):
+        self.s.merge_status(self.state, 100, full=True)
+        self.mr.request.return_value = {"eventtime": 101, "status": {
+            "k2_cfs": dict(self.state["k2_cfs"], temperature=24, humidity=30),
+            "hark_cfs_slots": self.state["hark_cfs_slots"],
+        }}
+        self.s.refresh_cfs()
+        self.assertTrue(self.s.subscription_refresh.is_set())
+        self.assertFalse(self.s.cfs_initializing)
+        self.assertEqual(self.s.status["k2_cfs"]["temperature"], 24)
+        self.s.subscription_refresh.clear()
+        self.mr.request.return_value["eventtime"] = 102
+        self.s.refresh_cfs()
+        self.assertFalse(self.s.subscription_refresh.is_set())
+
+    def test_subscription_renewal_keeps_epoch_and_configuration(self):
+        self.s.merge_status(self.state, 100, full=True)
+        epoch = self.s.status_epoch
+        self.s.settings_refresh_needed = False
+        self.s.stream_message({"id": 2, "result": {"eventtime": 101, "status": self.state}})
+        self.assertEqual(self.s.status_epoch, epoch)
+        self.assertFalse(self.s.settings_refresh_needed)
+
+    def test_healthy_stream_does_not_poll_full_status_repeatedly(self):
+        self.s.stream_connected = True
+        self.s.cfs_initializing = False
+        self.s.visible_page = "home"
+        self.s.refresh_platform = mock.Mock()
+        self.s.update_screen_idle = mock.Mock()
+        self.s.preload_files = mock.Mock()
+        self.s.read_policy.update = mock.Mock()
+        with mock.patch("service.time.sleep", side_effect=StopIteration):
+            with self.assertRaises(StopIteration):
+                self.s.poll()
+        self.mr.status_snapshot.assert_not_called()
+
+
+if __name__ == "__main__":
+    unittest.main()

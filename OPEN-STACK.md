@@ -17,7 +17,7 @@ Creality `master-server`, `Monitor` and `upgrade-server` are disabled in
 `/etc/init.d/app` (install.sh). `master-server` and `Monitor` have direct
 printer-control paths (`Monitor` respawns `master-server`); `upgrade-server`
 would let a Creality OTA wipe the install. Creality's audio, Wi-Fi, app
-and web services remain enabled; Hark Screen stops `display-server` when it
+and web services remain enabled; the native touchscreen stops `display-server` when it
 starts.
 The stock touchscreen control plane is not available without `master-server`.
 
