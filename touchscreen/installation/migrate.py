@@ -8,6 +8,24 @@ import re
 from pathlib import Path
 
 
+def migrate_timezone(config, legacy):
+    """Repair upgrades that previously omitted HarkScreen's auto preference."""
+    target = Path(config).with_name("native-screen-settings.json")
+    try:
+        old = json.loads(Path(legacy).with_name("harkscreen-settings.json").read_text())
+        prefs = json.loads(target.read_text()) if target.exists() else {}
+    except (OSError, ValueError):
+        return
+    if not isinstance(old, dict) or not isinstance(prefs, dict):
+        return
+    if "timezone" in old and "timezone" not in prefs:
+        prefs["timezone"] = old["timezone"]
+        temp = target.with_suffix(".json.new")
+        temp.write_text(json.dumps(prefs, indent=2) + "\n")
+        temp.chmod(0o600)
+        temp.replace(target)
+
+
 def migrate(config, example, legacy, model=""):
     config = Path(config)
     if config.exists():
@@ -20,6 +38,7 @@ def migrate(config, example, legacy, model=""):
         )
         if cleaned != previous:
             config.write_text(cleaned)
+        migrate_timezone(config, legacy)
         return
     native = configparser.ConfigParser()
     native.read(example)
@@ -47,13 +66,13 @@ def migrate(config, example, legacy, model=""):
                 native.set(section, key, previous.get(section, key))
     with config.open("w") as stream:
         native.write(stream)
-    prefs = {}
+    prefs = {"accent": "#3d8bfd"}
     try:
         old = json.loads(Path(legacy).with_name("harkscreen-settings.json").read_text())
     except (OSError, ValueError):
         old = {}
     for key in (
-        "accent",
+        "timezone",
         "brightness",
         "sleep_after",
         "idle",
@@ -66,8 +85,6 @@ def migrate(config, example, legacy, model=""):
     ):
         if key in old:
             prefs[key] = old[key]
-    if "accent" not in prefs and previous.has_option("theme", "accent"):
-        prefs["accent"] = previous.get("theme", "accent")
     target = config.with_name("native-screen-settings.json")
     if prefs and not target.exists():
         target.write_text(json.dumps(prefs, indent=2) + "\n")

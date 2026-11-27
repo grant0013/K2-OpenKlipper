@@ -60,29 +60,36 @@ static void image(lv_obj_t *parent, const char *path, int x, int y) {
     lv_obj_set_pos(o, x, y);
 }
 /* Fit cached artwork without stretching; invalid files use the caller's fallback. */
-static bool image_fit(lv_obj_t *parent, const char *path, int x, int y, int width, int height) {
+static lv_obj_t *image_fit(lv_obj_t *parent, const char *path, int x, int y, int width,
+                           int height) {
     if (!path || !*path)
-        return false;
+        return NULL;
     char source[1400];
     snprintf(source, sizeof(source), "A:%s", path);
     lv_img_header_t info;
     if (lv_img_decoder_get_info(source, &info) != LV_RES_OK || !info.w || !info.h)
-        return false;
+        return NULL;
     int zoom = height * 256 / info.h;
     if (zoom > width * 256 / info.w)
         zoom = width * 256 / info.w;
     if (zoom < 1)
-        return false;
+        return NULL;
     lv_obj_t *preview = lv_img_create(parent);
     lv_img_set_src(preview, source);
     lv_img_set_pivot(preview, 0, 0);
     lv_img_set_zoom(preview, zoom);
     lv_obj_set_pos(preview, x + (width - info.w * zoom / 256) / 2,
                    y + (height - info.h * zoom / 256) / 2);
-    return true;
+    return preview;
 }
+static void home_unit(char *unit, size_t size);
 static void home_image(const char *path, int top, int height) {
-    image_fit(app.content, path, 12, top + 12, HOME_MAIN - 24, height - 24);
+    lv_obj_t *base = image_fit(app.content, path, 12, top + 12, HOME_MAIN - 24, height - 24);
+    if (base && B("platform.printer_spools") && B("status.k2_cfs.fitted")) {
+        char unit[16];
+        home_unit(unit, sizeof(unit));
+        printer_spools(base, unit);
+    }
 }
 cJSON *slot_record(const char *slot) {
     cJSON *rec;
@@ -174,6 +181,25 @@ static void slot_unit(const char *slot, char *unit, size_t size) {
     else
         snprintf(unit, size, "%.*s", (int)n - 1, slot);
 }
+static void home_unit(char *unit, size_t size) {
+    unit[0] = 0;
+    const char *busy = S("filament_activity.slot");
+    const char *active = S("status.k2_cfs.active_slot");
+    if (*filament_activity_label() && *busy && strcmp(busy, "E"))
+        slot_unit(busy, unit, size);
+    else if (*active && feeding_slot(active))
+        slot_unit(active, unit, size);
+    if (!*unit) {
+        cJSON *record;
+        cJSON_ArrayForEach(record, J("slots")) {
+            const char *slot = jstr(record, "slot", "");
+            if (*slot && strcmp(slot, "E")) {
+                slot_unit(slot, unit, size);
+                break;
+            }
+        }
+    }
+}
 static void home_cfs(int top, int height) {
     lv_obj_t *tile = button(app.content, "", HOME_SIDE_X, top, HOME_SIDE_W, height,
                             "home_filament_strip", false);
@@ -184,13 +210,7 @@ static void home_cfs(int top, int height) {
     }
     char unit[16] = "", groups[16][16] = {{0}};
     int units = 0;
-    const char *active = S("status.k2_cfs.active_slot");
-    const char *busy_slot = S("filament_activity.slot");
-    bool busy = *filament_activity_label() && strcmp(busy_slot, "E");
-    if (busy && *busy_slot)
-        slot_unit(busy_slot, unit, sizeof(unit));
-    else if (*active && feeding_slot(active))
-        slot_unit(active, unit, sizeof(unit));
+    home_unit(unit, sizeof(unit));
     cJSON *record;
     cJSON_ArrayForEach(record, J("slots")) {
         const char *slot = jstr(record, "slot", "");
@@ -223,9 +243,12 @@ static void home_cfs(int top, int height) {
         total++;
         if (drawn >= 4)
             continue;
-        int x = 62 + drawn++ * 28, y = (height - 22) / 2;
+        int index = drawn++;
+        int x = 62 + index * 28, y = (height - 22) / 2;
         bool present = jbool(record, "loaded", false);
         lv_obj_t *dot = box(tile, x, y, 22, 22, false);
+        app.cfs_dots[index] = dot;
+        snprintf(app.cfs_dot_slots[index], sizeof(app.cfs_dot_slots[index]), "%s", slot);
         lv_obj_clear_flag(dot, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_bg_color(dot, colour(jstr(record, "color", "828b98")), 0);
@@ -366,6 +389,15 @@ void view_home(void) {
     lv_obj_align(lv_obj_get_child(fans, -1), LV_ALIGN_CENTER, 0, 0);
 }
 void views_refresh(void) {
+    printer_spools_refresh();
+    for (int i = 0; i < 4; i++) {
+        if (!app.cfs_dots[i])
+            continue;
+        cJSON *slot = slot_record(app.cfs_dot_slots[i]);
+        lv_color_t tint = printer_spool_colour(slot);
+        if (lv_obj_get_style_bg_color(app.cfs_dots[i], 0).full != tint.full)
+            lv_obj_set_style_bg_color(app.cfs_dots[i], tint, 0);
+    }
     char value[180];
     if (app.extrusion_temp) {
         snprintf(value, sizeof(value), "E %.0f°", N("status.extruder.temperature"));
@@ -413,10 +445,32 @@ void views_refresh(void) {
             }
         }
         if (app.positions[i]) {
-            cJSON *p = cJSON_GetArrayItem(J("status.gcode_move.gcode_position"), i);
+            cJSON *p = cJSON_GetArrayItem(J("motion.current"), i);
+            if (!cJSON_IsNumber(p))
+                p = cJSON_GetArrayItem(J("status.gcode_move.gcode_position"), i);
+            cJSON *target = cJSON_GetArrayItem(J("motion.target"), i);
+            bool moving = cJSON_IsTrue(cJSON_GetArrayItem(J("motion.moving"), i)) &&
+                          cJSON_IsNumber(p) && cJSON_IsNumber(target);
+            bool homed = strchr(S("status.toolhead.homed_axes"), "xyz"[i]) != NULL;
+            moving = moving && homed;
             snprintf(value, sizeof(value), "%.2f", cJSON_IsNumber(p) ? p->valuedouble : 0);
-            label_update(app.positions[i],
-                              strchr(S("status.toolhead.homed_axes"), "xyz"[i]) ? value : "—");
+            label_update(app.positions[i], homed && cJSON_IsNumber(p) ? value : "—");
+            lv_obj_align(app.positions[i], LV_ALIGN_CENTER, 2, 0);
+            if (moving) {
+                snprintf(value, sizeof(value), "%.2f", target->valuedouble);
+                label_update(app.position_targets[i], value);
+                lv_point_t size;
+                lv_txt_get_size(&size, value, &font_ui_17, 0, 0, 146, LV_TEXT_FLAG_NONE);
+                int x = 113 - (size.x + 22) / 2;
+                lv_obj_set_pos(app.position_arrows[i], x, 51 + (size.y - 16) / 2);
+                lv_obj_set_pos(app.position_targets[i], x + 22, 51);
+                lv_obj_set_width(app.position_targets[i], size.x);
+                lv_obj_clear_flag(app.position_arrows[i], LV_OBJ_FLAG_HIDDEN);
+                lv_obj_clear_flag(app.position_targets[i], LV_OBJ_FLAG_HIDDEN);
+            } else {
+                lv_obj_add_flag(app.position_arrows[i], LV_OBJ_FLAG_HIDDEN);
+                lv_obj_add_flag(app.position_targets[i], LV_OBJ_FLAG_HIDDEN);
+            }
         }
     }
     if (app.status_label) {
@@ -540,10 +594,16 @@ static void move_view(void) {
         snprintf(action, sizeof(action), "position:%c", "XYZ"[i]);
         lv_obj_t *field = button(app.content, "", 452, 108 + i * 84, 222, 76,
                                  axis_homed("xyz"[i]) ? action : NULL, false);
-        text(field, axis, 12, 24, 24, &font_ui_20, true);
-        app.positions[i] = text(field, "—", 40, 23, 146, &font_ui_24, false);
+        lv_obj_t *axis_label = text(field, axis, 12, 0, 24, &font_ui_20, true);
+        lv_obj_align(axis_label, LV_ALIGN_LEFT_MID, 12, 0);
+        app.positions[i] = text(field, "—", 40, 0, 146, &font_ui_24, false);
         centered(app.positions[i]);
-        icon(field, "pencil", 194, 30, 16, colour("a4aebb"));
+        app.position_targets[i] = text(field, "", 40, 44, 146, &font_ui_17, true);
+        icon(field, "arrow-right", 40, 44, 16, colour("a4aebb"));
+        app.position_arrows[i] = lv_obj_get_child(field, -1);
+        icon(field, "pencil", 0, 0, 16, colour("a4aebb"));
+        lv_obj_t *edit = lv_obj_get_child(field, -1);
+        lv_obj_align(edit, LV_ALIGN_RIGHT_MID, -12, 0);
     }
     bool enabled = motors_locked();
     lv_obj_t *mesh = button(app.content, "", 452, 398, 105, 64,
@@ -982,11 +1042,18 @@ static void colors_view(void) {
     button(app.content, jstr(app.draft, "color", ""), 0, 286, 673, 64, "color_hex", false);
     footer(NULL, NULL, "Done", "route:edit");
 }
+static void page_progress(const char *title, const char *detail);
+
 static void tune_view(void) {
     ui_tabs(false, "tune");
     if (!app.printing && !app.paused) {
         center_message("No print in progress", "Live adjustments become available during a print.",
                        "Choose a file", "open_files");
+        return;
+    }
+    if (!has("status.gcode_move.speed_factor") || !has("status.gcode_move.extrude_factor") ||
+        !has("status.gcode_move.homing_origin")) {
+        page_progress("Loading print adjustments", "Waiting for current printer values.");
         return;
     }
     const char *labels[] = {"Print speed", "Flow ratio"}, *keys[] = {"speed", "flow"},
@@ -1061,6 +1128,25 @@ static lv_obj_t *list_action(lv_obj_t *list, const char *name, int x, int y, con
     lv_obj_set_style_border_width(control, 0, LV_STATE_DEFAULT);
     return control;
 }
+void files_window_report(lv_obj_t *list) {
+    if (app.fixture || !app.service_link || strcmp(app.route, "files"))
+        return;
+    int first = lv_obj_get_scroll_y(list) / 88;
+    if (first < 0)
+        first = 0;
+    cJSON *request = cJSON_CreateObject();
+    cJSON_AddStringToObject(request, "action", "file_window");
+    cJSON_AddNumberToObject(request, "first", first);
+    cJSON_AddNumberToObject(request, "count", 7);
+    char *raw = cJSON_PrintUnformatted(request);
+    if (!platform_send(raw))
+        ui_transport_lost();
+    free(raw);
+    cJSON_Delete(request);
+}
+static void files_scrolled(lv_event_t *event) {
+    files_window_report(lv_event_get_target(event));
+}
 static void files_view(void) {
     button_fixed(app.content, "icon:refresh-cw", 600, 9, 64, 64, "refresh_files", false);
     const char *refresh = *S("files_refresh.error") ? "Refresh failed — tap refresh to retry" : "";
@@ -1068,6 +1154,7 @@ static void files_view(void) {
     lv_obj_set_height(status, 22);
     lv_label_set_long_mode(status, LV_LABEL_LONG_DOT);
     lv_obj_t *list = scroll_area(83, 462);
+    lv_obj_add_event_cb(list, files_scrolled, LV_EVENT_SCROLL_END, NULL);
     cJSON *f;
     int y = 0;
     cJSON_ArrayForEach(f, J("files")) {
@@ -1491,7 +1578,7 @@ static cJSON *active_operation(const char *action) {
     op = J("operation");
     return !strcmp(jstr(op, "action", ""), action) ? op : NULL;
 }
-static void network_progress(const char *title, const char *detail) {
+static void page_progress(const char *title, const char *detail) {
     lv_obj_t *group = box(app.content, 0, 0, 674, 1, false);
     lv_obj_clear_flag(group, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_style_bg_opa(group, 0, 0);
@@ -1520,7 +1607,7 @@ static void wifi_view(void) {
         char detail[180];
         const char *ssid = *app.wifi_ssid ? app.wifi_ssid : jstr(join, "ssid", "selected network");
         snprintf(detail, sizeof(detail), "Connecting to %s", ssid);
-        network_progress("Connecting to Wi-Fi", detail);
+        page_progress("Connecting to Wi-Fi", detail);
         return;
     }
     row(app.content, 90, "Network", *S("wifi.ssid") ? S("wifi.ssid") : "Not connected", "", NULL);
@@ -1531,7 +1618,7 @@ static void wifi_view(void) {
 static void wifi_networks(void) {
     if (active_operation("wifi_scan") ||
         (B("wifi.busy") && !strncmp(S("wifi.message"), "Scanning", 8))) {
-        network_progress("Scanning available networks", "Please wait…");
+        page_progress("Scanning available networks", "Please wait…");
         return;
     }
     lv_obj_t *list = scroll_area(88, 388);
@@ -2549,7 +2636,8 @@ void views_action(const char *a) {
         }
         cJSON *r = request("calibrate");
         cJSON_AddStringToObject(r, "kind", a + 10);
-        confirmed("Clear the bed and stay beside the printer. Start calibration?", r);
+        confirmed("Make sure the bed is clean and the build plate is installed. Start calibration?",
+                  r);
     } else if (!strcmp(a, "save_config"))
         confirmed("Save pending calibration changes and restart Klipper?", request("save_config"));
     else if (!strncmp(a, "restart:", 8)) {

@@ -28,8 +28,11 @@ LV_FONT_DECLARE(font_heading_28);
 typedef struct {
     cJSON *data;
     lv_obj_t *screen, *nav, *content, *overlay, *title, *body, *footer;
-    lv_obj_t *current[3], *target[3], *temperature_arrow[3], *positions[3], *extrusion_temp,
-        *status_label, *time_label, *layer_label, *progress, *percent;
+    lv_obj_t *current[3], *target[3], *temperature_arrow[3], *positions[3], *position_targets[3],
+        *position_arrows[3], *extrusion_temp, *status_label, *time_label, *layer_label, *progress,
+        *percent;
+    lv_obj_t *cfs_dots[4];
+    char cfs_dot_slots[4][16];
     char route[48], control_tab[24], settings_tab[24], history[80][48];
     int history_count;
     bool select_feeding_cfs;
@@ -134,6 +137,10 @@ void center_message(const char *, const char *, const char *, const char *);
 lv_obj_t *scroll_area(int, int);
 void views_render(void);
 void views_action(const char *);
+void printer_spools(lv_obj_t *base, const char *unit);
+void printer_spools_reset(void);
+void printer_spools_refresh(void);
+lv_color_t printer_spool_colour(cJSON *slot);
 void view_home(void);
 void views_overlay(void);
 void views_refresh(void);
@@ -141,4 +148,5 @@ const char *slot_label(const char *);
 cJSON *slot_record(const char *);
 void modal_frame(const char *, int, int, int, int, bool);
 void close_modal(void);
+void files_window_report(lv_obj_t *list);
 #endif

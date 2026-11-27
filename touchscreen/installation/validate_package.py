@@ -9,7 +9,7 @@ import struct
 from pathlib import Path
 
 
-def source_inputs(source):
+def source_inputs(source, integration_root=None):
     source = Path(source)
     paths = []
     for folder in ("src", "backend", "runtime", "build", "installation", "assets"):
@@ -27,18 +27,21 @@ def source_inputs(source):
         for name in (
             "build.sh",
             "build_assets.py",
+            "build_printer_layers.py",
             "package_arm.py",
             "package.json",
             "package-lock.json",
         )
     ]
-    paths += [source / "LICENSE", source.parent / "VERSION", source.parent / "install.sh"]
+    paths += [source / "LICENSE"]
+    integration = Path(integration_root) if integration_root else source.parent
     return {
-        p.relative_to(source.parent).as_posix(): hashlib.sha256(
+        "touchscreen/" + p.relative_to(source).as_posix(): hashlib.sha256(
             p.read_bytes()
         ).hexdigest()
         for p in sorted(paths)
-    }
+    } | {name: hashlib.sha256((integration / name).read_bytes()).hexdigest()
+         for name in ("VERSION", "install.sh")}
 
 
 def fingerprint(inputs):
@@ -47,12 +50,12 @@ def fingerprint(inputs):
     ).hexdigest()
 
 
-def validate(source, package):
+def validate(source, package, integration_root=None):
     source, package = Path(source), Path(package)
     manifest = json.loads((package / "manifest.json").read_text())
     if manifest.get("format") != 1 or manifest.get("target") != "armv7-linux-gnueabihf":
         raise ValueError("Unsupported native touchscreen package")
-    inputs = source_inputs(source)
+    inputs = source_inputs(source, integration_root)
     if manifest.get("source_inputs") != inputs or manifest.get(
         "source_fingerprint"
     ) != fingerprint(inputs):
@@ -64,6 +67,11 @@ def validate(source, package):
         "openklipper-screen",
         "VERSION",
         "assets/nav-house-56.png",
+        "assets/printer-with-cfs-base.png",
+        "assets/printer-spool-1.png",
+        "assets/printer-spool-2.png",
+        "assets/printer-spool-3.png",
+        "assets/printer-spool-4.png",
         "licenses/Touchscreen-LICENSE",
         "licenses/LVGL-LICENSE",
         "licenses/cJSON-LICENSE",
@@ -101,9 +109,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--package", type=Path, required=True)
+    parser.add_argument("--integration-root", type=Path, help="K2-OpenKlipper checkout for standalone packaging validation")
     args = parser.parse_args()
     try:
-        manifest = validate(args.source, args.package)
+        manifest = validate(args.source, args.package, args.integration_root)
     except (OSError, ValueError, KeyError) as error:
         parser.exit(1, "Native touchscreen package invalid: " + str(error) + "\n")
     print("Precompiled touchscreen verified: " + manifest["source_fingerprint"][:12])

@@ -141,6 +141,8 @@ def snapshot(printing=False):
 
 SCENARIOS = (
     "idle",
+    "cfs-colours",
+    "cfs-empty",
     "idle-lit",
     "spool-inserted",
     "spool-removed",
@@ -162,6 +164,9 @@ SCENARIOS = (
     "meshing",
     "mesh",
     "mesh-empty",
+    "mesh-empty-printing",
+    "mesh-empty-busy",
+    "moving",
     "mesh-unloaded",
     "mesh-flat",
     "mesh-printing",
@@ -187,7 +192,7 @@ SCENARIOS = (
 
 
 def preview_scenario(name="idle", printing=False):
-    data = snapshot(printing or name in ("printing", "heating", "mesh-printing"))
+    data = snapshot(printing or name in ("printing", "heating", "mesh-printing", "mesh-empty-printing"))
     # Synthetic 9-by-9 surface: a small tilt, central rise and shallow valley.
     points = [
         [
@@ -212,7 +217,15 @@ def preview_scenario(name="idle", printing=False):
     }
     data["status"]["bed_mesh"]["profiles"] = {
         title: {
-            "points": [[round(value + offset, 3) for value in row] for row in points],
+            "points": [
+                [round(value + offset + (
+                    0 if title == "Demo bed" else
+                    .045 * ((c - 4) / 4) ** 2 - .03 * ((r - 4) / 4)
+                    if title == "PLA 60C" else
+                    .09 * math.cos(math.pi * (c - 4) / 4) * math.cos(math.pi * (r - 4) / 4)
+                ), 3) for c, value in enumerate(row)]
+                for r, row in enumerate(points)
+            ],
             "mesh_params": {
                 "min_x": 10,
                 "max_x": 290,
@@ -224,12 +237,17 @@ def preview_scenario(name="idle", printing=False):
         }
         for title, offset in (("Demo bed", 0), ("PLA 60C", -0.02), ("PETG 80C", 0.035))
     }
-    if name in ("mesh-empty", "mesh-unloaded"):
+    if name in ("mesh-empty", "mesh-unloaded", "mesh-empty-printing", "mesh-empty-busy"):
         data["status"]["bed_mesh"].update(
             profile_name="", probed_matrix=[], mesh_matrix=[]
         )
-        if name == "mesh-empty":
+        if name.startswith("mesh-empty"):
             data["status"]["bed_mesh"]["profiles"] = {}
+    if name == "moving":
+        data["motion"] = {"current": [100, 150, 10], "target": [300, 250, 10], "moving": [True, True, False]}
+    if name == "mesh-empty-busy":
+        data["operations"] = [{"action": "calibrate", "kind": "z_tilt", "label": "Z tilt",
+                               "resources": sorted(action_policy.describe({"action": "calibrate"}).resources)}]
     if name == "motors-off":
         data["status"]["stepper_enable"]["steppers"] = {
             "stepper_x": False,
@@ -240,6 +258,7 @@ def preview_scenario(name="idle", printing=False):
     data["platform"].update(
         estimated_time=4500,
         printer_image=str(FIXTURES / "assets/demo-printer-combo.png"),
+        printer_spools=True,
         thumbnail=str(ROOT / "developer-tools/fixtures/assets/demo-part.png"),
         file_thumbnail=str(ROOT / "developer-tools/fixtures/assets/demo-part.png"),
         file_thumbnails={
@@ -532,6 +551,14 @@ def preview_scenario(name="idle", printing=False):
     data["availability"] = action_policy.availability(
         data["status"], data["connected"], data.get("operations", [])
     )
+    if name in ("cfs-colours", "cfs-empty"):
+        for slot, colour in zip(data["slots"], ("00FFFF", "000000", "FFFFFF", "FF6A00")):
+            slot["color"] = colour
+            if name == "cfs-empty":
+                slot["loaded"] = False
+        if name == "cfs-empty":
+            data["status"]["k2_cfs"]["active_slot"] = None
+            data["status"]["filament_switch_sensor filament_sensor"] = {"filament_detected": False}
     data["filament_activity"] = model.filament_activity(
         data["status"], data.get("operations", [])
     )
@@ -565,6 +592,7 @@ def preview_case(name):
             slots={}, map_targets=["E"], map_tools=["T0"]
         )
         data["slots"] = []
+        data["platform"]["printer_spools"] = False
         data["cfs_units"] = 0
         data["metadata"]["suggested_mapping"] = {}
         data["availability"] = action_policy.availability(

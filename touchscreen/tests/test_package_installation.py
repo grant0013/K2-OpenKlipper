@@ -19,6 +19,13 @@ package_check = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(package_check)
 
 
+class ShippedBuildPrivacy(unittest.TestCase):
+    def test_arm_runtime_does_not_embed_personal_build_paths(self):
+        binary = (ROOT / "precompiled/armv7/openklipper-screen").read_bytes()
+        self.assertNotRegex(binary, rb"/(?:home|Users|root)/")
+        self.assertNotIn(str(ROOT).encode(), binary)
+
+
 class PackageChecks(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -32,6 +39,7 @@ class PackageChecks(unittest.TestCase):
             "runtime/start.sh",
             "developer-tools/build.sh",
             "developer-tools/build_assets.py",
+            "developer-tools/build_printer_layers.py",
             "developer-tools/package_arm.py",
             "developer-tools/package.json",
             "developer-tools/package-lock.json",
@@ -45,6 +53,11 @@ class PackageChecks(unittest.TestCase):
             "openklipper-screen",
             "VERSION",
             "assets/nav-house-56.png",
+            "assets/printer-with-cfs-base.png",
+            "assets/printer-spool-1.png",
+            "assets/printer-spool-2.png",
+            "assets/printer-spool-3.png",
+            "assets/printer-spool-4.png",
             "licenses/Touchscreen-LICENSE",
             "licenses/LVGL-LICENSE",
             "licenses/cJSON-LICENSE",
@@ -84,6 +97,13 @@ class PackageChecks(unittest.TestCase):
         package_check.validate(self.source, self.package)
         (self.source / "README.md").write_text("Documentation only")
         package_check.validate(self.source, self.package)
+
+    def test_standalone_source_has_the_same_canonical_fingerprint(self):
+        standalone = self.project / "standalone"
+        import shutil
+        shutil.copytree(self.source, standalone)
+        self.assertEqual(package_check.source_inputs(standalone, self.project), self.manifest["source_inputs"])
+        package_check.validate(standalone, standalone / "precompiled/armv7", self.project)
 
     def test_source_change_requires_package_update(self):
         (self.source / "src/main.c").write_text("changed runtime")

@@ -21,7 +21,8 @@ class Wifi:
 
     CTRL = "/etc/wifi/wpa_supplicant/sockets/wlan0"
 
-    def __init__(self):
+    def __init__(self, on_change=None):
+        self.on_change = on_change or (lambda: None)
         self.networks = []  # (ssid, dbm, secured), strongest first
         self.busy = False
         self.message = ""
@@ -63,6 +64,7 @@ class Wifi:
 
     def scan(self):
         self.busy, self.message = True, "Scanning..."
+        self.on_change()
 
         def run():
             try:
@@ -82,6 +84,7 @@ class Wifi:
             except Exception as e:
                 self.message = "Scan failed: %s" % e
             self.busy = False
+            self.on_change()
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -90,6 +93,7 @@ class Wifi:
 
         def run():
             self.busy, self.message = True, "Connecting to %s..." % ssid
+            self.on_change()
             old = [l.split("\t")[0] for l in self.cmd("LIST_NETWORKS").splitlines()[1:]]
             nid = self.cmd("ADD_NETWORK").strip()
             ok = False
@@ -134,6 +138,7 @@ class Wifi:
                 subprocess.call(["killall", "-USR1", "udhcpc"])
                 self.message = "Could not join %s; back on the previous network" % ssid
             self.busy = False
+            self.on_change()
             if on_done:
                 on_done(ok)
 
@@ -206,7 +211,10 @@ def set_system_zone(name):
             os.replace(tmp, "/tmp/localtime")
         except OSError as e:
             print("time zone: %s" % e, flush=True)
-    time.tzset()
+    # Creality's Python omits tzset; the zonefile still updates system time.
+    refresh = getattr(time, "tzset", None)
+    if refresh is not None:
+        refresh()
     print("time zone: %s (%.1f s)" % (name, time.time() - t0), flush=True)
 
 

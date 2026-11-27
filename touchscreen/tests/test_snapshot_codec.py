@@ -62,6 +62,9 @@ class SnapshotPatchTests(unittest.TestCase):
         update = json.loads(encoder.encode(state))
         self.assertTrue(update['_screen_patch'])
         assembled.update(update['set'])
+        assembled["status"].update(update.get("status_set", {}))
+        for key in update.get("status_remove", []):
+            assembled["status"].pop(key, None)
         for key in update['remove']:
             assembled.pop(key, None)
         self.assertEqual(assembled, state)
@@ -92,8 +95,53 @@ class SnapshotPatchTests(unittest.TestCase):
         value["status"] = dict(value["status"], extruder={"temperature": 21})
         with mock.patch.object(snapshot_codec, "same_value", wraps=snapshot_codec.same_value) as compare:
             update = json.loads(encoder.encode(value))
-            self.assertEqual(update["set"]["status"]["extruder"]["temperature"], 21)
+            self.assertEqual(update["status_set"]["extruder"]["temperature"], 21)
             self.assertFalse(any(c.args[1] is library for c in compare.call_args_list))
+
+class ObjectPatchTests(unittest.TestCase):
+    def apply(self, state, patch):
+        state.update(patch['set'])
+        for key in patch['remove']:
+            state.pop(key, None)
+        if 'status_set' in patch:
+            state['status'].update(patch['status_set'])
+            for key in patch['status_remove']:
+                state['status'].pop(key, None)
+
+    def test_only_changed_object_is_transmitted_and_fields_are_replaced(self):
+        encoder = snapshot_codec.SnapshotEncoder()
+        mesh = {'mesh_matrix': [[x for x in range(20)] for _ in range(20)]}
+        value = {'session':'test','status':{'extruder':{'temperature':20,'target':200},'bed_mesh':mesh}}
+        baseline = json.loads(encoder.encode(value))
+        value['status']['extruder'] = {'temperature':21}
+        patch = json.loads(encoder.encode(value))
+        self.assertEqual(patch['status_set'], {'extruder':{'temperature':21}})
+        self.assertNotIn('status',patch['set'])
+        self.assertNotIn('mesh_matrix', json.dumps(patch))
+        self.apply(baseline,patch)
+        self.assertEqual(baseline,value)
+
+    def test_object_removal_null_and_return_to_full_status(self):
+        encoder = snapshot_codec.SnapshotEncoder()
+        value = {'session':'test','status':{'fan':{'speed':1},'extruder':{'temperature':20}}}
+        baseline = json.loads(encoder.encode(value))
+        del value['status']['fan']
+        value['status']['extruder'] = None
+        patch = json.loads(encoder.encode(value))
+        self.assertEqual(patch['status_remove'],['fan'])
+        self.apply(baseline,patch)
+        self.assertEqual(baseline,value)
+        value['status'] = None
+        self.apply(baseline,json.loads(encoder.encode(value)))
+        self.assertEqual(baseline,value)
+        value['status'] = {'fan':{'speed':0}}
+        patch = json.loads(encoder.encode(value))
+        self.assertNotIn('status_set',patch)
+        self.apply(baseline,patch)
+        self.assertEqual(baseline,value)
+        del value['status']
+        self.apply(baseline,json.loads(encoder.encode(value)))
+        self.assertEqual(baseline,value)
 
 
 if __name__ == '__main__':

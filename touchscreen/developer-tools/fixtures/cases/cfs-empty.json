@@ -1,0 +1,7 @@
+{
+  "description": "Home illustration with empty CFS slots.",
+  "scenario": "cfs-empty",
+  "page": "home",
+  "printer_image": "assets/demo-printer-combo.png",
+  "actions": []
+}

@@ -68,7 +68,7 @@ class ServiceTests(unittest.TestCase):
         self.state = status()
         self.config = settings()
         self.mr.query.side_effect = lambda: copy.deepcopy(self.state)
-        self.mr.status_snapshot.side_effect = lambda: {
+        self.mr.status_snapshot.side_effect = lambda **kwargs: {
             "status": self.mr.query(),
             "eventtime": time.monotonic(),
         }
@@ -94,6 +94,26 @@ class ServiceTests(unittest.TestCase):
         self.s.status["k2_cfs"]["fitted"] = True
         self.s.prepare_artwork()
         self.assertEqual(self.s.platform["printer_image"], with_cfs)
+
+    def test_layered_spool_flag_survives_repeated_platform_refreshes(self):
+        with (
+            mock.patch("service.storage.system_identity", return_value={}),
+            mock.patch("service.platform.usb_disk", return_value=None),
+            mock.patch("service.storage.free_space", return_value="1 GB"),
+            mock.patch("service.platform.system_zone", return_value="UTC"),
+            mock.patch("service.subprocess.check_output", return_value=b"version=test"),
+            mock.patch.object(self.s.wifi, "status", return_value={}),
+        ):
+            self.s.refresh_platform()
+            signature = self.s.artwork_key
+            self.assertTrue(self.s.platform["printer_spools"])
+            for _ in range(3):
+                self.s.refresh_platform()
+                self.assertEqual(self.s.artwork_key, signature)
+                self.assertTrue(self.s.snapshot()["platform"]["printer_spools"])
+            self.s.status["k2_cfs"]["fitted"] = False
+            self.s.refresh_platform()
+            self.assertFalse(self.s.platform["printer_spools"])
 
     def test_legacy_image_override_does_not_change_automatic_artwork(self):
         self.s.config.set("brand", "status_image", "/missing/obsolete-printer.png")
@@ -306,6 +326,43 @@ class ServiceTests(unittest.TestCase):
         )
         self.assertNotIn("SAVE_CONFIG", self.mr.run_gcode.call_args.args[0])
 
+    def test_standalone_mesh_save_is_removed(self):
+        self.prepare_mesh()
+        with self.assertRaisesRegex(ValueError, "Unknown mesh profile operation"):
+            self.run_action("mesh_profile", operation="save", name="New mesh", confirm=True)
+        self.mr.run_gcode.assert_not_called()
+
+    def test_rename_unloaded_mesh_restores_current_profile(self):
+        self.prepare_mesh()
+        self.run_action("mesh_profile", operation="rename", name="PETG 80C", new_name="PETG warm", confirm=True)
+        self.mr.run_gcode.assert_called_once_with(
+            'BED_MESH_PROFILE LOAD="PETG 80C"\nBED_MESH_PROFILE SAVE="PETG warm"\nBED_MESH_PROFILE LOAD="PETG warm"\nBED_MESH_PROFILE REMOVE="PETG 80C"\nBED_MESH_PROFILE LOAD="PLA 60C"')
+
+    def test_rename_with_no_loaded_mesh_restores_empty_state(self):
+        for points in ([], [[]], [[], []]):
+            with self.subTest(points=points):
+                self.prepare_mesh()
+                self.mr.run_gcode.reset_mock()
+                self.state["bed_mesh"].update(profile_name="", probed_matrix=points)
+                self.run_action(
+                    "mesh_profile", operation="rename", name="PETG 80C",
+                    new_name="PETG warm", confirm=True,
+                )
+                self.mr.run_gcode.assert_called_once()
+                command = self.mr.run_gcode.call_args.args[0]
+                self.assertTrue(command.startswith('BED_MESH_PROFILE LOAD="PETG 80C"\n'))
+                self.assertIn('BED_MESH_PROFILE SAVE="PETG warm"', command)
+                self.assertIn('BED_MESH_PROFILE REMOVE="PETG 80C"', command)
+                self.assertTrue(command.endswith("\nBED_MESH_CLEAR"))
+                self.assertNotIn("SAVE_CONFIG", command)
+
+    def test_rename_unloaded_mesh_preserves_unsaved_mesh(self):
+        self.prepare_mesh()
+        self.state["bed_mesh"].update(profile_name="", probed_matrix=[[0, 0], [0, 0]])
+        with self.assertRaisesRegex(ValueError, "current mesh is unsaved"):
+            self.run_action("mesh_profile", operation="rename", name="PETG 80C", new_name="PETG warm", confirm=True)
+        self.mr.run_gcode.assert_not_called()
+
     def test_mesh_profile_changes_reject_printing_stale_names_and_command_injection(
         self,
     ):
@@ -316,7 +373,6 @@ class ServiceTests(unittest.TestCase):
             ("save", "default", ""),
             ("save", "PLA 60C", ""),
             ("rename", "PLA 60C", 'name";M112'),
-            ("rename", "PETG 80C", "new"),
         ):
             with self.subTest(operation=operation, name=name):
                 with self.assertRaises((ValueError, RuntimeError)):
@@ -489,6 +545,7 @@ class ServiceTests(unittest.TestCase):
         self.s.update_screen_idle = mock.Mock()
         self.s.preload_files = mock.Mock()
         self.s.refresh_platform = mock.Mock(side_effect=OSError("USB query failed"))
+        self.s.refresh_network = mock.Mock()
         with mock.patch("service.time.sleep", side_effect=StopIteration):
             with self.assertRaises(StopIteration):
                 self.s.poll()
@@ -506,6 +563,15 @@ class ServiceTests(unittest.TestCase):
                     with self.assertRaises(StopIteration):
                         self.s.poll()
                 self.assertEqual(self.s.connected, live)
+
+    def test_timezone_auto_uses_live_system_zone_without_rewriting_preference(self):
+        self.s.prefs["timezone"] = "auto"
+        for zone in ("EET", "EST"):
+            self.s.platform["timezone"] = zone
+            self.assertEqual(self.s.current_preferences()["timezone"], zone)
+            self.assertEqual(self.s.prefs["timezone"], "auto")
+        self.s.prefs["timezone"] = "America/Detroit"
+        self.assertEqual(self.s.current_preferences()["timezone"], "America/Detroit")
 
     def test_timezone_setting_updates_uci_and_runtime_zonefile(self):
         zone_root = Path(self.tmp.name) / "zoneinfo"
@@ -529,6 +595,26 @@ class ServiceTests(unittest.TestCase):
         link.assert_called_once_with(str(zone), "/tmp/localtime.new")
         replace.assert_called_once_with("/tmp/localtime.new", "/tmp/localtime")
         refresh.assert_called_once_with()
+
+    def test_timezone_setting_without_tzset(self):
+        # The printer's Python has no time.tzset. Applying a zone must still
+        # complete after persisting UCI and replacing the runtime zonefile.
+        zone_root = Path(self.tmp.name) / "zoneinfo"
+        zone_root.mkdir()
+        (zone_root / "EET").write_bytes(b"TZif")
+        with (
+            mock.patch.object(platform_services, "ZONEINFO", str(zone_root)),
+            mock.patch("platform_services.subprocess.call") as command,
+            mock.patch("platform_services.os.symlink") as link,
+            mock.patch("platform_services.os.replace") as replace,
+            mock.patch("platform_services.os.path.lexists", return_value=False),
+            mock.patch.object(platform_services, "time", spec=["time"]),
+        ):
+            platform_services.time.time.return_value = 0
+            platform_services.set_system_zone("EET")
+        self.assertEqual(command.call_count, 2)
+        link.assert_called_once_with(str(zone_root / "EET"), "/tmp/localtime.new")
+        replace.assert_called_once_with("/tmp/localtime.new", "/tmp/localtime")
 
     def test_timezone_presets_read_retained_firmware_mapping(self):
         import storage
@@ -819,14 +905,14 @@ class ServiceTests(unittest.TestCase):
                 self.assertIn("resources", baseline)
                 self.assertNotIn("_screen_patch", baseline)
                 with self.s.lock:
-                    self.s.sequence += 1
+                    self.s.changed()
                     self.s.status["extruder"] = {
                         "temperature": self.s.status.get("extruder", {}).get("temperature", 20) + 1
                     }
                 update = json.loads(reader.readline())
                 self.assertTrue(update["_screen_patch"])
                 self.assertNotIn("settings", update["set"])
-                self.assertIn("status", update["set"])
+                self.assertIn("extruder", update["status_set"])
             finally:
                 reader.close()
                 client.close()

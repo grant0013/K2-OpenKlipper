@@ -40,10 +40,26 @@ def main():
             ("print-starting", "home", "idle", []),
             ("move", "move", "heated", []),
             ("mesh", "mesh", "mesh", []),
+            ("mesh-selected", "mesh", "mesh", ["mesh:preview:1"]),
+            ("mesh-long-name", "mesh", "mesh", []),
+            ("mesh-long-name-held", "mesh", "mesh", [
+                {"queue_touch": [580, 420, True]},
+                {"advance_ms": 700},
+                {"advance_ms": 1200},
+            ]),
+            ("mesh-rotated", "mesh", "mesh", [
+                {"queue_touch": [300, 240, True]},
+                {"queue_touch": [490, 300, True]},
+                {"queue_touch": [490, 300, False]},
+            ]),
+            ("mesh-rename", "mesh", "mesh", ["mesh:preview:1", "mesh:rename:1"]),
+            ("mesh-probe", "mesh", "mesh", ["calibrate:mesh"]),
             ("mesh-delete", "mesh", "mesh", ["mesh:delete:1"]),
             ("meshing", "mesh", "meshing", []),
             ("mesh-flat", "mesh", "mesh-flat", []),
             ("mesh-empty", "mesh", "mesh-empty", []),
+            ("mesh-empty-printing", "mesh", "mesh-empty-printing", []),
+            ("move-live", "move", "moving", []),
             ("mesh-unloaded", "mesh", "mesh-unloaded", []),
             ("mesh-printing", "mesh", "mesh-printing", []),
             ("motors-off", "move", "motors-off", []),
@@ -58,6 +74,8 @@ def main():
             ("file", "file", "idle", []),
             ("timers", "timers", "idle", []),
             ("idle", "home", "idle", []),
+            ("idle-cfs-colours", "home", "cfs-colours", []),
+            ("idle-cfs-empty", "home", "cfs-empty", []),
             ("idle-no-cfs", "home", "no-cfs", []),
             ("idle-lit", "home", "idle-lit", []),
             ("file-reading", "file", "file-reading", []),
@@ -88,6 +106,7 @@ def main():
             ("multi-cfs", "filament", "multi-cfs", []),
             ("mapping-review", "file", "multi-cfs", ["review_mapping"]),
             ("tune", "tune", "printing", []),
+            ("tune-loading", "tune", "printing", []),
             ("calibrate", "calibration", "idle", []),
             ("general", "settings", "idle", []),
             ("network", "network", "idle", []),
@@ -170,6 +189,13 @@ def main():
                     for axis in ("stepper_x", "stepper_y", "stepper_z")
                 }
             }
+            if name == "tune-loading":
+                data["status"].pop("gcode_move", None)
+            if name.startswith("mesh-long-name"):
+                mesh = data["status"]["bed_mesh"]
+                title = "A very long mesh name for the installed textured build plate"
+                mesh["profiles"][title] = mesh["profiles"].pop("Demo bed")
+                mesh["profile_name"] = title
             if name == "print-starting":
                 data["platform"].update(
                     starting_file="Demo print.gcode",

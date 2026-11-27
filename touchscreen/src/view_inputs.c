@@ -10,12 +10,11 @@ typedef struct {
 } ViewSpec;
 static const ViewSpec views[] = {
     {"home",
-     {"settings", "slots", "platform.print_preview_busy", "platform.starting_file",
-      "filament_activity"}},
+     {"settings", "platform.print_preview_busy", "platform.starting_file", "filament_activity"}},
     {"move",
      {"settings", "status.toolhead.homed_axes", "status.stepper_enable",
       "status.extruder.can_extrude"}},
-    {"mesh", {"status.bed_mesh", "operations"}},
+    {"mesh", {"status.bed_mesh", "operations", "availability.calibrate"}},
     {"heat", {"settings"}},
     {"fans",
      {"settings", "status.fan", "status.fan_generic auxiliary_fan",

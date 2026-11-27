@@ -16,6 +16,7 @@ from urllib.request import Request, urlopen
 SCREEN = Path("/mnt/UDISK/openklipper-screen")
 BUILD = Path("/mnt/UDISK/k2-mainline-20260729-v62")
 CONF = Path("/mnt/UDISK/printer_data_mainline/config")
+BACKUPS = Path("/mnt/UDISK/openklipper-backups")
 HARK = Path("/mnt/UDISK/harkscreen")
 PIDFILES = [
     Path("/tmp/" + name + ".pid")
@@ -171,6 +172,37 @@ def remove_native():
             pass
 
 
+def saved_hark_settings():
+    """Capture settings before the reinstall creates another backup/defaults."""
+    saved = {}
+    backups = sorted((p for p in BACKUPS.glob("*") if p.is_dir()),
+                     key=lambda p: p.name, reverse=True)
+    for name in ("harkscreen.cfg", "harkscreen-settings.json"):
+        candidates = [CONF / name]
+        for backup in backups:
+            candidates.extend((backup / "printer_data_mainline-config" / name,
+                               backup / (name + ".previous")))
+        for source in candidates:
+            if source.is_file():
+                data = source.read_bytes()
+                if name.endswith(".json") and not isinstance(json.loads(data), dict):
+                    raise ValueError("Invalid HarkScreen settings: " + str(source))
+                saved[name] = data
+                break
+    return saved
+
+
+def restore_hark_settings(saved):
+    # Restore display preferences only. The shared system timezone stays as set
+    # by the user; HarkScreen's saved auto mode continues to follow it.
+    for name, data in saved.items():
+        target = CONF / name
+        temp = target.with_name(name + ".restore-new")
+        temp.write_bytes(data)
+        temp.chmod(0o600)
+        temp.replace(target)
+
+
 def restore(ref=None, check=False):
     if os.geteuid() != 0 or not SCREEN.is_dir():
         raise RuntimeError(
@@ -185,6 +217,7 @@ def restore(ref=None, check=False):
         env.setdefault("OKL_BOOTANIM", "keep")
         # The upstream preflight runs before either native process is stopped.
         subprocess.run(["sh", str(installer), "--check"], env=env, check=True)
+        saved = saved_hark_settings()
         if check:
             print(
                 "HarkScreen rollback check passed for "
@@ -197,6 +230,9 @@ def restore(ref=None, check=False):
         try:
             # Full reinstall: --update can exit early when versions match.
             subprocess.run(["sh", str(installer)], env=env, check=True)
+            restore_hark_settings(saved)
+            if saved:
+                subprocess.run(["sh", str(HARK / "start.sh")], check=True)
             verify_hark()
         except Exception:
             if not hark_running() and (SCREEN / "start.sh").is_file():

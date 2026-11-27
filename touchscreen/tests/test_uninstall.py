@@ -25,10 +25,39 @@ class RestoreTests(unittest.TestCase):
         (self.screen / "start.sh").write_text("#!/bin/sh\n")
         self.conf = self.root / "config"
         self.conf.mkdir()
+        mock.patch.object(restore, "BACKUPS", self.root / "backups").start()
         self.addCleanup(mock.patch.stopall)
         mock.patch.object(restore, "SCREEN", self.screen).start()
         mock.patch.object(restore, "CONF", self.conf).start()
         mock.patch.object(restore.os, "geteuid", return_value=0).start()
+
+    def test_restores_latest_backup_settings_and_auto_without_printer_config(self):
+        backups = self.root / "backups"
+        for stamp, timezone in (("20260101", "old"), ("20261126", "auto")):
+            directory = backups / stamp / "printer_data_mainline-config"
+            directory.mkdir(parents=True)
+            (directory / "harkscreen-settings.json").write_text(json.dumps({"timezone": timezone, "brightness": 40}))
+            (directory / "harkscreen.cfg").write_text("[screen]\nrotate: 90\n")
+        # The latest update may contain no HarkScreen settings at all.
+        (backups / "20261127").mkdir()
+        overrides = self.conf / "printer-overrides.cfg"
+        overrides.write_text("calibration")
+        saved = restore.saved_hark_settings()
+        (self.conf / "harkscreen-settings.json").write_text('{"timezone":"default"}')
+        restore.restore_hark_settings(saved)
+        self.assertEqual(json.loads((self.conf / "harkscreen-settings.json").read_text())["timezone"], "auto")
+        self.assertEqual((self.conf / "harkscreen.cfg").read_text(), "[screen]\nrotate: 90\n")
+        self.assertEqual(overrides.read_text(), "calibration")
+
+    def test_live_settings_win_and_previous_backup_layout_is_supported(self):
+        directory = self.root / "backups" / "20261126"
+        directory.mkdir(parents=True)
+        (directory / "harkscreen.cfg.previous").write_text("backed up config")
+        (directory / "harkscreen-settings.json.previous").write_text('{"timezone":"auto"}')
+        (self.conf / "harkscreen-settings.json").write_text('{"timezone":"uk"}')
+        saved = restore.saved_hark_settings()
+        self.assertEqual(saved["harkscreen.cfg"], b"backed up config")
+        self.assertEqual(json.loads(saved["harkscreen-settings.json"])["timezone"], "uk")
 
     def test_default_uses_newest_public_release_including_prereleases(self):
         data = [
@@ -114,6 +143,9 @@ class RestoreTests(unittest.TestCase):
 
     def test_full_reinstall_verifies_replacement_before_removal(self):
         order = []
+        directory = self.root / "backups" / "20261126" / "printer_data_mainline-config"
+        directory.mkdir(parents=True)
+        (directory / "harkscreen-settings.json").write_text('{"timezone":"auto"}')
         with (
             mock.patch.object(restore, "ensure_idle"),
             mock.patch.object(
@@ -123,7 +155,8 @@ class RestoreTests(unittest.TestCase):
                 restore.subprocess,
                 "run",
                 side_effect=lambda *a, **k: order.append(
-                    "preflight" if "--check" in a[0] else "install"
+                    "preflight" if "--check" in a[0] else
+                    "restart" if a[0][1] == str(restore.HARK / "start.sh") else "install"
                 ),
             ),
             mock.patch.object(
@@ -137,7 +170,8 @@ class RestoreTests(unittest.TestCase):
             ),
         ):
             restore.restore("test-tag")
-        self.assertEqual(order, ["preflight", "stop", "install", "verify", "remove"])
+        self.assertEqual(order, ["preflight", "stop", "install", "restart", "verify", "remove"])
+        self.assertEqual(json.loads((self.conf / "harkscreen-settings.json").read_text())["timezone"], "auto")
 
     def test_failed_reinstall_retains_native_files(self):
         with (

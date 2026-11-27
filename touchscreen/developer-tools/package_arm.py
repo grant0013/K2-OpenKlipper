@@ -19,7 +19,10 @@ from validate_package import fingerprint, source_inputs, validate
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build", type=Path, default=ROOT / "out/arm")
+    parser.add_argument("--integration-root", type=Path, help="K2-OpenKlipper checkout when building the standalone touchscreen repository")
     args = parser.parse_args()
+    integration = args.integration_root.resolve() if args.integration_root else REPO
+    component_repo = ROOT if args.integration_root else REPO
     binary = args.build / "openklipper-screen"
     header = binary.read_bytes()[:20]
     if (
@@ -28,12 +31,15 @@ def main():
     ):
         raise SystemExit("Expected a 32-bit little-endian ARM executable")
     revision = subprocess.check_output(
-        ["git", "-C", str(REPO), "rev-parse", "HEAD"], text=True
+        ["git", "-C", str(component_repo), "rev-parse", "HEAD"], text=True
     ).strip()
-    inputs = source_inputs(ROOT)
+    inputs = source_inputs(ROOT, integration)
     for name, digest in inputs.items():
+        context_file = name in ("VERSION", "install.sh")
+        repo = integration if context_file else component_repo
+        git_path = name.removeprefix("touchscreen/") if args.integration_root and not context_file else name
         recorded = subprocess.run(
-            ["git", "-C", str(REPO), "show", "HEAD:" + name], capture_output=True
+            ["git", "-C", str(repo), "show", "HEAD:" + git_path], capture_output=True
         )
         if recorded.returncode or hashlib.sha256(recorded.stdout).hexdigest() != digest:
             raise SystemExit(
@@ -63,7 +69,7 @@ def main():
             "Dependency licences missing; reconfigure CMake before packaging"
         )
     digest = fingerprint(inputs)
-    version = (REPO / "VERSION").read_text().strip() + "+native." + digest[:12]
+    version = (integration / "VERSION").read_text().strip() + "+native." + digest[:12]
     (package / "VERSION").write_text(version + "\n")
     manifest = {
         "format": 1,
@@ -79,7 +85,7 @@ def main():
                 source.read_bytes()
             ).hexdigest()
     (package / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    validate(ROOT, package)
+    validate(ROOT, package, integration)
     print(package)
 
 

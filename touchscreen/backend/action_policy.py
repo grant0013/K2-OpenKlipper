@@ -195,6 +195,12 @@ def reason(request, status, connected, operations):
     if spec.idle_only:
         if status.get("print_stats", {}).get("state") in ("printing", "paused"):
             return "Unavailable during printing"
+    move = status.get("gcode_move", {})
+    if request.get("action") in ("jog", "position") and request.get("axis"):
+        if any(len(move.get(key, [])) < 3 for key in ("position", "gcode_position")):
+            return "Waiting for position update"
+    if request.get("action") == "tune" and any(key not in move for key in ("speed_factor", "extrude_factor", "homing_origin")):
+        return "Waiting for tuning update"
     if (
         (
             status.get("k2_cfs", {}).get("change_pending")
@@ -260,3 +266,32 @@ def availability(status, connected, operations):
         blocked = reason(request, status, connected, operations)
         result[key] = {"enabled": not bool(blocked), "reason": blocked}
     return result
+
+
+def display_telemetry(page, status, connected):
+    """Display demand follows the same ready/idle rules as machine controls.
+
+    Operation locks do not hide progress of an already running jog or home.
+    Commands still fetch and validate a fresh, full printer snapshot.
+    """
+    motion = page == "move" and not reason({"action": "jog"}, status, connected, ())
+    tuning = page == "tune" and connected and status.get("print_stats", {}).get("state") in ("printing", "paused")
+    return bool(motion), bool(tuning)
+
+
+def availability_inputs(status, connected, operations):
+    """Only fields read by controls/reason; telemetry alone cannot change policy."""
+    cfs = status.get("k2_cfs", {})
+    return (
+        connected,
+        status.get("webhooks", {}).get("state", "ready"),
+        status.get("toolhead", {}).get("homed_axes", ""),
+        status.get("print_stats", {}).get("state"),
+        status.get("print_stats", {}).get("filename", ""),
+        tuple(key in status.get("gcode_move", {}) for key in ("position", "gcode_position", "speed_factor", "extrude_factor", "homing_origin")),
+        status.get("filament_switch_sensor filament_sensor", {}).get("filament_detected"),
+        cfs.get("active_slot"), cfs.get("change_pending"),
+        (cfs.get("filament_activity") or {}).get("action"),
+        [{key: op.get(key) for key in ("action", "resources", "interrupt", "heater", "fan", "kind", "label")}
+         for op in operations],
+    )
