@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "built_from_commit": "60f1c9662be80e719e29d07e4af53c69f2a984cc",
+  "built_from_commit": "4a17dfde6c0ae505db6ca3089c208e453bc2ed82",
   "source_inputs": {
     "touchscreen/LICENSE": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
     "touchscreen/assets/Liberation-LICENSE": "f32df582a2aab128c07b2f7e36e7b928dc5f6bd82657b905c04f91459f9e5cf9",
